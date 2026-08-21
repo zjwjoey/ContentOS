@@ -155,7 +155,7 @@
 ## Session: 2026-08-22 - Slice 2 Director foundation
 
 ### Phase 18: Director Brief/Storyboard foundation
-- **Status:** implementation complete; final build/doctor and commit pending.
+- **Status:** complete; pushed as commit `c51bd42`.
 - Added `DIRECTOR_PLAN_V0` contract with deterministic seed, brief, storyboard scenes, source asset references and non-secret provenance.
 - Added append-only `director_plan_revisions` migration and `content_projects.current_director_revision_id` pointer.
 - Added Director service transitions: DRAFT -> ACCEPTED -> APPROVED, revision creation and current approved query.

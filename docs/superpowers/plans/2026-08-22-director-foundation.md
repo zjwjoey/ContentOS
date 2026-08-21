@@ -67,4 +67,4 @@
 
 - [x] Add contract, Director integration and Director API tests to the serial test command.
 - [x] Run format, lint, typecheck and all tests; build and doctor remain in the final gate.
-- [ ] Commit the slice as `feat: add director brief and storyboard foundation` and push `main`.
+- [x] Commit the slice as `feat: add director brief and storyboard foundation` and push `main`.
