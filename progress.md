@@ -151,3 +151,13 @@
 - Stage 7: deterministic seeded planner, immutable EDIT_MANIFEST_V0 persistence, real FFmpeg render/probe/promote flow and E2E test.
 - Latest fresh run: `pnpm run typecheck`, `pnpm run lint`, `pnpm run format`, and `pnpm test` all green (21 tests, 0 failures).
 - Final gate: build and doctor pass; A-J report and next-slice handoff written; `No Architecture Deviations`; no blocker report required. Stop here for human review.
+
+## Session: 2026-08-22 - Slice 2 Director foundation
+
+### Phase 18: Director Brief/Storyboard foundation
+- **Status:** implementation complete; final build/doctor and commit pending.
+- Added `DIRECTOR_PLAN_V0` contract with deterministic seed, brief, storyboard scenes, source asset references and non-secret provenance.
+- Added append-only `director_plan_revisions` migration and `content_projects.current_director_revision_id` pointer.
+- Added Director service transitions: DRAFT -> ACCEPTED -> APPROVED, revision creation and current approved query.
+- Added API routes for create, current, revise, accept and approve with Zod validation and conflict errors.
+- Fresh format/lint/typecheck/full test run: **27 passed, 0 failed**.

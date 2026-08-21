@@ -112,6 +112,14 @@ Architecture V0 — formal design documentation and self-review.
 - [x] Produce initialization report and next-slice handoff, then stop.
 - **Status:** complete; ENGINEERING INITIALIZATION PASSED
 
+### Phase 18: Slice 2 Director foundation
+- [x] Freeze `DIRECTOR_PLAN_V0` contract and validation tests.
+- [x] Add append-only Director revision migration and current approved pointer.
+- [x] Implement Director create/revise/accept/approve/current service use cases.
+- [x] Add thin Director API routes and validation/transition tests.
+- [ ] Run final build/doctor, commit and push the slice.
+- **Status:** in progress; implementation and 27-test gate are green
+
 ## Key constraints
 - Only Phase-1 projects are in scope: MatrixMedia, short-video-factory, MoneyPrinterTurbo, AutoSocial, and Postiz.
 - Research must be based on source evidence, not README-only summaries.

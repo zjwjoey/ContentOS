@@ -112,5 +112,4 @@ None. No `BLOCKER_REPORT.md` was required.
 
 ## Explicitly not implemented
 
-Director, real AI providers, real Douyin/WeChat adapters, Publisher, Review/Analytics, full dashboard/UI, workflow builder, Remotion, advanced timeline/effects, account/permission system and other deferred scope remain untouched.
-
+At the time of this initialization report, Director, real AI providers, real Douyin/WeChat adapters, Publisher, Review/Analytics, full dashboard/UI, workflow builder, Remotion, advanced timeline/effects and account/permission system were intentionally deferred. Slice 2 now adds only the Director foundation described in its separate implementation plan; real AI remains unimplemented.

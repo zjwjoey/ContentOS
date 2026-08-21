@@ -22,4 +22,8 @@ export class ProjectService {
     const result = await this.db.query('select * from content_projects order by created_at desc');
     return result.rows.map((row) => mapProject(row as Record<string, unknown>));
   }
+  async setCurrentDirectorRevision(projectId: string, revisionId: string): Promise<void> {
+    const result = await this.db.query('update content_projects set current_director_revision_id = $2, updated_at = now() where id = $1', [projectId, revisionId]);
+    if (!result.rowCount) throw new Error(`Project ${projectId} not found`);
+  }
 }
