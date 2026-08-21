@@ -1,0 +1,14 @@
+﻿{
+    "os":  "Microsoft Windows NT 10.0.26200.0",
+    "node":  "v24.14.0",
+    "npm":  "11.9.0",
+    "ffmpeg":  "ffmpeg version N-62439-g5e379cd",
+    "ffprobe":  "ffprobe version 8.1.2-full_build-www.gyan.dev Copyright (c) 2007-2026 the FFmpeg developers",
+    "ffmpegPath":  "C:\\Program Files\\Red Giant\\Trapcode Suite\\Tools\\ffmpeg.exe",
+    "ffprobePath":  "C:\\Users\\zhongzhong\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-8.1.2-full_build\\bin\\ffprobe.exe",
+    "fontFile":  "C:\\Windows\\Fonts\\msyh.ttc",
+    "fontExists":  true,
+    "fixtureCount":  11,
+    "chineseFixture":  true,
+    "chineseSubtitle":  true
+}

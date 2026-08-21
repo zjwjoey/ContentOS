@@ -1,0 +1,8 @@
+{
+  "spike": "SPIKE_04_PUBLISHER_WORKER",
+  "success": "SUCCEEDED",
+  "auth": "AUTH_REQUIRED",
+  "browser": "BROWSER_CRASH",
+  "publishedCount": 1,
+  "logContainsToken": false
+}

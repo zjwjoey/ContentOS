@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+storage/local/*
+!storage/local/.gitkeep
+storage/postgres-data/
+research/repos/
+*.log
+*.mp4
+*.wav
+*.part*

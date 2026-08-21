@@ -1,0 +1,11 @@
+{
+  "name": "contentos-spike-02-video-render",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Disposable Edit Manifest to FFmpeg validation spike",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "run": "node src/run-scenarios.js"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "contentos-spike-04-publisher-worker",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Disposable fake-platform publisher worker isolation verification",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "run": "node src/run-scenarios.js"
+  }
+}

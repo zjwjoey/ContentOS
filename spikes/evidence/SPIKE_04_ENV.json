@@ -1,0 +1,10 @@
+﻿{
+    "os":  "Microsoft Windows NT 10.0.26200.0",
+    "node":  "v24.14.0",
+    "npm":  "11.9.0",
+    "platform":  "local in-memory FakePlatform",
+    "browserApi":  "Playwright-shaped fake browser/page",
+    "realPlatformAccess":  false,
+    "realCredentials":  false,
+    "networkAccess":  false
+}

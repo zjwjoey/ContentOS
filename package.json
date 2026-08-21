@@ -1,0 +1,29 @@
+{
+  "name": "contentos",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "pnpm --filter @contentos/api dev",
+    "doctor": "tsx scripts/doctor.ts",
+    "format": "tsx scripts/format-check.ts",
+    "lint": "tsx scripts/lint.ts",
+    "test": "tsx --test --test-concurrency=1 tests/smoke.test.js tests/unit/config-logging.test.ts tests/unit/worker-bootstrap.test.ts tests/unit/video-planner.test.ts tests/unit/video-renderer.test.ts tests/contract/edit-manifest.test.ts tests/integration/database.test.ts tests/integration/job.test.ts tests/integration/project-api.test.ts tests/integration/asset.test.ts tests/e2e/video-vertical-slice.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.21",
+    "@types/pg": "^8.23.1",
+    "tsx": "4.19.4",
+    "typescript": "5.8.3"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "fastify": "^5.12.1",
+    "pg": "^8.23.0",
+    "pg-boss": "12.27.0",
+    "zod": "^4.4.3"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "spike": "SPIKE_03_ASSET_PROMOTION",
+  "promoted": {
+    "status": "PROMOTED",
+    "checksum": "d86a4131d28b4245f7a9f6fcce1c673167c001235481c71eee12b3a4c028b37f",
+    "destination": "C:\\Users\\ZHONGZ~1\\AppData\\Local\\Temp\\contentos-spike03-run-RWYPxe\\store\\objects\\d8\\d86a4131d28b4245f7a9f6fcce1c673167c001235481c71eee12b3a4c028b37f",
+    "metadataPath": "C:\\Users\\ZHONGZ~1\\AppData\\Local\\Temp\\contentos-spike03-run-RWYPxe\\store\\metadata\\d86a4131d28b4245f7a9f6fcce1c673167c001235481c71eee12b3a4c028b37f.json"
+  },
+  "duplicate": {
+    "status": "DEDUPED",
+    "checksum": "d86a4131d28b4245f7a9f6fcce1c673167c001235481c71eee12b3a4c028b37f",
+    "destination": "C:\\Users\\ZHONGZ~1\\AppData\\Local\\Temp\\contentos-spike03-run-RWYPxe\\store\\objects\\d8\\d86a4131d28b4245f7a9f6fcce1c673167c001235481c71eee12b3a4c028b37f"
+  },
+  "crash": {
+    "status": "CRASHED_BEFORE_RENAME"
+  },
+  "cleanupCount": 2,
+  "checksum": "d86a4131d28b4245f7a9f6fcce1c673167c001235481c71eee12b3a4c028b37f"
+}

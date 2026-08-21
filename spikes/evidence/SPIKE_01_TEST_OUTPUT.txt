@@ -1,0 +1,12 @@
+npm test
+
+PASS long job persists progress and succeeds through pg-boss delivery
+PASS retry history is retained and third attempt succeeds
+PASS max attempts produce a terminal FAILED job
+PASS cooperative cancellation reaches CANCELLED without false success
+PASS duplicate delivery uses job idempotency and runs business work once
+PASS worker crash leaves RUNNING job recoverable by a new worker
+
+tests 6
+pass 6
+fail 0

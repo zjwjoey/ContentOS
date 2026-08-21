@@ -1,0 +1,9 @@
+drop table if exists renders;
+drop table if exists edit_manifests;
+drop table if exists job_events;
+drop table if exists job_dependencies;
+drop table if exists job_attempts;
+drop table if exists jobs;
+drop table if exists project_assets;
+drop table if exists assets;
+drop table if exists content_projects;

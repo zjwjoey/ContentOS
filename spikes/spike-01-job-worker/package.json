@@ -1,0 +1,15 @@
+{
+  "name": "contentos-spike-01-job-worker",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Disposable PostgreSQL + pg-boss + worker validation spike",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "run": "node src/run-scenarios.js"
+  },
+  "dependencies": {
+    "pg": "8.23.0",
+    "pg-boss": "12.27.0"
+  }
+}

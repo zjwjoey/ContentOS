@@ -1,0 +1,13 @@
+{
+  "spike": "SPIKE_01_JOB_WORKER",
+  "result": "PASS_WITH_CONDITIONS",
+  "operatingSystem": "Windows",
+  "node": "24.14.0",
+  "postgresql": "16.15",
+  "pgBoss": "12.27.0",
+  "queueSchema": "spike01_queue",
+  "jobSchema": "spike01",
+  "workerCount": { "normal": 1, "crashRecovery": 2 },
+  "databaseUrl": "postgres://postgres@127.0.0.1:55432/contentos_spike",
+  "secretsIncluded": false
+}

@@ -1,0 +1,116 @@
+{
+  "spike": "SPIKE_02_VIDEO_RENDER",
+  "ffmpeg": "ffmpeg",
+  "seeds": [
+    {
+      "seed": 1,
+      "output": "seed-1.mp4",
+      "clipCount": 10,
+      "sourceOrder": [
+        "素材-中文-10.mp4",
+        "fixture-06.mp4",
+        "fixture-07.mp4",
+        "fixture-09.mp4",
+        "fixture-02.mp4",
+        "fixture-01.mp4",
+        "fixture-08.mp4",
+        "fixture-05.mp4",
+        "fixture-04.mp4",
+        "fixture-03.mp4"
+      ],
+      "media": {
+        "width": 1080,
+        "height": 1920,
+        "duration": 30
+      }
+    },
+    {
+      "seed": 2,
+      "output": "seed-2.mp4",
+      "clipCount": 10,
+      "sourceOrder": [
+        "fixture-04.mp4",
+        "素材-中文-10.mp4",
+        "fixture-08.mp4",
+        "fixture-07.mp4",
+        "fixture-01.mp4",
+        "fixture-09.mp4",
+        "fixture-06.mp4",
+        "fixture-02.mp4",
+        "fixture-05.mp4",
+        "fixture-03.mp4"
+      ],
+      "media": {
+        "width": 1080,
+        "height": 1920,
+        "duration": 30
+      }
+    },
+    {
+      "seed": 3,
+      "output": "seed-3.mp4",
+      "clipCount": 10,
+      "sourceOrder": [
+        "fixture-04.mp4",
+        "fixture-01.mp4",
+        "fixture-02.mp4",
+        "fixture-08.mp4",
+        "fixture-09.mp4",
+        "素材-中文-10.mp4",
+        "fixture-06.mp4",
+        "fixture-07.mp4",
+        "fixture-05.mp4",
+        "fixture-03.mp4"
+      ],
+      "media": {
+        "width": 1080,
+        "height": 1920,
+        "duration": 30
+      }
+    },
+    {
+      "seed": 4,
+      "output": "seed-4.mp4",
+      "clipCount": 10,
+      "sourceOrder": [
+        "素材-中文-10.mp4",
+        "fixture-02.mp4",
+        "fixture-08.mp4",
+        "fixture-07.mp4",
+        "fixture-04.mp4",
+        "fixture-01.mp4",
+        "fixture-09.mp4",
+        "fixture-05.mp4",
+        "fixture-06.mp4",
+        "fixture-03.mp4"
+      ],
+      "media": {
+        "width": 1080,
+        "height": 1920,
+        "duration": 30
+      }
+    },
+    {
+      "seed": 5,
+      "output": "seed-5.mp4",
+      "clipCount": 10,
+      "sourceOrder": [
+        "fixture-04.mp4",
+        "素材-中文-10.mp4",
+        "fixture-01.mp4",
+        "fixture-09.mp4",
+        "fixture-08.mp4",
+        "fixture-05.mp4",
+        "fixture-06.mp4",
+        "fixture-02.mp4",
+        "fixture-07.mp4",
+        "fixture-03.mp4"
+      ],
+      "media": {
+        "width": 1080,
+        "height": 1920,
+        "duration": 30
+      }
+    }
+  ]
+}

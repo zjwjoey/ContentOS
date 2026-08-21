@@ -1,0 +1,11 @@
+{
+  "name": "contentos-spike-03-asset-promotion",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Disposable verification code for staging and atomic asset promotion",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "run": "node src/run-scenarios.js"
+  }
+}
