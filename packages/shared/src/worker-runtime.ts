@@ -11,6 +11,12 @@ export class WorkerRuntime {
     this.handlers.set(type, handler);
   }
   handlerTypes(): string[] { return [...this.handlers.keys()].sort(); }
+  async execute(type: string, payload: unknown): Promise<unknown> {
+    if (this.statusValue !== 'READY') throw new Error('worker is not ready');
+    const handler = this.handlers.get(type);
+    if (!handler) throw new Error(`handler not registered: ${type}`);
+    return handler(payload);
+  }
   async start(): Promise<void> { this.statusValue = 'READY'; }
   async shutdown(_signal: string): Promise<void> { this.statusValue = 'DRAINING'; this.statusValue = 'STOPPED'; }
   health(): { workerId: string; status: WorkerStatus; handlers: string[] } { return { workerId: this.workerId, status: this.statusValue, handlers: this.handlerTypes() }; }

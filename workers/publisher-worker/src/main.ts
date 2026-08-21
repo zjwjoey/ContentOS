@@ -1,8 +1,8 @@
-import { WorkerRuntime } from '../../../packages/shared/src/worker-runtime.js';
+import { WorkerRuntime, type JobHandler } from '../../../packages/shared/src/worker-runtime.js';
 
-export function createPublisherWorker(): WorkerRuntime {
+export function createPublisherWorker(handler: JobHandler = async () => ({ status: 'NO_OP_STAGE_4_BOOTSTRAP' })): WorkerRuntime {
   const runtime = new WorkerRuntime('publisher-worker');
-  runtime.register('publisher.publish', async () => ({ status: 'NO_OP_STAGE_4_BOOTSTRAP' }));
+  runtime.register('publisher.publish', handler);
   return runtime;
 }
 

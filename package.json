@@ -10,7 +10,7 @@
     "doctor": "tsx scripts/doctor.ts",
     "format": "tsx scripts/format-check.ts",
     "lint": "tsx scripts/lint.ts",
-    "test": "tsx --test --test-concurrency=1 tests/smoke.test.js tests/unit/config-logging.test.ts tests/unit/worker-bootstrap.test.ts tests/unit/video-planner.test.ts tests/unit/video-renderer.test.ts tests/contract/edit-manifest.test.ts tests/contract/director-plan.test.ts tests/integration/database.test.ts tests/integration/job.test.ts tests/integration/project-api.test.ts tests/integration/asset.test.ts tests/integration/director.test.ts tests/integration/director-api.test.ts tests/e2e/video-vertical-slice.test.ts",
+    "test": "tsx --test --test-concurrency=1 tests/smoke.test.js tests/unit/config-logging.test.ts tests/unit/worker-bootstrap.test.ts tests/unit/video-planner.test.ts tests/unit/video-renderer.test.ts tests/contract/edit-manifest.test.ts tests/contract/director-plan.test.ts tests/contract/publisher.test.ts tests/contract/review.test.ts tests/integration/database.test.ts tests/integration/job.test.ts tests/integration/project-api.test.ts tests/integration/asset.test.ts tests/integration/director.test.ts tests/integration/director-api.test.ts tests/integration/director-video.test.ts tests/integration/director-video-api.test.ts tests/integration/fake-publisher.test.ts tests/integration/review.test.ts tests/integration/review-api.test.ts tests/worker/fake-publisher-worker.test.ts tests/e2e/video-vertical-slice.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

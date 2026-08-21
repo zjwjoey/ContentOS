@@ -21,6 +21,10 @@ export class JobService {
     const result = await this.db.query('select * from jobs where id = $1', [id]);
     return result.rows[0] ? mapJob(result.rows[0] as Record<string, unknown>) : null;
   }
+  async getByIdempotencyKey(idempotencyKey: string): Promise<JobRecord | null> {
+    const result = await this.db.query('select * from jobs where idempotency_key = $1', [idempotencyKey]);
+    return result.rows[0] ? mapJob(result.rows[0] as Record<string, unknown>) : null;
+  }
 
   async claim(id: string, workerId: string, leaseMs: number): Promise<{ job: JobRecord; attemptId: string } | null> {
     const client = await this.db.connect();

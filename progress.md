@@ -161,3 +161,14 @@
 - Added Director service transitions: DRAFT -> ACCEPTED -> APPROVED, revision creation and current approved query.
 - Added API routes for create, current, revise, accept and approve with Zod validation and conflict errors.
 - Fresh format/lint/typecheck/full test run: **27 passed, 0 failed**.
+
+## Session: 2026-08-22 - Slices 3, 4 and 6
+
+### Phase 19: Director-to-Video, Fake Publisher and Review
+- **Status:** complete; implementation, final verification and remote push complete.
+- Slice 3: approved Director revisions now create idempotent `VIDEO_RENDER` Jobs with brief/storyboard/source-asset provenance, plus a thin API route.
+- Slice 4: added the platform-neutral Publisher Adapter contract, deterministic Fake Platform, isolated account profiles, failure taxonomy and Worker handler.
+- Slice 6: added `REVIEW_V0`, append-only review decisions, guarded approval/rejection transitions and API routes for render/publish targets.
+- Slice 5 real platform adapters remain explicitly deferred; no Douyin/WeChat credentials or platform calls were added.
+- Final gate: format, lint, typecheck, full **41-test** suite, build and doctor all passed.
+- Pushed as commit `3f89304` to `origin/main`.

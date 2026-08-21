@@ -120,6 +120,14 @@ Architecture V0 — formal design documentation and self-review.
 - [x] Run final build/doctor, commit and push the slice.
 - **Status:** complete; implementation, 27-test gate and remote push are green
 
+### Phase 19: Slices 3, 4 and 6 implementation
+- [x] Connect an approved Director revision to an idempotent Video Job and API route.
+- [x] Implement the platform-neutral Fake Publisher contract, isolated fake service and Worker handler.
+- [x] Implement append-only Review decisions, approval/rejection transitions and API routes.
+- [x] Run the final format/lint/typecheck/test/build/doctor gate.
+- [x] Commit and push.
+- **Status:** complete; Slices 3, 4 and 6 are implemented, verified and pushed. Slice 5 real platform adapters explicitly deferred.
+
 ## Key constraints
 - Only Phase-1 projects are in scope: MatrixMedia, short-video-factory, MoneyPrinterTurbo, AutoSocial, and Postiz.
 - Research must be based on source evidence, not README-only summaries.
