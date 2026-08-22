@@ -54,3 +54,22 @@ test('migration down removes the latest migration and up restores it', async () 
     await db.end();
   }
 });
+
+test('Director V1 and AI provenance migrations create bounded append-only tables and constraints', async () => {
+  const db = await createDatabase(databaseUrl);
+  try {
+    await migrateUp(db);
+    const tables = await db.query<{ table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('ai_model_profiles', 'ai_prompt_versions', 'ai_runs', 'director_briefs', 'director_project_state', 'director_script_revisions', 'director_scripts', 'director_storyboard_revisions', 'director_storyboards') order by table_name");
+    assert.deepEqual(tables.rows.map((row) => row.table_name), [
+      'ai_model_profiles', 'ai_prompt_versions', 'ai_runs', 'director_briefs', 'director_project_state',
+      'director_script_revisions', 'director_scripts', 'director_storyboard_revisions', 'director_storyboards',
+    ]);
+    const constraints = await db.query<{ constraint_name: string }>("select constraint_name from information_schema.table_constraints where table_schema = 'public' and constraint_name in ('director_script_revisions_source_job_key', 'director_storyboard_revisions_source_job_key', 'director_script_revisions_aggregate_revision_key', 'director_storyboard_revisions_aggregate_revision_key') order by constraint_name");
+    assert.deepEqual(constraints.rows.map((row) => row.constraint_name), [
+      'director_script_revisions_aggregate_revision_key', 'director_script_revisions_source_job_key',
+      'director_storyboard_revisions_aggregate_revision_key', 'director_storyboard_revisions_source_job_key',
+    ]);
+  } finally {
+    await db.end();
+  }
+});

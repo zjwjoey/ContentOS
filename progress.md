@@ -187,3 +187,5 @@
 - Task 2 is next and will use contract-first TDD for Director V1 and AI Provider types.
 - Task 2 complete: wrote red contract tests first, then added `ContentBriefV1`, Script/Storyboard revision contracts, AI Provider/Request/Result/Profile/Prompt contracts and bounded validators. Focused gate: **7 passed, 0 failed**; typecheck passed.
 - Task 3 is next: append-only Director V1 and AI provenance migrations, starting at migration 0007.
+- Task 3 migration portion complete: added `0007_director_v1` and `0008_ai_provenance` with state counters, composite project-ownership FKs, append-only revision uniqueness, source Job idempotency and AI Run provenance. Migration integration gate: **4 passed, 0 failed** on `contentos_director_dev`.
+- Task 4 is next: deterministic fake AI provider, prompt registry and AI Run service.
