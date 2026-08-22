@@ -3,7 +3,7 @@ import { createDatabase, migrateUp } from '../../../packages/database/src/index.
 import { loadConfig } from '../../../packages/config/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
 import { FakePublisherService, PublisherService } from '../../../packages/modules/publisher/src/index.js';
-import { createPublisherWorker, type PublisherWorkerOptions } from './main.js';
+import { createPublisherWorker, PUBLISH_RECONCILE_JOB_TYPE, type PublisherWorkerOptions } from './main.js';
 
 export interface PublisherDevRunnerOptions { pollIntervalMs?: number; batchSize?: number; }
 export interface PublisherDevRunner { start(): Promise<void>; stop(signal?: string): Promise<void>; pollOnce(): Promise<void>; }
@@ -22,8 +22,8 @@ export function createPublisherDevRunner(dependencies: PublisherWorkerOptions, o
     if (polling) return;
     polling = true;
     try {
-      const jobs = await dependencies.jobs.listRunnable(['PUBLISH'], batchSize);
-      for (const job of jobs) await runtime.execute('PUBLISH', { jobId: job.id });
+      const jobs = await dependencies.jobs.listRunnable(['PUBLISH', PUBLISH_RECONCILE_JOB_TYPE], batchSize);
+      for (const job of jobs) await runtime.execute(job.type, { jobId: job.id });
     } finally { polling = false; }
   };
 

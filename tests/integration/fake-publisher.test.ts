@@ -29,3 +29,17 @@ test('Fake Publisher returns a safe human-action result for expired auth', async
     assert.equal(JSON.stringify(result).includes('credential'), false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('Fake Publisher reconciles an uncertain side effect and distinguishes a missing post', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-publisher-reconcile-'));
+  try {
+    const service = new FakePublisherService(root, new FakePublisherAdapter('BROWSER_CRASH'));
+    const unknown = await service.publish('account-reconcile', snapshot);
+    assert.equal(unknown.status, 'UNKNOWN_EXTERNAL_STATE');
+    const confirmed = await service.reconcile('account-reconcile', snapshot.idempotencyKey);
+    assert.equal(confirmed.status, 'PUBLISHED');
+    assert.ok(confirmed.externalPostId);
+    const missing = await service.reconcile('account-reconcile', 'publish-never-started');
+    assert.equal(missing.status, 'NOT_FOUND');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

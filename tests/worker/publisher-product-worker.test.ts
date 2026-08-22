@@ -55,7 +55,7 @@ test('Publisher Worker durably publishes and records external post', async () =>
     projectId = data.projectId; root = data.root;
     const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, fakePublisher: data.fake, workerId: 'publisher-worker-test' });
     await worker.start();
-    assert.deepEqual(worker.handlerTypes(), ['PUBLISH']);
+    assert.deepEqual(worker.handlerTypes(), ['PUBLISH', 'PUBLISH_RECONCILE']);
     const result = await worker.execute('PUBLISH', { jobId: data.job.id });
     assert.equal((result as { state: string }).state, 'SUCCEEDED');
     assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'PUBLISHED');
@@ -98,7 +98,7 @@ test('Publisher Worker maps retryable and human-action failures safely', async (
   }
 });
 
-test('Publisher Worker moves uncertain external state to reconciliation without blind retry', async () => {
+test('Publisher Worker reconciles uncertain external state and confirms the post', async () => {
   const db = await createDatabase(databaseUrl);
   let projectId = '';
   let root = '';
@@ -112,6 +112,15 @@ test('Publisher Worker moves uncertain external state to reconciliation without 
     assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'RECONCILING');
     const attempts = await data.publisher.listAttempts(data.requestId);
     assert.equal(attempts[0]?.status, 'UNKNOWN');
+    const reconcileJob = await data.jobs.getByIdempotencyKey(`publisher:reconcile:${data.requestId}:${(data.job.payload as { revisionId: string }).revisionId}`);
+    assert.ok(reconcileJob, 'uncertain publish must create a durable reconciliation job');
+    const reconciliationResult = await worker.execute('PUBLISH_RECONCILE', { jobId: reconcileJob.id }) as { state: string };
+    assert.equal(reconciliationResult.state, 'SUCCEEDED');
+    assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'PUBLISHED');
+    const completedAttempts = await data.publisher.listAttempts(data.requestId);
+    assert.deepEqual(completedAttempts.map((attempt) => attempt.operation), ['PUBLISH', 'RECONCILE']);
+    const posts = await db.query('select external_post_id from publisher_external_posts where request_id = $1', [data.requestId]);
+    assert.equal(posts.rowCount, 1);
     await worker.shutdown('test');
   } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
 });
