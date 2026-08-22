@@ -45,3 +45,12 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 |---|---|
 | The pasted requirement opened with mojibake in PowerShell | Recovered the UTF-8 content semantically; repository and report paths are explicit in the request. |
 | MoneyPrinterTurbo clone is incomplete | Reports cite the immutable remote SHA and exact verified source paths; no conclusions use incomplete local clone contents. |
+
+## Director V1 implementation findings — 2026-08-22
+
+- The Director worktree is based on `main` and has a clean 41/41 baseline when using the isolated `contentos_director_dev` database.
+- The shared `contentos_dev` database had Publisher migration `0006_publisher_state.sql`, while `main` did not contain that migration; migration-down tests therefore failed before isolation. No product code caused the failure.
+- The Director V1 plan starts new migrations at `0007` so it can merge after Publisher `0006` without renumbering.
+- The V0.1 product requirements validate the existing modular-monolith direction but add three later product areas not present in `main`: Publisher product records/accounts, Metric Snapshots/Performance Review, and the Web Operator UI.
+- Existing `REVIEW_V0` is an approval decision boundary, not performance analytics; future analytics entities must remain distinct from approval decisions.
+- Existing Video output contract declares MPEG-4, while the product requirement mentions H.264; this must be resolved by an evidence-backed Video change, not silently changed during Director work.

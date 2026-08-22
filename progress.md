@@ -172,3 +172,14 @@
 - Slice 5 real platform adapters remain explicitly deferred; no Douyin/WeChat credentials or platform calls were added.
 - Final gate: format, lint, typecheck, full **41-test** suite, build and doctor all passed.
 - Pushed as commit `3f89304` to `origin/main`.
+
+## Session: 2026-08-22 — Director V1 preparation
+
+### Phase 22: Worktree, baseline and implementation plan
+- **Status:** plan ready; implementation not yet started.
+- Created `E:\ContentOS\.worktrees\codex-director-v1` on branch `codex/director-v1` from `main`; brought in the approved Director V1 design document.
+- The first baseline run against shared `contentos_dev` produced 39 passes and 2 migration-file failures because that database contained Publisher migration 0006 not present on `main`.
+- Root cause was confirmed by querying `schema_migrations`; the shared database contained `0001` through `0006`.
+- Created the isolated local database `contentos_director_dev` on the existing PostgreSQL 16 instance at port 55433; no PostgreSQL installation or production database was added.
+- Fresh baseline passed: **41 tests, 0 failures**.
+- Wrote `docs/superpowers/plans/2026-08-22-director-v1-implementation.md`; no Director product source code has been changed.

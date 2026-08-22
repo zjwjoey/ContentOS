@@ -128,6 +128,17 @@ Architecture V0 — formal design documentation and self-review.
 - [x] Commit and push.
 - **Status:** complete; Slices 3, 4 and 6 are implemented, verified and pushed. Slice 5 real platform adapters explicitly deferred.
 
+### Phase 22: Director V1 implementation
+- [x] Create isolated `codex/director-v1` worktree from `main` and verify the clean 41-test baseline with `contentos_director_dev`.
+- [x] Record the migration-state conflict caused by sharing `contentos_dev` across unreconciled branches.
+- [x] Write and review the Director V1 professional design and implementation plan.
+- [ ] Freeze the Application Worker ADR and Director/AI contracts.
+- [ ] Add append-only Director V1 and AI provenance migrations/services.
+- [ ] Add fake-provider AI infrastructure, Director Jobs and Application Worker handlers.
+- [ ] Add Director V1 API, Video provenance bridge and minimal Operator UI.
+- [ ] Run Director→Video E2E, final verification gate and report.
+- **Status:** plan ready; implementation begins at Task 1 in the isolated worktree.
+
 ## Key constraints
 - Only Phase-1 projects are in scope: MatrixMedia, short-video-factory, MoneyPrinterTurbo, AutoSocial, and Postiz.
 - Research must be based on source evidence, not README-only summaries.
