@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from 'pg';
 
 export type JobState = 'QUEUED' | 'RUNNING' | 'RETRY_WAIT' | 'FAILED' | 'SUCCEEDED' | 'CANCEL_REQUESTED' | 'CANCELLED' | 'BLOCKED';
 export interface JobRecord { id: string; projectId: string | null; type: string; state: JobState; payload: unknown; result: unknown; error: unknown; attemptCount: number; maxAttempts: number; leaseOwner: string | null; leaseExpiresAt: Date | null; progress: unknown; }
+export interface JobSummary { id: string; projectId: string; type: string; state: JobState; attemptCount: number; maxAttempts: number; createdAt: string; }
 export interface CreateJobInput { id: string; type: string; projectId: string | null; payload: unknown; idempotencyKey: string; maxAttempts: number; }
 
 function mapJob(row: Record<string, unknown>): JobRecord {
@@ -29,6 +30,19 @@ export class JobService {
   async getByIdempotencyKey(idempotencyKey: string): Promise<JobRecord | null> {
     const result = await this.db.query('select * from jobs where idempotency_key = $1', [idempotencyKey]);
     return result.rows[0] ? mapJob(result.rows[0] as Record<string, unknown>) : null;
+  }
+  async listProjectSummaries(projectId: string, limit = 8): Promise<JobSummary[]> {
+    if (!projectId || limit <= 0) return [];
+    const result = await this.db.query('select id, project_id, type, state, attempt_count, max_attempts, created_at from jobs where project_id = $1 order by created_at desc, id desc limit $2', [projectId, Math.min(limit, 20)]);
+    return result.rows.map((row) => ({
+      id: String(row.id),
+      projectId: String(row.project_id),
+      type: String(row.type),
+      state: row.state as JobState,
+      attemptCount: Number(row.attempt_count),
+      maxAttempts: Number(row.max_attempts),
+      createdAt: new Date(String(row.created_at)).toISOString(),
+    }));
   }
 
   async listRunnable(types: string[], limit = 10): Promise<JobRecord[]> {
