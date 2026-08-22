@@ -52,7 +52,7 @@ export interface PublisherPublishJobPayload {
   accountId: string;
   platformId: string;
   jobId: string;
-  jobAttemptId: string;
+  jobAttemptId: string | null;
   correlationId: string;
 }
 
@@ -207,7 +207,7 @@ export class PublisherService {
     };
   }
 
-  async buildPublishJobPayload(projectId: string, requestId: string, jobId: string, jobAttemptId: string): Promise<PublisherPublishJobPayload> {
+  async buildPublishJobPayload(projectId: string, requestId: string, jobId: string, jobAttemptId: string | null): Promise<PublisherPublishJobPayload> {
     const aggregate = await this.getRequestAggregate(projectId, requestId);
     if (!aggregate) throw new Error('Publisher request not found for project');
     const account = await this.getAccount(projectId, aggregate.request.accountId);
