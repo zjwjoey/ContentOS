@@ -6,7 +6,7 @@ test('Publisher Operator is project scoped and exposes the Fake publish lifecycl
   const page = await readFile('apps/web/app/projects/[id]/publisher/page.tsx', 'utf8');
   assert.match(page, /projects\/\$\{projectId\}\/publisher\/accounts/);
   assert.match(page, /projects\/\$\{projectId\}\/publisher\/requests/);
-  assert.match(page, /reviews\/PUBLISH\/\$\{requestId\}\/approve/);
+  assert.match(page, /approvals\/PUBLISH\/\$\{requestId\}\/\$\{revisionId\}\/approve/);
   assert.match(page, /publisher\/requests\/\$\{requestId\}\/queue/);
   assert.match(page, /Fake Platform/);
   assert.match(page, /发布请求/);

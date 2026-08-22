@@ -56,12 +56,15 @@ test('Publisher foundation migration down and up restores the latest schema', as
   const db = await createDatabase(databaseUrl);
   try {
     await migrateUp(db);
+    const approvalDown = await migrateDown(db);
+    assert.equal(approvalDown.removed, 1);
+    assert.equal((await db.query("select to_regclass('public.approval_decisions') as table_name")).rows[0]?.table_name, null);
     const down = await migrateDown(db);
     assert.equal(down.removed, 1);
     const removed = await db.query("select to_regclass('public.publisher_requests') as table_name");
     assert.equal(removed.rows[0]?.table_name, null);
     const restored = await migrateUp(db);
-    assert.equal(restored.applied, 1);
+    assert.equal(restored.applied, 2);
     const present = await db.query("select to_regclass('public.publisher_requests') as table_name");
     assert.equal(present.rows[0]?.table_name, 'publisher_requests');
   } finally {

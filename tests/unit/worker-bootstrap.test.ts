@@ -14,13 +14,10 @@ test('worker runtime starts, registers bounded handlers and shuts down gracefull
   assert.equal(runtime.health().status, 'STOPPED');
 });
 
-test('Video Worker registers only VIDEO_RENDER and Publisher Worker remains a no-op bootstrap', async () => {
+test('Video Worker stays bounded and Publisher Worker fails closed without composition', async () => {
   const video = createVideoWorker();
-  const publisher = createPublisherWorker();
   await video.start();
-  await publisher.start();
   assert.deepEqual(video.handlerTypes(), ['video.render']);
-  assert.deepEqual(publisher.handlerTypes(), ['publisher.publish']);
+  assert.throws(() => createPublisherWorker(), /requires explicit Publisher worker dependencies/);
   await video.shutdown('test');
-  await publisher.shutdown('test');
 });

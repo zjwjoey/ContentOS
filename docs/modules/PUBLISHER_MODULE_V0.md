@@ -2,7 +2,7 @@
 
 ## Boundary
 
-Publisher owns destinations, account references, platform capability profiles, publishing requests, schedules, attempts, external post references and normalized metrics links. It is the only module that creates `publisher.publish` jobs. It does not execute a browser; the Publisher Worker does.
+Publisher owns destinations, account references, platform capability profiles, publishing requests, schedules, attempts and confirmed external post references. It is the only module that creates `PUBLISH` jobs. It does not execute a browser; the Publisher Worker does. Pre-publish eligibility is owned by the separate Approval Gate contract; post-publish metrics are owned by Review.
 
 The foundation persistence is private to Publisher: `publisher_accounts`, `publisher_requests`, `publisher_request_revisions`, `publisher_attempts` and `publisher_external_posts`. Other modules use public service contracts and never read these tables directly.
 
@@ -17,7 +17,7 @@ Platform adapters publish a capability profile: supported media types, title/des
 | Command | Result |
 |---|---|
 | `CreatePublishRequest` | immutable snapshot of output asset, metadata revision, account and desired schedule |
-| `SchedulePublish` | schedule policy and `publisher.publish` Job |
+| `SchedulePublish` | schedule policy and `PUBLISH` Job, after an approved exact Publish Revision |
 | `RecordPublishResult` | append-only Attempt and external post reference |
 | `RequestReauthentication` | blocks new requests and marks account state |
 | `CollectMetrics` | creates a Review-owned collection request/job dependency |
@@ -36,4 +36,4 @@ Adapters normalize at least `AUTH_EXPIRED`, `REQUIRES_VERIFICATION`, `PLATFORM_C
 
 ## Dependencies
 
-Publisher reads validated rendered Asset metadata through Asset and Project metadata snapshots through Project. It depends on Job for delivery and Review only through a metric-collection contract. It must not depend on Video implementation, FFmpeg, Director planning or AI provider SDKs.
+Publisher reads validated rendered Asset metadata through Asset and Project metadata snapshots through Project. It depends on Job for delivery, Approval for pre-publish gates and Review only through a metric-collection contract. It must not depend on Video implementation, FFmpeg, Director planning or AI provider SDKs.

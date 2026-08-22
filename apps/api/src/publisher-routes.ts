@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { JobService } from '../../../packages/modules/job/src/index.js';
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
-import type { ReviewService } from '../../../packages/modules/review/src/index.js';
+import type { ApprovalService } from '../../../packages/modules/approval/src/index.js';
 import type { PublisherService } from '../../../packages/modules/publisher/src/index.js';
 
 const capabilityProfile = z.object({
@@ -39,7 +39,7 @@ const requestInput = z.object({
 export interface PublisherRouteDependencies {
   projects: ProjectService;
   publisher: PublisherService;
-  reviews: ReviewService;
+  approvals: ApprovalService;
   jobs: JobService;
 }
 
@@ -51,7 +51,7 @@ function safeAccount<T extends { credentialRef: string; profileKey: string }>(ac
 }
 
 export function registerPublisherRoutes(app: FastifyInstance, dependencies: PublisherRouteDependencies): void {
-  const { projects, publisher, reviews, jobs } = dependencies;
+  const { projects, publisher, approvals, jobs } = dependencies;
 
   app.get('/api/v1/projects/:projectId/publisher/accounts', async (request, reply) => {
     const projectId = projectIdOf(request);
@@ -101,8 +101,8 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
     const aggregate = await publisher.getRequestAggregate(projectId, requestId);
     if (!aggregate) return reply.code(404).send({ error: { code: 'PUBLISHER_REQUEST_NOT_FOUND', message: 'Publisher request not found', details: [] } });
-    const review = await reviews.getCurrent(projectId, 'PUBLISH', requestId);
-    if (!review || review.status !== 'APPROVED') return reply.code(409).send({ error: { code: 'PUBLISH_REVIEW_REQUIRED', message: 'An approved Publish review is required before queueing', details: [] } });
+    const approval = await approvals.getCurrent(projectId, 'PUBLISH', requestId, aggregate.revision.id);
+    if (!approval || approval.status !== 'APPROVED') return reply.code(409).send({ error: { code: 'PUBLISH_APPROVAL_REQUIRED', message: 'An approved Publish revision is required before queueing', details: [] } });
     const idempotencyKey = `publisher:publish:${requestId}:${aggregate.revision.id}`;
     const existing = await jobs.getByIdempotencyKey(idempotencyKey);
     if (existing) return reply.code(202).send({ jobId: existing.id, requestId, state: existing.state });

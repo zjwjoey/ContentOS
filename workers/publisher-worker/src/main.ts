@@ -74,7 +74,8 @@ async function executePublish(service: PublisherService, fakePublisher: FakePubl
   throw new PublisherHandlerError(code, failure?.message || 'Publisher failed', isRetryable(classification));
 }
 
-export function createPublisherWorker(options: PublisherWorkerOptions | JobHandler = async () => ({ status: 'NO_OP_STAGE_4_BOOTSTRAP' })): WorkerRuntime {
+export function createPublisherWorker(options?: PublisherWorkerOptions | JobHandler): WorkerRuntime {
+  if (!options) throw new Error('Publisher worker requires explicit Publisher worker dependencies');
   const runtime = new WorkerRuntime('publisher-worker');
   if (typeof options === 'function') {
     runtime.register('publisher.publish', options);
@@ -90,9 +91,5 @@ export function createPublisherWorker(options: PublisherWorkerOptions | JobHandl
 }
 
 if (process.argv[1]?.endsWith('main.ts')) {
-  const worker = createPublisherWorker();
-  process.once('SIGINT', () => void worker.shutdown('SIGINT'));
-  process.once('SIGTERM', () => void worker.shutdown('SIGTERM'));
-  await worker.start();
-  console.log(JSON.stringify(worker.health()));
+  throw new Error('Publisher worker composition must be provided by the deployment entrypoint');
 }

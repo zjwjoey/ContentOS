@@ -21,7 +21,7 @@ Worker 通过 Director application port 读取和追加版本，通过 AI Provid
 ## Invariants preserved
 
 1. PostgreSQL 仍是业务事实源，队列只负责 Job delivery；Job lease recovery、idempotency、cancellation 和 external-state reconciliation 仍是必经路径。
-2. `Director -> Video -> Publish -> Review` 仍是固定应用流程；Director Worker 不创建工作流图，也不执行 Video、发布或 Review。
+2. `Director -> Video -> Approval Gate -> Publish -> post-publish Review` 仍是固定应用流程；Director Worker 不创建工作流图，也不执行 Video、发布或 Review。
 3. AI Provider、Prompt、Model Profile 和 AI Run 均通过公开合同追踪；凭据、Cookie、token、完整秘密 prompt 和媒体字节不得进入 Job payload 或普通日志。
 4. 同一 Job 重试必须通过 `source_job_id`/幂等约束避免重复 Director revision；非法结构不得用默认字段伪装成功。
 

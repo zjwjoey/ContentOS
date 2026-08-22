@@ -9,6 +9,7 @@ import { JobService } from '../../packages/modules/job/src/index.js';
 import { ProjectService } from '../../packages/modules/project/src/index.js';
 import { FakePublisherAdapter, FakePublisherService, PublisherService } from '../../packages/modules/publisher/src/index.js';
 import { createPublisherWorker } from '../../workers/publisher-worker/src/main.js';
+import { createPublisherDevRunner } from '../../workers/publisher-worker/src/dev-main.js';
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://contentos_dev@127.0.0.1:55432/contentos_dev';
 
@@ -62,6 +63,21 @@ test('Publisher Worker durably publishes and records external post', async () =>
     assert.equal(posts.rowCount, 1);
     await worker.shutdown('test');
   } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
+});
+
+test('Publisher development runner polls queued PUBLISH Jobs', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  let root = '';
+  let runner: ReturnType<typeof createPublisherDevRunner> | undefined;
+  try {
+    const data = await fixture(db);
+    projectId = data.projectId; root = data.root;
+    runner = createPublisherDevRunner({ service: data.publisher, jobs: data.jobs, fakePublisher: data.fake, workerId: 'publisher-worker-dev-test' }, { pollIntervalMs: 10_000, batchSize: 1 });
+    await runner.start();
+    const completed = await data.jobs.get(data.job.id);
+    assert.equal(completed?.state, 'SUCCEEDED', JSON.stringify(completed));
+  } finally { if (runner) await runner.stop('test'); if (projectId) await cleanup(db, projectId, root); await db.end(); }
 });
 
 test('Publisher Worker maps retryable and human-action failures safely', async () => {

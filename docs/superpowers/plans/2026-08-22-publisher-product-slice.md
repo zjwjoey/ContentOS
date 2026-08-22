@@ -4,7 +4,7 @@
 
 **Goal:** 将 Publisher foundation 推进为可通过项目操作的 Fake Platform 发布垂直切片。
 
-**Architecture:** API 只创建/查询 Publisher 记录并入队 durable `PUBLISH` Job；Publisher Worker 通过 adapter contract 执行 Fake Platform，使用 Review publish approval 作为门禁，并把结果写回 Publisher attempt/request/external post。Web 只调用安全的 project-scoped API。
+**Architecture:** API 只创建/查询 Publisher 记录并入队 durable `PUBLISH` Job；Publisher Worker 通过 adapter contract 执行 Fake Platform，使用绑定具体 Publish Revision 的 Approval 作为门禁，并把结果写回 Publisher attempt/request/external post。Web 只调用安全的 project-scoped API。
 
 **Tech Stack:** TypeScript, Fastify, Zod, PostgreSQL, existing JobService/JobRunner, Node test runner, Next.js.
 
@@ -39,7 +39,7 @@ Expected: focused Publisher integration tests pass.
 
 Run `git add packages/modules/publisher/src/publisher-service.ts packages/modules/publisher/src/index.ts tests/integration/publisher-product.test.ts && git commit -m "feat: expose publisher product application queries"`.
 
-### Task 2: Add project-scoped Publisher API and Review-gated queueing
+### Task 2: Add project-scoped Publisher API and Approval-gated queueing
 
 **Files:**
 - Create: `apps/api/src/publisher-routes.ts`
@@ -48,7 +48,7 @@ Run `git add packages/modules/publisher/src/publisher-service.ts packages/module
 
 - [ ] **Step 1: Write the failing route tests**
 
-Cover account creation, request creation, request listing, missing-project handling, and queueing. Queueing must return `409 PUBLISH_REVIEW_REQUIRED` until the existing `ReviewService` has an approved `PUBLISH` decision for the request; after approval it must create one `PUBLISH` Job and transition the request to `QUEUED`. Repeating the queue call must return the existing Job.
+Cover account creation, request creation, request listing, missing-project handling, and queueing. Queueing must return `409 PUBLISH_APPROVAL_REQUIRED` until `ApprovalService` has an approved `PUBLISH` decision for the exact current revision; after approval it must create one `PUBLISH` Job and transition the request to `QUEUED`. Repeating the queue call must return the existing Job.
 
 - [ ] **Step 2: Run the focused route test and verify the expected failure**
 
@@ -57,7 +57,7 @@ Expected: failure because Publisher routes are not registered.
 
 - [ ] **Step 3: Implement the routes**
 
-Create a Fastify route registrar that validates all bodies with Zod, verifies the project through `ProjectService`, calls `PublisherService`, calls `ReviewService.getCurrent(projectId, 'PUBLISH', requestId)`, and uses `JobService.getByIdempotencyKey/create` for queueing. Register it from `buildApi` with one shared `PublisherService` instance. Return safe errors with no credential-shaped fields.
+Create Fastify route registrars that validate bodies with Zod, verify the project through `ProjectService`, call `PublisherService`, call `ApprovalService.getCurrent(projectId, 'PUBLISH', requestId, revisionId)`, and use `JobService.getByIdempotencyKey/create` for queueing. Register them from `buildApi` with shared service instances. Return safe errors with no credential-shaped fields.
 
 - [ ] **Step 4: Run the focused route test and verify it passes**
 
@@ -134,7 +134,7 @@ Run `git add apps/web/app/projects/[id]/publisher/page.tsx apps/web/app/projects
 
 - [ ] **Step 1: Update status documentation**
 
-Record that Fake Publisher API, durable Worker execution, Review-gated queueing and Operator UI are complete; retain real Douyin/WeChat adapters, metrics and AI review as explicit deferred work.
+Record that Fake Publisher API, durable Worker execution, Approval-gated queueing and Operator UI are complete; retain real Douyin/WeChat adapters, metrics and post-publish Review as explicit deferred work.
 
 - [ ] **Step 2: Run verification commands**
 
@@ -143,4 +143,3 @@ Run `pnpm typecheck`, `pnpm lint`, `pnpm --dir apps/web build`, and the full `pn
 - [ ] **Step 3: Inspect the final diff and commit documentation**
 
 Run `git diff --check`, `git status --short`, then commit the documentation with `git add docs/engineering/NEXT_VERTICAL_SLICES.md docs/modules/PUBLISHER_MODULE_V0.md && git commit -m "docs: report publisher product slice"`.
-

@@ -40,7 +40,7 @@ Authentication/authorization model, secret-store vendor, exact database/query li
 
 ## Human approval checklist
 
-- Confirm V1 remains a fixed Director -> Video -> Publish -> Review sequence.
+- Confirm V1 remains a fixed Director -> Video -> Approval Gate -> Publish -> post-publish Review sequence.
 - Confirm local-first storage is acceptable for the technical spike only.
 - Approve browser-based publishing as a constrained, reconciled capability.
 - Approve the recommended TypeScript/Node stack and the four spike acceptance criteria, or request alternatives.

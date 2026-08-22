@@ -1,19 +1,17 @@
-# Review Module V0
+# Review Module V0 — Post-publish Performance
 
 ## Boundary
 
-Review owns validation gates, review tasks, metric snapshots, observations, recommendations and decision records. It answers whether a particular revision/output/request is eligible for the next business transition; it does not render or publish.
+Review owns post-publish metric snapshots, observations, performance analysis, AI review and recommendations. It does not approve scripts, renders or publish requests; those transitions use the separate Approval Gate contract.
 
 ## Review types
 
 | Type | Subject | Example outcome |
 |---|---|---|
-| Creative review | script/storyboard revision | approve, return-for-revision |
-| Render review | Render/output Asset | pass technical validation, reject quality issue |
-| Publish review | Publish request | approve schedule, block policy violation |
-| Performance review | external post / MetricSnapshot | recommendation for later Director work |
+| Metric review | external post / MetricSnapshot | explain performance |
+| Strategy review | project history and snapshots | recommendation for later Director work |
 
-A review decision records subject type/ID/revision, policy version, evidence references, reviewer (human or system), timestamp, outcome and rationale. Decisions are immutable; an override is a distinct decision with an authorized actor and reason.
+Performance review records reference a confirmed external post, metric snapshot IDs, policy/model version, evidence references, reviewer or AI run, timestamp, outcome and rationale. Records are append-only and never change published metadata silently.
 
 ## Metrics
 

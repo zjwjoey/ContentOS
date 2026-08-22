@@ -13,6 +13,7 @@
 | ADR-009 | Structured Cross-boundary Observability | Accepted with Conditions | Lease recovery, publisher outcomes and redaction must be metrics/log gates |
 | ADR-010 | Canonical Asset System | Accepted with Conditions | Local promotion passes; object-store commit semantics remain gated |
 | ADR-011 | Director Application Worker | Accepted with Conditions | ECR-001; explicit composition, supervision, lease recovery and fake-provider gates |
+| ADR-012 | Approval Gates vs Post-publish Review | Accepted | Approval binds exact revisions; Review owns MetricSnapshot and performance recommendations |
 
 ## Counts
 

@@ -42,7 +42,7 @@ Owns request authentication, Project lifecycle, module use-case orchestration, J
 
 ## Fixed V1 workflow
 
-`Director -> Video -> Publish -> Review` is a set of explicit application use cases. Each phase may create several Jobs. V1 has no user-authored workflow graphs; dependencies are persisted Job dependency rows.
+`Director -> Video -> Approval Gate -> Publish -> post-publish Review` is a set of explicit application use cases. Each phase may create several Jobs. V1 has no user-authored workflow graphs; dependencies are persisted Job dependency rows.
 
 ## Architectural fitness tests
 

@@ -25,7 +25,7 @@ V1 uses direct FFmpeg invocations composed by a thin internal command builder. T
 
 The Video Worker declares the supported FFmpeg binary, codecs, filters and required font files at startup. Missing capabilities are structured terminal errors; a successful process exit is not sufficient evidence of a valid captioned render.
 
-Validation records duration, dimensions, codec/container, checksum, output size, source manifest version and tool version. A render is publishable only after validation and Review policy allow it.
+Validation records duration, dimensions, codec/container, checksum, output size, source manifest version and tool version. A render is publishable only after validation and an Approval Gate allow it.
 
 ## Dependencies
 

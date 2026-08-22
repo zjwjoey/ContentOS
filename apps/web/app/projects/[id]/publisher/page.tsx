@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 type Account = { id: string; platformId: string; displayName: string; status: string };
 type PublishRequest = { id: string; accountId: string; status: string; failureMessage: string | null; createdAt: string };
-type RequestAggregate = { request: PublishRequest; revision: { title: string; description: string; assetId: string } };
+type RequestAggregate = { request: PublishRequest; revision: { id: string; title: string; description: string; assetId: string } };
 type ApiError = { error?: { message?: string } };
 
 async function responseMessage(response: Response, fallback: string): Promise<string> {
@@ -40,7 +40,7 @@ export default function PublisherPage({ params }: { params: { id: string } }) {
       const items = ((await requestResponse.json()) as { items: PublishRequest[] }).items;
       const aggregates = await Promise.all(items.map(async (item) => {
         const response = await fetch(`/api/v1/projects/${projectId}/publisher/requests/${item.id}`);
-        return response.ok ? await response.json() as RequestAggregate : { request: item, revision: { title: item.id, description: '', assetId: '' } };
+        return response.ok ? await response.json() as RequestAggregate : { request: item, revision: { id: '', title: item.id, description: '', assetId: '' } };
       }));
       setRequests(aggregates);
     }
@@ -66,9 +66,12 @@ export default function PublisherPage({ params }: { params: { id: string } }) {
 
   const approveAndQueue = async (requestId: string) => {
     setBusy(true); setMessage('');
-    const pending = await fetch(`/api/v1/projects/${projectId}/reviews`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ targetType: 'PUBLISH', targetId: requestId, status: 'PENDING', reviewer: 'operator' }) });
+    const current = requests.find((item) => item.request.id === requestId);
+    if (!current?.revision.id) { setMessage('发布 Revision 信息缺失。'); setBusy(false); return; }
+    const revisionId = current.revision.id;
+    const pending = await fetch(`/api/v1/projects/${projectId}/approvals`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ targetType: 'PUBLISH', targetId: requestId, targetRevisionId: revisionId, status: 'PENDING', approver: 'operator' }) });
     if (!pending.ok) { setMessage(await responseMessage(pending, '发布审核创建失败。')); setBusy(false); return; }
-    const approved = await fetch(`/api/v1/projects/${projectId}/reviews/PUBLISH/${requestId}/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reviewer: 'operator' }) });
+    const approved = await fetch(`/api/v1/projects/${projectId}/approvals/PUBLISH/${requestId}/${revisionId}/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approver: 'operator' }) });
     if (!approved.ok) { setMessage(await responseMessage(approved, '发布审核失败。')); setBusy(false); return; }
     const queued = await fetch(`/api/v1/projects/${projectId}/publisher/requests/${requestId}/queue`, { method: 'POST' });
     setMessage(queued.ok ? '发布请求已审核并进入 PUBLISH Job 队列。' : await responseMessage(queued, '发布入队失败。'));
@@ -85,4 +88,3 @@ export default function PublisherPage({ params }: { params: { id: string } }) {
     <section className="card"><div className="section-title"><h2>发布请求</h2><span>{requests.length} 条</span></div>{message && <p className="status">{message}</p>}<ul className="revision-list">{requests.map(({ request, revision }) => <li key={request.id}><strong>{revision.title}</strong><span>{request.status} · Asset {revision.assetId}</span>{request.failureMessage && <small>{request.failureMessage}</small>}{request.status === 'DRAFT' && <button type="button" disabled={busy} onClick={() => void approveAndQueue(request.id)}>人工审核并入队</button>}{request.status === 'PUBLISHED' && <small>PUBLISHED · 已生成 Fake Platform 发布记录</small>}</li>)}</ul></section>
   </main>;
 }
-

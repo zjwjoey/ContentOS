@@ -23,6 +23,7 @@ test('Director Operator exposes one-command local startup for API, Web and Worke
   assert.match(api, /"dev"/);
   assert.match(worker, /"dev"/);
   assert.match(launcher, /@contentos\/director-worker/);
+  assert.match(launcher, /@contentos\/worker-publisher/);
 });
 
 test('Director Operator exposes project creation, complete Brief inputs and Job polling', async () => {

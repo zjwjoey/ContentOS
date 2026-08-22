@@ -26,6 +26,7 @@ async function cleanup(db: Awaited<ReturnType<typeof createDatabase>>, projectId
   await db.query('delete from publisher_request_revisions where request_id in (select id from publisher_requests where project_id = $1)', [projectId]);
   await db.query('delete from publisher_requests where project_id = $1', [projectId]);
   await db.query('delete from jobs where project_id = $1', [projectId]);
+  await db.query('delete from approval_decisions where project_id = $1', [projectId]);
   await db.query('delete from review_decisions where project_id = $1', [projectId]);
   await db.query('delete from publisher_accounts where project_id = $1', [projectId]);
   await db.query('delete from assets where project_id = $1', [projectId]);
@@ -68,10 +69,11 @@ test('Publisher queue endpoint requires approved Publish review and is idempoten
     const requestId = (createRequest.json() as { request: { id: string } }).request.id;
     const blocked = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/publisher/requests/${requestId}/queue` });
     assert.equal(blocked.statusCode, 409);
-    assert.equal((blocked.json() as { error: { code: string } }).error.code, 'PUBLISH_REVIEW_REQUIRED');
-    const pending = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/reviews`, payload: { targetType: 'PUBLISH', targetId: requestId, status: 'PENDING', reviewer: 'operator' } });
+    assert.equal((blocked.json() as { error: { code: string } }).error.code, 'PUBLISH_APPROVAL_REQUIRED');
+    const revisionId = (createRequest.json() as { revision: { id: string } }).revision.id;
+    const pending = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/approvals`, payload: { targetType: 'PUBLISH', targetId: requestId, targetRevisionId: revisionId, status: 'PENDING', approver: 'operator' } });
     assert.equal(pending.statusCode, 201);
-    const approved = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/reviews/PUBLISH/${requestId}/approve`, payload: { reviewer: 'operator' } });
+    const approved = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/approvals/PUBLISH/${requestId}/${revisionId}/approve`, payload: { approver: 'operator' } });
     assert.equal(approved.statusCode, 200);
     const queued = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/publisher/requests/${requestId}/queue` });
     assert.equal(queued.statusCode, 202);
