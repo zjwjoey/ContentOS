@@ -1,8 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDatabase, migrateDown, migrateUp } from '../../packages/database/src/index.js';
+import { createDatabase, migrateDown, migrateUp, resolveMigrationsDirectory } from '../../packages/database/src/index.js';
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55432/contentos_dev';
+
+test('migration directory resolution is independent of the process working directory', () => {
+  const originalCwd = process.cwd();
+  try {
+    process.chdir('apps/api');
+    assert.match(resolveMigrationsDirectory(), /migrations$/);
+    assert.ok(resolveMigrationsDirectory().endsWith('migrations'));
+  } finally {
+    process.chdir(originalCwd);
+  }
+});
 
 test('database migrations create the first vertical-slice schema and are idempotent', async () => {
   const db = await createDatabase(databaseUrl);
