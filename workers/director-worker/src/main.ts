@@ -1,6 +1,7 @@
 import { WorkerRuntime } from '../../../packages/shared/src/worker-runtime.js';
 import { DIRECTOR_GENERATE_SCRIPT, DIRECTOR_GENERATE_STORYBOARD } from '../../../packages/modules/director/src/director-job-service.js';
 import { createDirectorJobHandler, type DirectorWorkerDependencies } from './handler.js';
+import { basename } from 'node:path';
 
 export type { DirectorWorkerDependencies } from './handler.js';
 
@@ -12,4 +13,4 @@ export function createDirectorWorker(dependencies?: DirectorWorkerDependencies):
   return runtime;
 }
 
-if (process.argv[1]?.endsWith('main.ts')) throw new Error('Director worker composition must be provided by the deployment entrypoint');
+if (basename(process.argv[1] ?? '') === 'main.ts') throw new Error('Director worker composition must be provided by the deployment entrypoint');

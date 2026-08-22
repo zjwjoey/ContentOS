@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { createDatabase, migrateUp } from '../../packages/database/src/index.js';
 import { ProjectService } from '../../packages/modules/project/src/index.js';
 import { DirectorV1Service } from '../../packages/modules/director/src/director-v1-service.js';
@@ -21,6 +22,11 @@ test('Director worker fails closed without explicit composition and registers on
   const fake = {} as DirectorWorkerDependencies;
   const worker = createDirectorWorker(fake);
   assert.deepEqual(worker.handlerTypes(), [DIRECTOR_GENERATE_SCRIPT, DIRECTOR_GENERATE_STORYBOARD]);
+});
+
+test('development Director composition does not trigger the production fail-closed guard', async () => {
+  const source = await readFile('workers/director-worker/src/main.ts', 'utf8');
+  assert.match(source, /basename\(process\.argv\[1\]/);
 });
 
 test('Director jobs enqueue work and worker creates idempotent Script and Storyboard revisions', async () => {
