@@ -16,7 +16,7 @@ test('WeChat Channels adapter uses the configured page URL and selector profile'
     screenshot: async (path) => { calls.push(`screenshot:${path}`); },
   };
   const factory: BrowserSessionFactory = { open: async (input) => ({ profileDir: input.profileDir, page: async () => page, close: async () => undefined }) };
-  const context: PublisherContext = { profileDir: 'profile', credentialRef: 'profile://wechat' };
+  const context: PublisherContext = { profileDir: 'profile', accountId: 'wechat-account', credentialRef: 'profile://wechat' };
   const snapshot: PublishSnapshot = { requestId: 'r', idempotencyKey: 'k', assetId: 'a', mediaPath: 'video.mp4', title: 'title', description: 'description' };
   const result = await new WeChatChannelsPlaywrightAdapter(factory, { allowSubmit: false, selectorProfile: { loginMarker: '[data-test="login"]', verificationMarker: '[data-test="verify"]', fileInput: '[data-test="upload-file"]', descriptionInput: '[data-test="description"]', coverInput: '[data-test="cover-file"]', publishButton: '[data-test="publish"]', successMarker: '[data-test="success"]' } }).publish(context, snapshot);
   assert.equal(result.failure?.code, 'HUMAN_CONFIRMATION_REQUIRED');

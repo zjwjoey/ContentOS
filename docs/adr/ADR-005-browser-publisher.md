@@ -12,4 +12,4 @@ Run Playwright only in the Publisher Worker and hide platform-specific behavior 
 
 ## Consequences
 
-Browser profiles/credentials are isolated and failure diagnostics are redacted. Uncertain outcomes trigger reconciliation rather than blind reposting. A later API-backed adapter can replace browser automation without changing Publisher commands.
+Browser profiles/credentials are isolated outside tracked source state and failure diagnostics expose only opaque evidence references. Uncertain outcomes are durably blocked for reconciliation rather than blindly reposted. A later API-backed adapter can replace browser automation without changing Publisher commands.

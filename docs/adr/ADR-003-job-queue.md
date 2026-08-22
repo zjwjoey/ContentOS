@@ -12,4 +12,4 @@ Model work as persistent Jobs with attempts, events, leases, retries and idempot
 
 ## Consequences
 
-Handlers are at-least-once safe and recover expired leases. The spike may choose another adapter only if it preserves the Job contract and database truth; such a replacement requires an ADR update.
+Handlers are at-least-once safe and recover expired leases. External side-effect state, including Publisher `PUBLISHED` and `UNKNOWN_EXTERNAL_STATE` outcomes, is PostgreSQL truth rather than process memory. The spike may choose another adapter only if it preserves the Job contract and database truth; such a replacement requires an ADR update.

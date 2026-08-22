@@ -28,6 +28,8 @@ reconcile(context, idempotencyKey) -> ExternalStateResult
 
 Browser/worker crashes are mapped to `UNKNOWN_EXTERNAL_STATE` when a side effect may have happened, and to a safe retryable infrastructure failure only when the adapter proves no external action occurred. The Spike codes `AUTH_REQUIRED`, `VERIFICATION_REQUIRED`, `DOM_CHANGED` and `BROWSER_CRASH` normalize to this taxonomy.
 
+For real platforms, the Worker validates the reviewed publish-snapshot digest and the local asset SHA-256 before dispatch. Publisher-owned PostgreSQL state records `PUBLISHED` and `UNKNOWN_EXTERNAL_STATE` outcomes by platform/account/idempotency key. An unknown outcome blocks blind replay until a verified reconciliation source confirms it.
+
 ## Security and isolation
 
 One browser context and profile directory per account/environment. Credentials, cookies, authorization headers, private URLs and tokens never enter ordinary logs or Job payloads. Failure evidence is redacted and access-controlled.

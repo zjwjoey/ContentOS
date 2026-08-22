@@ -1,1 +1,1 @@
-export { ReviewService, type ReviewCreateInput, type ReviewRecord } from './review-service.js';
+export { createReviewPublishApprovalProvider, ReviewService, type PublishSnapshotApprovalInput, type ReviewCreateInput, type ReviewPublishApprovalProvider, type ReviewRecord } from './review-service.js';

@@ -6,6 +6,8 @@ dist/
 storage/local/*
 !storage/local/.gitkeep
 storage/postgres-data/
+storage/publisher-profiles/
+artifacts/publisher/
 research/repos/
 *.log
 *.mp4

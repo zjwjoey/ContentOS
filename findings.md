@@ -32,6 +32,16 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 
 ## Issues
 
+## Publisher safety review findings — 2026-08-22
+
+- `storage/publisher-profiles/` and `artifacts/publisher/` were not ignored even though they can contain browser session state and screenshots.
+- `workers/publisher-worker/src/main.ts` started the Stage-4 no-op handler when executed directly.
+- Real adapters defaulted to `InMemoryPublishStateStore`; restart and unknown-state reconciliation were unsafe.
+- PUBLISH approvals did not bind a Review decision to an immutable asset/content snapshot.
+- The Douyin adapter used an undocumented create path. Current official documentation specifies `POST /video/create/`; its ambiguous responses cannot be safely matched from the list API alone.
+- The WeChat adapter checked its success selector immediately after click and returned a synthetic external ID.
+- The smoke command printed failed outcomes with process exit code zero.
+
 ## Final Architecture V0 Freeze Findings
 
 - The complete Architecture V0 package, all ten ADRs and all four Spike reports were reviewed together.

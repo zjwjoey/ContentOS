@@ -138,6 +138,16 @@ Architecture V0 — formal design documentation and self-review.
 - [ ] Run a live platform smoke test with explicit account credentials and final publish authorization.
 - **Status:** implementation and simulated verification complete; live platform smoke remains account-dependent and intentionally not executed.
 
+### Phase 21: Publisher safety corrections
+- [x] Bind approved PUBLISH reviews to immutable publish intent and local asset checksums.
+- [x] Persist publisher terminal/uncertain state in PostgreSQL and block uncertain reposts.
+- [x] Correct documented Douyin endpoint defaults and normalize platform/browser failures.
+- [x] Make worker startup, browser evidence and smoke command fail closed.
+- [x] Run the full verification gate.
+- [x] Run a secret/artifact leakage scan; no credentials, profiles or platform artifacts are pending for commit.
+- [x] Commit and push the corrected feature branch.
+- **Status:** implementation and verification complete; feature branch updated; no PR was opened or merged.
+
 ## Key constraints
 - Only Phase-1 projects are in scope: MatrixMedia, short-video-factory, MoneyPrinterTurbo, AutoSocial, and Postiz.
 - Research must be based on source evidence, not README-only summaries.

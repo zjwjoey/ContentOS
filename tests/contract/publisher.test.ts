@@ -6,11 +6,11 @@ test('Fake Publisher exposes capabilities and idempotent success', async () => {
   const adapter = new FakePublisherAdapter();
   const capabilities = adapter.capabilities();
   assert.equal(capabilities.platformId, 'fake-platform');
-  const auth = await adapter.authenticate({ profileDir: 'profile-a', credentialRef: 'vault://fake/account-a' });
+  const auth = await adapter.authenticate({ profileDir: 'profile-a', accountId: 'account-a', credentialRef: 'vault://fake/account-a' });
   assert.equal(auth.status, 'AUTHENTICATED');
   const snapshot = { requestId: 'request-1', idempotencyKey: 'publish-1', assetId: 'asset-render-1', title: '测试发布', description: 'fake' };
-  const first = await adapter.publish({ profileDir: 'profile-a', credentialRef: 'vault://fake/account-a' }, snapshot);
-  const second = await adapter.publish({ profileDir: 'profile-a', credentialRef: 'vault://fake/account-a' }, snapshot);
+  const first = await adapter.publish({ profileDir: 'profile-a', accountId: 'account-a', credentialRef: 'vault://fake/account-a' }, snapshot);
+  const second = await adapter.publish({ profileDir: 'profile-a', accountId: 'account-a', credentialRef: 'vault://fake/account-a' }, snapshot);
   assert.equal(first.status, 'PUBLISHED'); assert.equal(first.externalPostId, second.externalPostId);
 });
 
@@ -24,7 +24,7 @@ test('Fake Publisher normalizes auth, verification, DOM, crash and retry outcome
     ['NETWORK', 'NETWORK_ERROR', 'RETRYABLE'],
   ];
   for (const [outcome, code, classification] of scenarios) {
-    const result = await new FakePublisherAdapter(outcome).publish({ profileDir: `profile-${outcome}`, credentialRef: 'vault://fake' }, { requestId: 'r', idempotencyKey: outcome, assetId: 'asset', title: 'title', description: '' });
+    const result = await new FakePublisherAdapter(outcome).publish({ profileDir: `profile-${outcome}`, accountId: 'fake-account', credentialRef: 'vault://fake' }, { requestId: 'r', idempotencyKey: outcome, assetId: 'asset', title: 'title', description: '' });
     assert.equal(result.status, code === 'UNKNOWN_EXTERNAL_STATE' ? 'UNKNOWN_EXTERNAL_STATE' : 'FAILED');
     assert.equal(result.failure?.code, code); assert.equal(result.failure?.classification, classification);
   }

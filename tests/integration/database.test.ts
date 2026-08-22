@@ -11,8 +11,8 @@ test('database migrations create the first vertical-slice schema and are idempot
     const second = await migrateUp(db);
     assert.ok(first.applied >= 0);
     assert.equal(second.applied, 0);
-    const tables = await db.query<{ table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('content_projects','assets','jobs','job_attempts','job_dependencies','edit_manifests','renders') order by table_name");
-    assert.deepEqual(tables.rows.map((row) => row.table_name), ['assets', 'content_projects', 'edit_manifests', 'job_attempts', 'job_dependencies', 'jobs', 'renders']);
+    const tables = await db.query<{ table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('content_projects','assets','jobs','job_attempts','job_dependencies','edit_manifests','publisher_publication_states','renders') order by table_name");
+    assert.deepEqual(tables.rows.map((row) => row.table_name), ['assets', 'content_projects', 'edit_manifests', 'job_attempts', 'job_dependencies', 'jobs', 'publisher_publication_states', 'renders']);
   } finally {
     await db.end();
   }

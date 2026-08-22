@@ -4,8 +4,8 @@ export type PublisherPlatformId = 'fake-platform' | 'douyin' | 'wechat-channels'
 export interface PublisherCredential { accessToken?: string; refreshToken?: string; clientKey?: string; clientSecret?: string; openId?: string; }
 export interface PublisherFailure { code: PublisherFailureCode; classification: PublisherFailureClassification; message: string; }
 export interface PlatformCapabilityProfile { platformId: PublisherPlatformId; mediaTypes: string[]; scheduling: boolean; requiresHumanConfirmation: boolean; }
-export interface PublisherContext { profileDir: string; credentialRef: string; credential?: PublisherCredential; }
-export interface PublishSnapshot { requestId: string; idempotencyKey: string; assetId: string; mediaPath?: string; coverPath?: string; title: string; description: string; }
+export interface PublisherContext { profileDir: string; accountId: string; credentialRef: string; credential?: PublisherCredential; }
+export interface PublishSnapshot { requestId: string; idempotencyKey: string; assetId: string; assetSha256?: string; mediaPath?: string; coverPath?: string; coverSha256?: string; title: string; description: string; }
 export interface AuthResult { status: 'AUTHENTICATED' | 'FAILED'; failure?: PublisherFailure; }
 export interface PublishResult { status: 'PUBLISHED' | 'FAILED' | 'UNKNOWN_EXTERNAL_STATE'; externalPostId?: string; failure?: PublisherFailure; }
 export interface ExternalStateResult { status: 'PUBLISHED' | 'NOT_FOUND' | 'UNKNOWN'; externalPostId?: string; }
@@ -15,3 +15,14 @@ export interface PublisherAdapter {
   publish(context: PublisherContext, snapshot: PublishSnapshot): Promise<PublishResult>;
   reconcile(context: PublisherContext, idempotencyKey: string): Promise<ExternalStateResult>;
 }
+
+export function createPublishSnapshotDigest(input: { platformId: PublisherPlatformId; accountId: string; snapshot: PublishSnapshot }): string {
+  const { platformId, accountId, snapshot } = input;
+  const canonical = JSON.stringify({
+    schemaVersion: 'PUBLISH_SNAPSHOT_V1', platformId, accountId, assetId: snapshot.assetId,
+    assetSha256: snapshot.assetSha256 || null, coverSha256: snapshot.coverSha256 || null,
+    title: snapshot.title, description: snapshot.description,
+  });
+  return createHash('sha256').update(canonical).digest('hex');
+}
+import { createHash } from 'node:crypto';

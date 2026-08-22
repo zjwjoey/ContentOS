@@ -8,7 +8,7 @@ test('real publisher contract carries media references and stable platform IDs',
   assert.deepEqual(platformIds, ['fake-platform', 'douyin', 'wechat-channels']);
   const snapshot: PublishSnapshot = { requestId: 'request-1', idempotencyKey: 'publish:project:revision', assetId: 'asset-1', mediaPath: 'E:/contentos/objects/asset-1.mp4', coverPath: 'E:/contentos/objects/asset-1.jpg', title: '测试标题', description: '#测试' };
   assert.equal(snapshot.mediaPath?.endsWith('.mp4'), true);
-  const context: PublisherContext = { profileDir: 'profile', credentialRef: 'vault://publisher/account', credential: { accessToken: 'secret-token', openId: 'open-1' } };
+  const context: PublisherContext = { profileDir: 'profile', accountId: 'account', credentialRef: 'vault://publisher/account', credential: { accessToken: 'secret-token', openId: 'open-1' } };
   assert.equal(context.credential?.openId, 'open-1');
   const safeResult: PublishResult = { status: 'PUBLISHED', externalPostId: 'external-1' };
   assert.equal(JSON.stringify(safeResult).includes('secret-token'), false);

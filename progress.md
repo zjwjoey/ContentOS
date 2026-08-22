@@ -182,3 +182,17 @@
 - Added the WeChat Channels headed Playwright adapter with per-account persistent profiles, versioned selectors, manual login/verification handling and pre-submit approval gating.
 - Registered both adapters in the Publisher Worker and added an opt-in `pnpm publisher:smoke` command. Normal tests never launch a real browser or call a platform.
 - Focused adapter, browser-port, smoke-config and Worker tests pass; final full repository verification is the remaining engineering gate.
+
+## Session: 2026-08-22 - Publisher safety corrections
+
+### Phase 21: Review-driven hardening
+- **Status:** implementation and verification complete; user authorized corrections after code review.
+- Root causes confirmed: unignored browser artifacts, no-op executable worker, process-local publisher state, approval not bound to immutable content, immediate browser success check, incorrect Douyin create endpoint and smoke failures with exit code zero.
+- Design and implementation plan added. No real account, credential or platform request is used during correction tests.
+- Added an immutable publish-snapshot digest, local media SHA-256 validation and Review-backed approval verification.
+- Added the Publisher-owned `publisher_publication_states` migration and PostgreSQL state store; unknown outcomes block reposts across process restart.
+- Corrected the documented Douyin create endpoint to `/video/create/`; WebM MIME and upload transport classifications are covered.
+- Added asynchronous WeChat success waiting, opaque evidence references, fail-closed worker entrypoint and nonzero smoke failure exits.
+- Verification passed on the isolated local PostgreSQL port 55433: format, lint, typecheck, full **69-test** suite, build, doctor and whitespace checks.
+- Secret/artifact scan found no credential-shaped values; browser profile and publisher evidence roots are ignored. No real platform request was made.
+- Corrections are committed on `feature/slice-5-real-platform-adapters`; the branch is ready to push, with no PR opened or merged.

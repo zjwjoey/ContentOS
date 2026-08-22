@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PublisherAdapterRegistry, createPublisherHandler, type ReviewApprovalProvider } from '../../packages/modules/publisher/src/publisher-registry.js';
+import { InMemoryPublishStateStore, PublisherAdapterRegistry, createPublisherHandler, type ReviewApprovalProvider } from '../../packages/modules/publisher/src/index.js';
 import type { AuthResult, ExternalStateResult, PlatformCapabilityProfile, PublishResult, PublishSnapshot, PublisherAdapter, PublisherContext, PublisherCredential, PublisherFailure } from '../../packages/contracts/src/index.js';
 import { createPublisherWorker, createRealPublisherWorker } from '../../workers/publisher-worker/src/main.js';
 import type { BrowserSessionFactory } from '../../packages/modules/publisher/src/browser-session.js';
@@ -22,17 +23,21 @@ const snapshot: PublishSnapshot = { requestId: 'request-worker', idempotencyKey:
 test('Publisher Worker dispatches both real platform IDs with isolated profiles and resolved refs', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-real-publisher-worker-'));
   try {
+    const mediaPath = join(root, 'video.mp4');
+    const media = Buffer.from('real-publisher-worker-media');
+    await writeFile(mediaPath, media);
+    const reviewedSnapshot: PublishSnapshot = { ...snapshot, mediaPath, assetSha256: createHash('sha256').update(media).digest('hex') };
     const douyin = new RecordingAdapter('douyin'); const wechat = new RecordingAdapter('wechat-channels');
     const registry = new PublisherAdapterRegistry(); registry.register(douyin); registry.register(wechat);
     const approval: ReviewApprovalProvider = { isApproved: async (input) => input.targetType === 'PUBLISH' && input.reviewDecisionId === 'review-1' };
     const credential: PublisherCredential = { accessToken: 'secret-token', openId: 'open-id' };
     const handler = createPublisherHandler({ registry, approval, credentials: { resolve: async () => credential }, profileRoot: root });
     const worker = createPublisherWorker(handler); await worker.start();
-    const result = await worker.execute('publisher.publish', { platformId: 'douyin', accountId: 'account-a', credentialRef: 'env://DOUYIN', projectId: 'project-1', targetId: 'render-1', reviewDecisionId: 'review-1', snapshot });
+    const result = await worker.execute('publisher.publish', { platformId: 'douyin', accountId: 'account-a', credentialRef: 'env://DOUYIN', projectId: 'project-1', targetId: 'render-1', reviewDecisionId: 'review-1', snapshot: reviewedSnapshot });
     assert.equal((result as PublishResult).status, 'PUBLISHED');
     assert.equal(douyin.contexts[0]?.profileDir, join(root, 'douyin', 'account-a'));
     assert.equal(douyin.contexts[0]?.credential?.accessToken, 'secret-token');
-    const second = await worker.execute('publisher.publish', { platformId: 'wechat-channels', accountId: 'account-b', credentialRef: 'profile://WECHAT', projectId: 'project-1', targetId: 'publish-1', reviewDecisionId: 'review-1', snapshot: { ...snapshot, idempotencyKey: 'publish-worker-2' } });
+    const second = await worker.execute('publisher.publish', { platformId: 'wechat-channels', accountId: 'account-b', credentialRef: 'profile://WECHAT', projectId: 'project-1', targetId: 'publish-1', reviewDecisionId: 'review-1', snapshot: { ...reviewedSnapshot, idempotencyKey: 'publish-worker-2' } });
     assert.equal((second as PublishResult).status, 'PUBLISHED');
     assert.equal(wechat.contexts[0]?.profileDir, join(root, 'wechat-channels', 'account-b'));
     await worker.shutdown('test');
@@ -49,9 +54,28 @@ test('Publisher Worker refuses unapproved publish jobs and duplicate registry ID
   assert.equal((result as PublishResult).failure?.code, 'HUMAN_CONFIRMATION_REQUIRED');
 });
 
+test('Publisher Worker binds approval to the snapshot digest and refuses a mismatched media checksum', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-publisher-integrity-'));
+  const mediaPath = join(root, 'video.mp4');
+  await writeFile(mediaPath, Buffer.from('reviewed-media'));
+  try {
+    const adapter = new RecordingAdapter('douyin');
+    const registry = new PublisherAdapterRegistry(); registry.register(adapter);
+    const approval: ReviewApprovalProvider = { isApproved: async (input) => typeof (input as { snapshotDigest?: unknown }).snapshotDigest === 'string' };
+    const handler = createPublisherHandler({ registry, approval, credentials: { resolve: async () => ({ accessToken: 'token', openId: 'open' }) }, profileRoot: root });
+    const result = await handler({
+      platformId: 'douyin', accountId: 'account-a', credentialRef: 'env://DOUYIN', projectId: 'project-1', targetId: 'publish-1', reviewDecisionId: 'review-1',
+      snapshot: { ...snapshot, mediaPath, assetSha256: '0'.repeat(64) } as unknown as PublishSnapshot,
+    });
+    assert.equal((result as PublishResult).status, 'FAILED');
+    assert.match((result as PublishResult).failure?.message || '', /checksum/i);
+    assert.equal(adapter.contexts.length, 0);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('Publisher Worker composition root registers Douyin and WeChat Channels adapters', async () => {
   const browser: BrowserSessionFactory = { open: async () => { throw new Error('browser should not open before review approval'); } };
-  const worker = createRealPublisherWorker({ profileRoot: join(tmpdir(), 'contentos-composition-root'), browser, credentials: { resolve: async () => ({}) }, approval: { isApproved: async () => false } });
+  const worker = createRealPublisherWorker({ profileRoot: join(tmpdir(), 'contentos-composition-root'), browser, credentials: { resolve: async () => ({}) }, approval: { isApproved: async () => false }, state: new InMemoryPublishStateStore() });
   await worker.start();
   const payload = { platformId: 'douyin', accountId: 'account', credentialRef: 'env://DOUYIN', projectId: 'project', targetId: 'publish', reviewDecisionId: 'review', snapshot } as const;
   const douyin = await worker.execute('publisher.publish', payload);

@@ -4,18 +4,18 @@ import { WeChatChannelsPlaywrightAdapter } from '../../packages/modules/publishe
 import type { BrowserPage, BrowserSession, BrowserSessionFactory } from '../../packages/modules/publisher/src/browser-session.js';
 import type { PublishSnapshot, PublisherContext } from '../../packages/contracts/src/index.js';
 
-const context: PublisherContext = { profileDir: 'profile-wechat', credentialRef: 'profile://wechat/account' };
+const context: PublisherContext = { profileDir: 'profile-wechat', accountId: 'wechat-account', credentialRef: 'profile://wechat/account' };
 const snapshot: PublishSnapshot = { requestId: 'request-wechat', idempotencyKey: 'publish-wechat-1', assetId: 'asset-1', mediaPath: 'C:/tmp/video.mp4', title: '标题', description: '#话题' };
 
 class FakePage implements BrowserPage {
   readonly calls: string[] = [];
-  constructor(private readonly visible: Record<string, boolean>, private readonly success = true) {}
+  constructor(private readonly visible: Record<string, boolean>, private readonly success = true, private readonly visibleAfterWait: Record<string, boolean> = {}) {}
   async goto(url: string): Promise<void> { this.calls.push(`goto:${url}`); }
   async isVisible(selector: string): Promise<boolean> { this.calls.push(`visible:${selector}`); return this.visible[selector] || false; }
   async setInputFiles(selector: string, filePath: string): Promise<void> { this.calls.push(`file:${selector}:${filePath}`); }
   async fill(selector: string, value: string): Promise<void> { this.calls.push(`fill:${selector}:${value}`); }
   async click(selector: string): Promise<void> { this.calls.push(`click:${selector}`); }
-  async waitFor(selector: string): Promise<void> { this.calls.push(`wait:${selector}`); }
+  async waitFor(selector: string): Promise<void> { this.calls.push(`wait:${selector}`); if (this.visibleAfterWait[selector]) this.visible[selector] = true; }
   async screenshot(path: string): Promise<void> { this.calls.push(`screenshot:${path}`); }
   isSuccess(): boolean { return this.success; }
 }
@@ -54,4 +54,19 @@ test('WeChat Channels normalizes DOM drift and uncertain submit with isolated pr
   const uncertain = await new WeChatChannelsPlaywrightAdapter(factoryFor(uncertainPage, opened), { headed: false, allowSubmit: true, evidenceDir: 'evidence' }).publish({ ...context, profileDir: 'profile-b' }, { ...snapshot, idempotencyKey: 'publish-wechat-uncertain' });
   assert.equal(uncertain.status, 'UNKNOWN_EXTERNAL_STATE');
   assert.deepEqual(opened.map((item) => item.profileDir), ['profile-a', 'profile-b']);
+});
+
+test('WeChat Channels waits for an asynchronous success marker after submit', async () => {
+  const page = new FakePage({ 'input[type="file"]': true, textarea: true, 'button:has-text("发表")': true }, true, { 'text=发布成功': true });
+  const result = await new WeChatChannelsPlaywrightAdapter(factoryFor(page, []), { headed: false, allowSubmit: true }).publish(context, { ...snapshot, idempotencyKey: 'publish-wechat-success' });
+  assert.equal(result.status, 'PUBLISHED');
+  assert.equal(page.calls.includes('wait:text=发布成功'), true);
+});
+
+test('WeChat Channels normalizes browser failures before submission as retryable network errors', async () => {
+  const browser: BrowserSessionFactory = { open: async () => { throw new Error('browser launch failed'); } };
+  const result = await new WeChatChannelsPlaywrightAdapter(browser, { headed: false }).publish(context, snapshot);
+  assert.equal(result.status, 'FAILED');
+  assert.equal(result.failure?.code, 'NETWORK_ERROR');
+  assert.equal(result.failure?.classification, 'RETRYABLE');
 });

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { DouyinOpenApiAdapter, InMemoryPublishStateStore, type DouyinHttpTransport } from '../../packages/modules/publisher/src/douyin-open-api-adapter.js';
 import type { PublishSnapshot, PublisherContext } from '../../packages/contracts/src/index.js';
 
-const context: PublisherContext = { profileDir: 'profile-douyin', credentialRef: 'env://DOUYIN', credential: { accessToken: 'access-token', openId: 'open-id' } };
+const context: PublisherContext = { profileDir: 'profile-douyin', accountId: 'douyin-account', credentialRef: 'env://DOUYIN', credential: { accessToken: 'access-token', openId: 'open-id' } };
 const snapshot: PublishSnapshot = { requestId: 'request-1', idempotencyKey: 'publish-douyin-1', assetId: 'asset-1', mediaPath: 'C:/tmp/video.mp4', title: '标题', description: '#话题' };
 
 function response(body: unknown, status = 200): Response { return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }); }
@@ -38,7 +38,7 @@ test('Douyin adapter preserves idempotency and never returns credentials', async
   assert.equal(first.status, 'PUBLISHED'); assert.equal(first.externalPostId, 'douyin-item-1');
   assert.deepEqual(second, first);
   assert.equal(requests.filter((request) => request.url.includes('/video/upload/')).length, 1);
-  assert.equal(requests.filter((request) => request.url.includes('/create_video/')).length, 1);
+  assert.equal(requests.filter((request) => new URL(request.url).pathname === '/video/create/').length, 1);
   assert.equal(JSON.stringify(first).includes('access-token'), false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
