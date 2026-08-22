@@ -97,12 +97,17 @@ export class JobService {
 
 export class JobRunner {
   constructor(private readonly service: JobService, private readonly workerId: string) {}
-  async run(id: string, handler: (job: JobRecord) => Promise<unknown>): Promise<JobRecord> {
+  async run(id: string, handler: (job: JobRecord, attemptId: string) => Promise<unknown>): Promise<JobRecord> {
     const existing = await this.service.get(id);
     if (existing?.state === 'SUCCEEDED' || existing?.state === 'FAILED' || existing?.state === 'CANCELLED') return existing;
     const claimed = await this.service.claim(id, this.workerId, 30_000);
     if (!claimed) return (await this.service.get(id)) as JobRecord;
-    try { return await this.service.succeed(id, claimed.attemptId, await handler(claimed.job)); }
-    catch (error) { return this.service.fail(id, claimed.attemptId, { code: 'HANDLER_FAILED', message: error instanceof Error ? error.message : 'unknown' }, true); }
+    try { return await this.service.succeed(id, claimed.attemptId, await handler(claimed.job, claimed.attemptId)); }
+    catch (error) {
+      const candidate = error as { code?: unknown; retryable?: unknown };
+      const retryable = typeof candidate.retryable === 'boolean' ? candidate.retryable : true;
+      const code = typeof candidate.code === 'string' ? candidate.code : 'HANDLER_FAILED';
+      return this.service.fail(id, claimed.attemptId, { code, message: error instanceof Error ? error.message : 'unknown' }, retryable);
+    }
   }
 }

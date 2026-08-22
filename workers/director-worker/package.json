@@ -1,0 +1,6 @@
+{
+  "name": "@contentos/director-worker",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "tsx src/main.ts" }
+}

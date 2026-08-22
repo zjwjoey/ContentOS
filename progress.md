@@ -193,3 +193,5 @@
 - Task 5 is next: append-only Director application services and state transitions.
 - Task 5 complete: added `DirectorV1Service` with brief/script/storyboard records, state-row locking and counters, append-only manual revisions, accepted/approved transitions, current-pair pointers and mismatch guards. Focused gate: **3 passed, 0 failed**; typecheck passed.
 - Task 6 is next: idempotent Director Job creation and explicit Application Worker handlers.
+- Task 6 complete: added typed Director Job creation with idempotency keys, attempt-aware JobRunner errors, explicit Director Worker composition, two bounded handlers and Fake Provider execution. Worker/regression gate: **5 passed, 0 failed**; typecheck passed.
+- Task 7 is next: thin Director V1 API routes while preserving legacy Director Plan endpoints.
