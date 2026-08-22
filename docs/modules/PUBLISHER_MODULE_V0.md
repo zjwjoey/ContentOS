@@ -4,6 +4,8 @@
 
 Publisher owns destinations, account references, platform capability profiles, publishing requests, schedules, attempts, external post references and normalized metrics links. It is the only module that creates `publisher.publish` jobs. It does not execute a browser; the Publisher Worker does.
 
+The foundation persistence is private to Publisher: `publisher_accounts`, `publisher_requests`, `publisher_request_revisions`, `publisher_attempts` and `publisher_external_posts`. Other modules use public service contracts and never read these tables directly.
+
 ## Account and credential model
 
 An `Account` is a logical destination identity and configuration record. It stores no raw secret. `CredentialRef` identifies a secret-vault record or local secure-store key and is resolved only inside the Publisher Worker. Account status is `UNVERIFIED`, `READY`, `REAUTH_REQUIRED`, `SUSPENDED` or `DISABLED`.
@@ -20,7 +22,9 @@ Platform adapters publish a capability profile: supported media types, title/des
 | `RequestReauthentication` | blocks new requests and marks account state |
 | `CollectMetrics` | creates a Review-owned collection request/job dependency |
 
-Publish requests move through `DRAFT -> SCHEDULED -> QUEUED -> PUBLISHING -> PUBLISHED | FAILED | CANCELLED`. Attempts are separate and never overwritten. The worker receives `publishRequestId` and a snapshot revision, then revalidates account state, asset checksum and schedule window.
+Publish requests move through `DRAFT -> SCHEDULED -> QUEUED -> PUBLISHING -> PUBLISHED | FAILED | CANCELLED`, with `RECONCILING` as the mandatory state after an uncertain external side effect. Attempts are separate historical records and request revisions are immutable. The worker receives `publishRequestId` and a snapshot revision, then revalidates account state, asset checksum and schedule window.
+
+The `0009_publisher_foundation` migration protects enum values, revision numbering, request idempotency and external-post uniqueness. `PublisherService` locks the request aggregate before transitions, creates one stable request idempotency key, and requires a reconciliation result before another publish attempt after an unknown outcome.
 
 ## Browser automation constraints
 
