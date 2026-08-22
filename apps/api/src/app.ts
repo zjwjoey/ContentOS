@@ -16,6 +16,8 @@ import { registerDirectorV1Routes } from './director-routes.js';
 import { registerPublisherRoutes } from './publisher-routes.js';
 import { registerApprovalRoutes } from './approval-routes.js';
 import { ApprovalService } from '../../../packages/modules/approval/src/index.js';
+import { ProjectCenterService } from './project-center.js';
+import { registerProjectCenterRoutes } from './project-center-routes.js';
 
 const projectInput = z.object({ name: z.string().trim().min(1).max(200), metadata: z.record(z.string(), z.unknown()).optional() });
 const directorInput = z.object({ seed: z.number().int(), brief: z.object({ topic: z.string().trim().min(1), audience: z.string().trim().min(1), objective: z.string().trim().min(1), tone: z.string().trim().min(1) }), storyboard: z.array(z.object({ id: z.string().trim().min(1), title: z.string().trim().min(1), narration: z.string().trim().min(1), visualIntent: z.string().trim().min(1), durationMs: z.number().int().positive(), sourceAssetIds: z.array(z.string()) })).min(1), provenance: z.object({ author: z.string().trim().min(1), source: z.enum(['manual', 'ai-draft']), promptVersion: z.string().optional(), modelProfile: z.string().optional() }) });
@@ -35,8 +37,11 @@ export async function buildApi(db: Pool): Promise<FastifyInstance> {
   const approvals = new ApprovalService(db, projects);
   const directorV1 = new DirectorV1Service(db);
   const jobs = new JobService(db);
+  const assets = new AssetCatalogService(db);
+  const publisher = new PublisherService(db);
+  registerProjectCenterRoutes(app, { center: new ProjectCenterService({ projects, director, assets, jobs, approvals, publisher }) });
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
-  registerPublisherRoutes(app, { projects, publisher: new PublisherService(db), approvals, assets: new AssetCatalogService(db), jobs });
+  registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs });
   registerApprovalRoutes(app, { projects, approvals });
   app.get('/health', async () => ({ status: 'ok' }));
   app.post('/api/v1/projects', async (request, reply) => {
