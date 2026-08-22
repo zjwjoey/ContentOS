@@ -54,3 +54,5 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - The V0.1 product requirements validate the existing modular-monolith direction but add three later product areas not present in `main`: Publisher product records/accounts, Metric Snapshots/Performance Review, and the Web Operator UI.
 - Existing `REVIEW_V0` is an approval decision boundary, not performance analytics; future analytics entities must remain distinct from approval decisions.
 - Existing Video output contract declares MPEG-4, while the product requirement mentions H.264; this must be resolved by an evidence-backed Video change, not silently changed during Director work.
+- ECR-001 / ADR-011 accepts a bounded `workers/director-worker` Application Worker for exactly two Director AI Job types. It preserves the fixed workflow and existing Job/lease/security invariants; generic workflow engines and real providers remain out of scope.
+- Director implementation remains isolated from the shared `contentos_dev` migration history; the clean validation database is `contentos_director_dev` on the existing PostgreSQL instance.

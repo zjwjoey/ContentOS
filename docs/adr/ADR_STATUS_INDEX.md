@@ -12,7 +12,8 @@
 | ADR-008 | Layered Configuration and Secret References | Accepted | Secret references and startup validation remain mandatory |
 | ADR-009 | Structured Cross-boundary Observability | Accepted with Conditions | Lease recovery, publisher outcomes and redaction must be metrics/log gates |
 | ADR-010 | Canonical Asset System | Accepted with Conditions | Local promotion passes; object-store commit semantics remain gated |
+| ADR-011 | Director Application Worker | Accepted with Conditions | ECR-001; explicit composition, supervision, lease recovery and fake-provider gates |
 
 ## Counts
 
-`Accepted: 5` · `Accepted with Conditions: 5` · `Proposed: 0` · `Rejected: 0` · `Superseded: 0`.
+`Accepted: 5` · `Accepted with Conditions: 6` · `Proposed: 0` · `Rejected: 0` · `Superseded: 0`.

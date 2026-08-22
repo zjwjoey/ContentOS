@@ -183,3 +183,5 @@
 - Created the isolated local database `contentos_director_dev` on the existing PostgreSQL 16 instance at port 55433; no PostgreSQL installation or production database was added.
 - Fresh baseline passed: **41 tests, 0 failures**.
 - Wrote `docs/superpowers/plans/2026-08-22-director-v1-implementation.md`; no Director product source code has been changed.
+- Task 1 complete: added ECR-001 and ADR-011, updated Architecture/Worker/Tech Stack/ADR status documents, and recorded the isolated database baseline. No product source code or real provider/platform call was made.
+- Task 2 is next and will use contract-first TDD for Director V1 and AI Provider types.

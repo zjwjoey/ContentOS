@@ -132,12 +132,12 @@ Architecture V0 — formal design documentation and self-review.
 - [x] Create isolated `codex/director-v1` worktree from `main` and verify the clean 41-test baseline with `contentos_director_dev`.
 - [x] Record the migration-state conflict caused by sharing `contentos_dev` across unreconciled branches.
 - [x] Write and review the Director V1 professional design and implementation plan.
-- [ ] Freeze the Application Worker ADR and Director/AI contracts.
+- [x] Freeze the Application Worker ADR and record the Director/AI contract gate.
 - [ ] Add append-only Director V1 and AI provenance migrations/services.
 - [ ] Add fake-provider AI infrastructure, Director Jobs and Application Worker handlers.
 - [ ] Add Director V1 API, Video provenance bridge and minimal Operator UI.
 - [ ] Run Director→Video E2E, final verification gate and report.
-- **Status:** plan ready; implementation begins at Task 1 in the isolated worktree.
+- **Status:** Task 1 complete; architecture decision committed, implementation continues with contract-first TDD.
 
 ## Key constraints
 - Only Phase-1 projects are in scope: MatrixMedia, short-video-factory, MoneyPrinterTurbo, AutoSocial, and Postiz.
