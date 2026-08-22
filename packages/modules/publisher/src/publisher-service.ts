@@ -45,6 +45,17 @@ export interface CreatePublisherRequestInput {
 
 export interface PublisherRequestAggregate { request: PublisherRequest; revision: PublisherRequestRevision; }
 
+export interface PublisherPublishJobPayload {
+  projectId: string;
+  requestId: string;
+  revisionId: string;
+  accountId: string;
+  platformId: string;
+  jobId: string;
+  jobAttemptId: string;
+  correlationId: string;
+}
+
 export interface StartPublisherAttemptInput {
   requestId: string;
   revisionId: string;
@@ -136,6 +147,11 @@ export class PublisherService {
     return result.rows[0] ? mapAccount(result.rows[0] as Record<string, unknown>) : null;
   }
 
+  async listAccounts(projectId: string): Promise<PublisherAccount[]> {
+    const result = await this.db.query('select * from publisher_accounts where project_id = $1 order by created_at desc, id desc', [projectId]);
+    return result.rows.map((row) => mapAccount(row as Record<string, unknown>));
+  }
+
   async createRequest(input: CreatePublisherRequestInput): Promise<PublisherRequestAggregate> {
     const client = await this.db.connect();
     try {
@@ -163,6 +179,49 @@ export class PublisherService {
   async getRequest(id: string): Promise<PublisherRequest | null> {
     const result = await this.db.query('select * from publisher_requests where id = $1', [id]);
     return result.rows[0] ? mapRequest(result.rows[0] as Record<string, unknown>) : null;
+  }
+
+  async listRequests(projectId: string): Promise<PublisherRequest[]> {
+    const result = await this.db.query('select * from publisher_requests where project_id = $1 order by created_at desc, id desc', [projectId]);
+    return result.rows.map((row) => mapRequest(row as Record<string, unknown>));
+  }
+
+  async getRequestAggregate(projectId: string, requestId: string): Promise<PublisherRequestAggregate | null> {
+    const result = await this.db.query('select p.*, r.id as revision_id, r.request_id as revision_request_id, r.revision, r.asset_id, r.asset_checksum, r.title, r.description, r.desired_publish_at as revision_desired_publish_at, r.created_by, r.created_at as revision_created_at from publisher_requests p left join publisher_request_revisions r on r.id = p.current_revision_id where p.project_id = $1 and p.id = $2', [projectId, requestId]);
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    if (!row || !row.revision_id) return null;
+    return {
+      request: mapRequest(row),
+      revision: mapRevision({
+        id: row.revision_id,
+        request_id: row.revision_request_id,
+        revision: row.revision,
+        asset_id: row.asset_id,
+        asset_checksum: row.asset_checksum,
+        title: row.title,
+        description: row.description,
+        desired_publish_at: row.revision_desired_publish_at,
+        created_by: row.created_by,
+        created_at: row.revision_created_at,
+      }),
+    };
+  }
+
+  async buildPublishJobPayload(projectId: string, requestId: string, jobId: string, jobAttemptId: string): Promise<PublisherPublishJobPayload> {
+    const aggregate = await this.getRequestAggregate(projectId, requestId);
+    if (!aggregate) throw new Error('Publisher request not found for project');
+    const account = await this.getAccount(projectId, aggregate.request.accountId);
+    if (!account) throw new Error('Publisher account not found for project');
+    return {
+      projectId,
+      requestId,
+      revisionId: aggregate.revision.id,
+      accountId: account.id,
+      platformId: account.platformId,
+      jobId,
+      jobAttemptId,
+      correlationId: aggregate.request.correlationId,
+    };
   }
 
   async getCurrentRevision(requestId: string): Promise<PublisherRequestRevision | null> {
