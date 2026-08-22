@@ -185,3 +185,5 @@
 - Wrote `docs/superpowers/plans/2026-08-22-director-v1-implementation.md`; no Director product source code has been changed.
 - Task 1 complete: added ECR-001 and ADR-011, updated Architecture/Worker/Tech Stack/ADR status documents, and recorded the isolated database baseline. No product source code or real provider/platform call was made.
 - Task 2 is next and will use contract-first TDD for Director V1 and AI Provider types.
+- Task 2 complete: wrote red contract tests first, then added `ContentBriefV1`, Script/Storyboard revision contracts, AI Provider/Request/Result/Profile/Prompt contracts and bounded validators. Focused gate: **7 passed, 0 failed**; typecheck passed.
+- Task 3 is next: append-only Director V1 and AI provenance migrations, starting at migration 0007.
