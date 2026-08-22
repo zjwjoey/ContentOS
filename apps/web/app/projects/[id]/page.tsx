@@ -87,19 +87,18 @@ export default function ProjectCenterPage() {
         {snapshot.stages.map((stage) => stage.href ? <Link key={stage.key} className={stage.key === snapshot.currentStage ? 'project-stage-link active' : 'project-stage-link'} href={stage.href}><span>{stage.label}</span><small>{statusLabel(stage.status)}</small></Link> : <span key={stage.key} className="project-stage-link disabled"><span>{stage.label}</span><small>{statusLabel(stage.status)}</small></span>)}
       </nav>
       <section className="project-center-content">
-        <section className="card health-card" data-testid="health-level">
+        <section className="card health-card" data-testid="health-level" data-status={snapshot.health.level}>
           <div><p className="eyebrow">项目健康度</p><h2>{statusLabel(snapshot.health.level)}</h2></div>
           <div className="health-reasons">{snapshot.health.reasons.length ? snapshot.health.reasons.map((reason) => <span key={reason}>{reason}</span>) : <span>当前没有需要处理的风险。</span>}</div>
         </section>
         <section className="stage-card-grid">
-          {snapshot.stages.map((stage) => <article className="card stage-card" data-testid={'stage-card-' + stage.key} key={stage.key}><div className="stage-card-title"><span>{stage.label}</span><strong>{statusLabel(stage.status)}</strong></div><p className="muted">{stage.summary}</p>{stage.href && <Link className="module-nav-link" href={stage.href}>进入工作台</Link>}</article>)}
+          {snapshot.stages.map((stage) => <article className="card stage-card" data-testid={'stage-card-' + stage.key} data-status={stage.status} key={stage.key}><div className="stage-card-title"><span>{stage.label}</span><strong>{statusLabel(stage.status)}</strong></div><p className="muted">{stage.summary}</p>{stage.href && <Link className="module-nav-link" href={stage.href}>进入工作台</Link>}</article>)}
         </section>
         <section className="project-center-columns">
           <section className="card" data-testid="project-actions"><div className="section-title"><h2>待处理事项</h2><span>{snapshot.actions.length} 项</span></div>{snapshot.actions.length ? <ul className="action-list">{snapshot.actions.map((action) => <li key={action.id}><div><strong>{action.title}</strong><p className="muted">{action.detail}</p></div>{action.href && <Link className="module-nav-link" href={action.href}>查看</Link>}</li>)}</ul> : <p className="muted">暂无待处理事项。</p>}</section>
-          <section className="card" data-testid="recent-jobs"><div className="section-title"><h2>最近 Job</h2><span>{snapshot.recentJobs.length} 条</span></div>{snapshot.recentJobs.length ? <ul className="job-list">{snapshot.recentJobs.map((job) => <li key={job.id}><span>{job.type}</span><small>{statusLabel(job.state)} · {job.attemptCount}/{job.maxAttempts}</small></li>)}</ul> : <p className="muted">暂无异步 Job。</p>}</section>
+          <section className="card" data-testid="recent-jobs"><div className="section-title"><h2>最近 Job</h2><span>{snapshot.recentJobs.length} 条</span></div>{snapshot.recentJobs.length ? <ul className="job-list">{snapshot.recentJobs.map((job) => <li data-state={job.state} key={job.id}><span>{job.type}</span><small>{statusLabel(job.state)} · {job.attemptCount}/{job.maxAttempts}</small></li>)}</ul> : <p className="muted">暂无异步 Job。</p>}</section>
         </section>
       </section>
     </div>
   </main>;
 }
-

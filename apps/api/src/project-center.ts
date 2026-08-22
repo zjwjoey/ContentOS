@@ -8,7 +8,7 @@ import type {
 import type { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
 import type { ApprovalService } from '../../../packages/modules/approval/src/index.js';
 import type { DirectorService } from '../../../packages/modules/director/src/index.js';
-import type { JobService, JobSummary } from '../../../packages/modules/job/src/index.js';
+import type { JobService, JobSummary, ProjectJobStateSummary } from '../../../packages/modules/job/src/index.js';
 import type { ProjectRecord, ProjectService } from '../../../packages/modules/project/src/index.js';
 import type { PublisherProjectSummary, PublisherService } from '../../../packages/modules/publisher/src/index.js';
 
@@ -24,20 +24,27 @@ export interface ProjectCenterRuleInput {
   needsHumanActionCount: number;
   hasExternalPost: boolean;
   jobs: Array<{ state: string; type: string }>;
+  jobStateCounts?: Record<string, number>;
+  videoJobStateCounts?: Record<string, number>;
+  approvalStatuses?: string[];
 }
 
 function hasJob(input: ProjectCenterRuleInput, states: string[]): boolean {
-  return input.jobs.some((job) => states.includes(job.state)) || input.videoJobStates.some((state) => states.includes(state));
+  return input.jobs.some((job) => states.includes(job.state)) || input.videoJobStates.some((state) => states.includes(state)) || states.some((state) => (input.jobStateCounts?.[state] || 0) > 0);
+}
+
+function hasVideoJob(input: ProjectCenterRuleInput, states: string[]): boolean {
+  return input.jobs.some((job) => job.type === 'VIDEO_RENDER' && states.includes(job.state)) || input.videoJobStates.some((state) => states.includes(state)) || states.some((state) => (input.videoJobStateCounts?.[state] || 0) > 0);
 }
 
 export function deriveHealth(input: ProjectCenterRuleInput): { level: ProjectCenterHealthLevel; reasons: string[] } {
   const reasons: string[] = [];
   if (hasJob(input, ['FAILED', 'BLOCKED'])) reasons.push('存在失败或阻塞 Job');
   if (input.needsHumanActionCount > 0) reasons.push('Publisher 需要人工处理');
-  if (input.approvalStatus === 'REJECTED') reasons.push('当前审批已驳回');
+  if (input.approvalStatus === 'REJECTED' || input.approvalStatuses?.includes('REJECTED')) reasons.push('当前审批已驳回');
   if (reasons.length > 0) return { level: 'BLOCKED', reasons };
   if (input.projectStatus === 'PUBLISHED') return { level: 'COMPLETE', reasons: [] };
-  if (input.approvalStatus === 'PENDING') reasons.push('存在待处理审批');
+  if (input.approvalStatus === 'PENDING' || input.approvalStatuses?.includes('PENDING')) reasons.push('存在待处理审批');
   if (hasJob(input, ['QUEUED', 'RUNNING', 'RETRY_WAIT'])) reasons.push('存在运行中的异步 Job');
   if (Object.entries(input.publisherStatusCounts).some(([status, count]) => count > 0 && ['DRAFT', 'SCHEDULED', 'FAILED'].includes(status))) reasons.push('Publisher 存在待处理请求');
   return reasons.length > 0 ? { level: 'ATTENTION', reasons } : { level: 'HEALTHY', reasons: [] };
@@ -50,8 +57,8 @@ function stage(key: ProjectCenterStageKey, status: ProjectCenterStage['status'],
 
 export function deriveStages(input: ProjectCenterRuleInput): ProjectCenterStage[] {
   const directorStatus = input.hasApprovedDirector ? 'COMPLETE' : input.hasDirectorRevision ? 'IN_PROGRESS' : 'NOT_STARTED';
-  const videoStatus = hasJob(input, ['FAILED', 'BLOCKED']) ? 'BLOCKED' : input.hasReadyVideo ? 'READY' : hasJob(input, ['QUEUED', 'RUNNING', 'RETRY_WAIT']) ? 'IN_PROGRESS' : 'NOT_STARTED';
-  const approvalStatus = input.approvalStatus === 'REJECTED' ? 'BLOCKED' : input.approvalStatus === 'APPROVED' ? 'COMPLETE' : input.approvalStatus === 'PENDING' ? 'ACTION_REQUIRED' : 'NOT_STARTED';
+  const videoStatus = hasVideoJob(input, ['FAILED', 'BLOCKED']) ? 'BLOCKED' : input.hasReadyVideo ? 'READY' : hasVideoJob(input, ['QUEUED', 'RUNNING', 'RETRY_WAIT']) ? 'IN_PROGRESS' : 'NOT_STARTED';
+  const approvalStatus = input.approvalStatus === 'REJECTED' || input.approvalStatuses?.includes('REJECTED') ? 'BLOCKED' : input.approvalStatus === 'PENDING' || input.approvalStatuses?.includes('PENDING') ? 'ACTION_REQUIRED' : input.approvalStatus === 'APPROVED' ? 'COMPLETE' : 'NOT_STARTED';
   const publisherStatus = input.needsHumanActionCount > 0 ? 'ACTION_REQUIRED' : input.hasExternalPost ? 'COMPLETE' : (input.publisherStatusCounts.FAILED || 0) > 0 ? 'BLOCKED' : Object.entries(input.publisherStatusCounts).some(([status, count]) => count > 0 && ['QUEUED', 'PUBLISHING', 'RECONCILING'].includes(status)) ? 'IN_PROGRESS' : Object.values(input.publisherStatusCounts).some((count) => count > 0) ? 'READY' : 'NOT_STARTED';
   return [
     stage('DIRECTOR', directorStatus, input.projectId, directorStatus === 'COMPLETE' ? '已批准 Director 版本' : directorStatus === 'IN_PROGRESS' ? 'Director 仍在准备' : '尚未创建 Director 版本'),
@@ -82,12 +89,19 @@ async function read<T>(operation: () => Promise<T>): Promise<ReadResult<T>> {
   try { return { value: await operation(), failed: false }; } catch { return { value: null, failed: true }; }
 }
 
-function latestApproval(approvals: Array<{ status: string; createdAt: string }>): string | null {
-  return approvals.slice().sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt)).at(-1)?.status || null;
+function currentApprovalStatuses(approvals: Array<{ targetType: string; targetId: string; targetRevisionId: string; status: string; revision: number; createdAt: string }>): string[] {
+  const current = new Map<string, { revision: number; createdAt: string; status: string }>();
+  for (const approval of approvals) {
+    const key = approval.targetType + ':' + approval.targetId + ':' + approval.targetRevisionId;
+    const previous = current.get(key);
+    if (!previous || approval.revision > previous.revision || (approval.revision === previous.revision && approval.createdAt > previous.createdAt)) current.set(key, { revision: approval.revision, createdAt: approval.createdAt, status: approval.status });
+  }
+  return [...current.values()].map((item) => item.status);
 }
 
-function buildActions(projectId: string, health: { level: ProjectCenterHealthLevel; reasons: string[] }, approvalStatus: string | null, summary: PublisherProjectSummary, jobs: JobSummary[]): ProjectCenterAction[] {
+export function buildActions(projectId: string, health: { level: ProjectCenterHealthLevel; reasons: string[] }, approvalStatus: string | null, summary: PublisherProjectSummary, jobs: JobSummary[], failedSources: string[] = []): ProjectCenterAction[] {
   const actions: ProjectCenterAction[] = [];
+  for (const source of failedSources) actions.push({ id: 'source-unavailable-' + source, kind: 'NAVIGATION', title: source + ' 数据暂时不可用', detail: '请刷新项目总控或进入项目页面继续检查。', severity: 'BLOCKED', href: '/projects/' + projectId });
   if (approvalStatus === 'PENDING') actions.push({ id: 'approval-pending', kind: 'APPROVAL', title: '处理待审批内容', detail: '当前版本等待人工审批。', severity: 'WARNING', href: '/projects/' + projectId + '/publisher' });
   if (summary.needsHumanActionCount > 0) actions.push({ id: 'publisher-human-action', kind: 'HUMAN_ACTION', title: '处理发布账号', detail: 'Publisher 有需要人工处理的账号或外部状态。', severity: 'BLOCKED', href: '/projects/' + projectId + '/publisher' });
   for (const job of jobs.filter((item) => ['FAILED', 'BLOCKED'].includes(item.state))) {
@@ -108,15 +122,17 @@ export class ProjectCenterService {
   async get(projectId: string): Promise<ProjectCenterSnapshot | null> {
     const project = await this.dependencies.projects.get(projectId);
     if (!project) return null;
-    const [director, assets, jobs, approvals, publisher] = await Promise.all([
+    const [director, assets, jobs, jobStates, approvals, publisher] = await Promise.all([
       read(() => this.dependencies.director.list(projectId)),
       read(() => this.dependencies.assets.listPublishable(projectId)),
       read(() => this.dependencies.jobs.listProjectSummaries(projectId)),
+      read(() => this.dependencies.jobs.getProjectStateSummary(projectId)),
       read(() => this.dependencies.approvals.list(projectId)),
       read(() => this.dependencies.publisher.getProjectSummary(projectId)),
     ]);
     const directorRevisions = director.value || [];
     const jobSummaries = jobs.value || [];
+    const jobStateSummary: ProjectJobStateSummary = jobStates.value || { stateCounts: {}, videoStateCounts: {} };
     const approvalRecords = approvals.value || [];
     const publisherSummary = publisher.value || {
       projectId,
@@ -126,7 +142,8 @@ export class ProjectCenterService {
       confirmedExternalPostCount: 0,
       needsHumanActionCount: 0,
     };
-    const approvalStatus = latestApproval(approvalRecords);
+    const approvalStatuses = currentApprovalStatuses(approvalRecords);
+    const approvalStatus = approvalStatuses.includes('REJECTED') ? 'REJECTED' : approvalStatuses.includes('PENDING') ? 'PENDING' : approvalStatuses.includes('APPROVED') ? 'APPROVED' : null;
     const ruleInput: ProjectCenterRuleInput = {
       projectId,
       projectStatus: project.status,
@@ -139,13 +156,16 @@ export class ProjectCenterService {
       needsHumanActionCount: publisherSummary.needsHumanActionCount,
       hasExternalPost: publisherSummary.confirmedExternalPostCount > 0,
       jobs: jobSummaries.map((item) => ({ type: item.type, state: item.state })),
+      jobStateCounts: jobStateSummary.stateCounts,
+      videoJobStateCounts: jobStateSummary.videoStateCounts,
+      approvalStatuses,
     };
     const health = deriveHealth(ruleInput);
     const stages = deriveStages(ruleInput);
     const failedSources = [
       director.failed ? 'Director' : null,
       assets.failed ? 'Video' : null,
-      jobs.failed ? 'Job' : null,
+      jobs.failed || jobStates.failed ? 'Job' : null,
       approvals.failed ? 'Approval' : null,
       publisher.failed ? 'Publisher' : null,
     ].filter((value): value is string => value !== null);
@@ -166,7 +186,7 @@ export class ProjectCenterService {
       health,
       stages,
       currentStage: deriveCurrentStage(stages),
-      actions: buildActions(projectId, health, approvalStatus, publisherSummary, jobSummaries),
+      actions: buildActions(projectId, health, approvalStatus, publisherSummary, jobSummaries, failedSources),
       recentJobs: jobSummaries.map((job) => ({ id: job.id, type: job.type, state: job.state, attemptCount: job.attemptCount, maxAttempts: job.maxAttempts, createdAt: job.createdAt })),
     };
   }

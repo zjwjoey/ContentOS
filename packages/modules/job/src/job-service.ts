@@ -4,6 +4,7 @@ import type { Pool, PoolClient } from 'pg';
 export type JobState = 'QUEUED' | 'RUNNING' | 'RETRY_WAIT' | 'FAILED' | 'SUCCEEDED' | 'CANCEL_REQUESTED' | 'CANCELLED' | 'BLOCKED';
 export interface JobRecord { id: string; projectId: string | null; type: string; state: JobState; payload: unknown; result: unknown; error: unknown; attemptCount: number; maxAttempts: number; leaseOwner: string | null; leaseExpiresAt: Date | null; progress: unknown; }
 export interface JobSummary { id: string; projectId: string; type: string; state: JobState; attemptCount: number; maxAttempts: number; createdAt: string; }
+export interface ProjectJobStateSummary { stateCounts: Record<string, number>; videoStateCounts: Record<string, number>; }
 export interface CreateJobInput { id: string; type: string; projectId: string | null; payload: unknown; idempotencyKey: string; maxAttempts: number; }
 
 function mapJob(row: Record<string, unknown>): JobRecord {
@@ -43,6 +44,17 @@ export class JobService {
       maxAttempts: Number(row.max_attempts),
       createdAt: new Date(String(row.created_at)).toISOString(),
     }));
+  }
+  async getProjectStateSummary(projectId: string): Promise<ProjectJobStateSummary> {
+    const result = await this.db.query("select type, state, count(*)::text as count from jobs where project_id = $1 and state in ('QUEUED', 'RUNNING', 'RETRY_WAIT', 'FAILED', 'BLOCKED') group by type, state", [projectId]);
+    const stateCounts: Record<string, number> = {};
+    const videoStateCounts: Record<string, number> = {};
+    for (const row of result.rows as Array<{ type: string; state: string; count: string }>) {
+      const count = Number(row.count);
+      stateCounts[row.state] = (stateCounts[row.state] || 0) + count;
+      if (row.type === 'VIDEO_RENDER') videoStateCounts[row.state] = (videoStateCounts[row.state] || 0) + count;
+    }
+    return { stateCounts, videoStateCounts };
   }
 
   async listRunnable(types: string[], limit = 10): Promise<JobRecord[]> {

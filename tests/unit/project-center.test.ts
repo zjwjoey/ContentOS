@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveCurrentStage, deriveHealth, deriveStages, type ProjectCenterRuleInput } from '../../apps/api/src/project-center.js';
+import Fastify from 'fastify';
+import { buildActions, deriveCurrentStage, deriveHealth, deriveStages, type ProjectCenterRuleInput } from '../../apps/api/src/project-center.js';
 import { JobService } from '../../packages/modules/job/src/index.js';
+import { registerProjectCenterRoutes } from '../../apps/api/src/project-center-routes.js';
 
 const emptyInput: ProjectCenterRuleInput = {
   projectId: 'project-test',
@@ -81,6 +83,39 @@ test('publisher human action is surfaced as blocked attention', () => {
 test('publisher failure is blocked when no human-action classification exists', () => {
   const input = { ...emptyInput, hasApprovedDirector: true, hasReadyVideo: true, approvalStatus: 'APPROVED', publisherStatusCounts: { FAILED: 1 } };
   assert.equal(deriveStages(input)[3]?.status, 'BLOCKED');
+});
+
+test('non-video jobs do not change video stage', () => {
+  const input = { ...emptyInput, hasApprovedDirector: true, jobs: [{ type: 'PUBLISH', state: 'FAILED' }] };
+  assert.equal(deriveStages(input)[1]?.status, 'NOT_STARTED');
+});
+
+test('unresolved historical job counts affect health and video stage', () => {
+  const input = { ...emptyInput, hasApprovedDirector: true, jobStateCounts: { FAILED: 1 }, videoJobStateCounts: { FAILED: 1 } };
+  assert.equal(deriveHealth(input).level, 'BLOCKED');
+  assert.equal(deriveStages(input)[1]?.status, 'BLOCKED');
+});
+
+test('current approval statuses do not hide a pending decision behind a newer approved target', () => {
+  const input = { ...emptyInput, hasApprovedDirector: true, approvalStatus: 'APPROVED', approvalStatuses: ['APPROVED', 'PENDING'] };
+  assert.equal(deriveHealth(input).level, 'ATTENTION');
+  assert.equal(deriveStages(input)[2]?.status, 'ACTION_REQUIRED');
+});
+
+test('partial service failures expose safe navigation actions', () => {
+  const actions = buildActions('project-test', { level: 'BLOCKED', reasons: [] }, null, { projectId: 'project-test', accountCount: 0, requestCount: 0, statusCounts: {}, confirmedExternalPostCount: 0, needsHumanActionCount: 0 } as never, [], ['Approval']);
+  assert.equal(actions[0]?.kind, 'NAVIGATION');
+  assert.equal(actions[0]?.href, '/projects/project-test');
+});
+
+test('Project Center route redacts unexpected aggregation errors', async () => {
+  const app = Fastify({ logger: false });
+  registerProjectCenterRoutes(app, { center: { get: async () => { throw new Error('secret sql detail'); } } });
+  const response = await app.inject({ method: 'GET', url: '/api/v1/projects/project-test/center' });
+  assert.equal(response.statusCode, 500);
+  assert.equal(response.json().error.code, 'PROJECT_CENTER_UNAVAILABLE');
+  assert.equal(response.body.includes('secret sql detail'), false);
+  await app.close();
 });
 
 test('published project is complete', () => {

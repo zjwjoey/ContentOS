@@ -10,6 +10,7 @@ test('Project Center uses the approved navigation and safe fields', async () => 
   assert.match(page, /health|健康度/);
   assert.match(page, /actions|待处理/);
   assert.match(page, /recentJobs/);
+  assert.match(page, /data-status/);
   assert.doesNotMatch(page, /credentialRef|profileKey|accessToken|refreshToken|authorization|diagnostics/i);
 });
 
