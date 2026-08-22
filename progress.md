@@ -197,3 +197,5 @@
 - Task 7 is next: thin Director V1 API routes while preserving legacy Director Plan endpoints.
 - Task 7 complete: added thin V1 routes for Brief, Script generation/manual/accept, Storyboard generation/list/detail/approve and safe Job status, while preserving legacy Director Plan routes. API regression gate: **3 passed, 0 failed**; typecheck passed.
 - Task 8 is next: carry approved Script/Storyboard IDs through Video Job, Manifest and Render metadata.
+- Task 8 complete: extended `EDIT_MANIFEST_V0` compatibly, added V1 Director→Video current-pair bridge, and preserved metadata through Planner/Video Render diagnostics without changing renderer behavior. Provenance/regression gate: **8 passed, 0 failed**; typecheck passed.
+- Task 9 is next: minimal API-backed Director Operator UI.

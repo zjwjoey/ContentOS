@@ -4,7 +4,7 @@ import type { LocalStorageProvider } from '../../../infrastructure/storage/src/i
 import { JobService, type JobRecord } from '../../job/src/index.js';
 import { buildVideoManifest, type PlannerAsset } from './planner.js';
 
-export interface CreateVideoJobInput { projectId: string; videoAssetIds: string[]; voiceAssetId?: string; targetDurationMs: number; seed: number; subtitleText?: string; idempotencyKey?: string; directorRevisionId?: string; directorRevision?: number; directorBrief?: unknown; directorStoryboard?: unknown; }
+export interface CreateVideoJobInput { projectId: string; videoAssetIds: string[]; voiceAssetId?: string; targetDurationMs: number; seed: number; subtitleText?: string; idempotencyKey?: string; directorRevisionId?: string; directorRevision?: number; directorBrief?: unknown; directorStoryboard?: unknown; metadata?: { briefId?: string; scriptRevisionId?: string; storyboardRevisionId?: string }; }
 export interface VideoJobPayload extends CreateVideoJobInput {}
 
 export class VideoService {
@@ -52,7 +52,7 @@ export class VideoService {
     const manifestId = `manifest-${randomUUID()}`;
     await this.db.query('insert into edit_manifests (id, project_id, revision, schema_version, manifest, status) values ($1, $2, $3, $4, $5, $6)', [manifestId, payload.projectId, revision, 'EDIT_MANIFEST_V0', manifest, 'PERSISTED']);
     const renderId = `render-${randomUUID()}`;
-    await this.db.query('insert into renders (id, project_id, manifest_id, job_id, status, diagnostics) values ($1, $2, $3, $4, $5, $6)', [renderId, payload.projectId, manifestId, job.id, 'QUEUED', { seed: payload.seed }]);
+    await this.db.query('insert into renders (id, project_id, manifest_id, job_id, status, diagnostics) values ($1, $2, $3, $4, $5, $6)', [renderId, payload.projectId, manifestId, job.id, 'QUEUED', { seed: payload.seed, ...(payload.metadata ? { metadata: payload.metadata } : {}) }]);
     return { manifestId, renderId, manifest };
   }
 

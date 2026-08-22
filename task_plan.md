@@ -136,9 +136,10 @@ Architecture V0 — formal design documentation and self-review.
 - [x] Add append-only Director V1 and AI provenance migrations/services.
 - [x] Add fake-provider AI infrastructure and AI Run provenance service.
 - [x] Add Director V1 API.
-- [ ] Add Video provenance bridge and minimal Operator UI.
+- [x] Add Video provenance bridge.
+- [ ] Add minimal Operator UI.
 - [ ] Run Director→Video E2E, final verification gate and report.
-- **Status:** Task 7 API complete; architecture decision, contracts, schema, fake-provider AI infrastructure, Director services, durable Worker and thin API are committed, implementation continues with Video provenance.
+- **Status:** Tasks 7–8 complete; Director API and Video provenance bridge are committed, implementation continues with minimal Operator UI.
 
 ## Key constraints
 - Only Phase-1 projects are in scope: MatrixMedia, short-video-factory, MoneyPrinterTurbo, AutoSocial, and Postiz.

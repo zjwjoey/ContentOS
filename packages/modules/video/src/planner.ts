@@ -1,7 +1,7 @@
 import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
 
 export interface PlannerAsset { id: string; storageKey: string; sourcePath: string; durationMs: number; }
-export interface BuildManifestInput { projectId: string; seed: number; assets: PlannerAsset[]; targetDurationMs: number; voiceAssetId?: string; voicePath?: string; subtitleText?: string; }
+export interface BuildManifestInput { projectId: string; seed: number; assets: PlannerAsset[]; targetDurationMs: number; voiceAssetId?: string; voicePath?: string; subtitleText?: string; metadata?: EditManifestV0['metadata']; }
 
 function seededRandom(seed: number): () => number {
   let state = (seed >>> 0) || 1;
@@ -33,6 +33,7 @@ export function buildVideoManifest(input: BuildManifestInput): EditManifestV0 {
     canvas: { width: 1080, height: 1920, aspectRatio: '9:16', fps: 30 }, timeline,
     audio: { ...(input.voiceAssetId ? { voiceAssetId: input.voiceAssetId } : {}), ...(input.voicePath ? { voicePath: input.voicePath } : {}), volume: 1 },
     ...(input.subtitleText ? { subtitles: [{ text: input.subtitleText, startMs: 0, endMs: input.targetDurationMs }] } : {}),
+    ...(input.metadata ? { metadata: input.metadata } : {}),
     output: { format: 'mp4', videoCodec: 'mpeg4', audioCodec: 'aac' },
   };
   validateEditManifest(manifest);
