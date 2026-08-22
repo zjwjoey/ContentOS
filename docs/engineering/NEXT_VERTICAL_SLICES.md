@@ -17,5 +17,5 @@ Post-publish analytics, AI Review, workflow-builder UI and multi-platform orches
 ## Formal gate status
 
 - **Slice ① — Publisher Fake product closure: APPROVED (2026-08-22).** Account, PublishRequest/Revision, exact-revision Approval Gate, durable `PUBLISH`/`PUBLISH_RECONCILE` Jobs, Worker execution, PublishAttempt and confirmed ExternalPost have passed acceptance.
-- **Slice ② — Publisher-to-Project integration: NEXT, GATE CLOSED.** It has not started and requires separate explicit authorization.
+- **Slice ② — Publisher-to-Project integration: IMPLEMENTED, PENDING ACCEPTANCE.** The implementation is isolated on `codex/publisher-project-integration`; formal acceptance is required before opening Slice ③.
 - **Slices ③–⑥: CLOSED.** Project Center, Video MVP, post-publish Metric Snapshot/AI Review and real Douyin/WeChat adapters remain closed until each preceding gate is accepted.

@@ -88,3 +88,42 @@ test('Publisher aggregate exposes a stable human-action state after auth failure
     await db.end();
   }
 });
+
+test('Publisher exposes a project summary without leaking private attempt diagnostics', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  try {
+    const data = await fixture(db);
+    projectId = data.projectId;
+    const summary = await data.publisher.getProjectSummary(projectId);
+    assert.deepEqual(summary, {
+      projectId,
+      accountCount: 1,
+      requestCount: 1,
+      statusCounts: { DRAFT: 1, SCHEDULED: 0, QUEUED: 0, PUBLISHING: 0, RECONCILING: 0, PUBLISHED: 0, FAILED: 0, CANCELLED: 0 },
+      confirmedExternalPostCount: 0,
+      needsHumanActionCount: 0,
+    });
+    assert.equal(JSON.stringify(summary).includes('diagnostics'), false);
+  } finally {
+    if (projectId) await cleanup(db, projectId);
+    await db.end();
+  }
+});
+
+test('Project lifecycle moves to READY_TO_PUBLISH and PUBLISHED from explicit publishing facts', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  try {
+    const project = await new ProjectService(db).create(`Project lifecycle ${randomUUID()}`);
+    projectId = project.id;
+    const projects = new ProjectService(db);
+    const ready = await projects.syncPublishingStatus(projectId, { hasPublishableAsset: true, publishedRequestCount: 0 });
+    assert.equal(ready.status, 'READY_TO_PUBLISH');
+    const published = await projects.syncPublishingStatus(projectId, { hasPublishableAsset: true, publishedRequestCount: 1 });
+    assert.equal(published.status, 'PUBLISHED');
+  } finally {
+    if (projectId) await db.query('delete from content_projects where id = $1', [projectId]);
+    await db.end();
+  }
+});

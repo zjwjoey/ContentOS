@@ -14,6 +14,7 @@
 | ADR-010 | Canonical Asset System | Accepted with Conditions | Local promotion passes; object-store commit semantics remain gated |
 | ADR-011 | Director Application Worker | Accepted with Conditions | ECR-001; explicit composition, supervision, lease recovery and fake-provider gates |
 | ADR-012 | Approval Gates vs Post-publish Review | Accepted | Approval binds exact revisions; Review owns MetricSnapshot and performance recommendations |
+| ADR-013 | Project-Publisher Integration Through Public Contracts | Accepted with Slice ② Gate | Project owns lifecycle; Publisher exposes a public project summary; handoff creates independent account requests |
 
 ## Counts
 

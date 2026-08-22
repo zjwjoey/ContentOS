@@ -1,0 +1,44 @@
+# Publisher → Content Project Integration Report
+
+日期：2026-08-22
+分支：`codex/publisher-project-integration`
+
+## Gate result
+
+第②步 Publisher → Content Project 集成已完成工程实现，等待正式人审验收。第③步 Project Center 及后续切片没有启动。
+
+## Delivered flow
+
+```text
+Content Project
+  -> READY VIDEO_RENDER Asset
+  -> project Publisher handoff
+  -> one PublishRequest/Revision per selected account
+  -> account-specific Approval Gate
+  -> PUBLISH Job / Worker
+  -> confirmed ExternalPost
+  -> Project PUBLISHED
+```
+
+## Delivered contracts
+
+- `PublisherProjectSummary` exposes project-scoped account/request counts, normalized status counts, confirmed external-post count and human-action count without attempt diagnostics or secrets.
+- `ProjectService.syncPublishingStatus()` accepts explicit publishing facts and preserves `ARCHIVED`/`REVIEWED` states.
+- `POST /api/v1/projects/:projectId/publisher/handoff` validates one project-owned READY Render Asset and multiple project-owned accounts, then creates idempotent account-specific requests.
+- `GET /api/v1/projects/:projectId/publisher/summary` exposes the safe summary for later Project Center consumption.
+- Publisher Worker updates Project state after publish, failure and reconciliation outcomes through public Project and Asset services; it never writes Project tables directly.
+
+## Verification
+
+- `pnpm test`: 100 passed, 0 failed
+- `pnpm typecheck`: passed
+- `pnpm lint`: passed (`67` TypeScript files)
+- `pnpm --dir apps/web build`: passed
+- Targeted API/Worker/UI tests: passed
+
+## Explicitly not included
+
+- Project Center UI (Slice ③)
+- Video MVP expansion (Slice ④)
+- Metric Snapshot and post-publish AI Review (Slice ⑤)
+- Real Douyin/WeChat adapters or credentials (Slice ⑥)

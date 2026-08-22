@@ -58,6 +58,37 @@ test('Publisher API creates project-scoped account and request', async () => {
   }
 });
 
+test('Project publisher handoff creates idempotent requests for multiple project accounts and updates lifecycle', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  const app = await buildApi(db);
+  try {
+    const data = await fixture(db);
+    projectId = data.projectId;
+    const publisher = new PublisherService(db);
+    const second = await publisher.createAccount({ projectId, platformId: 'fake-platform', displayName: `Second Fake ${randomUUID()}`, credentialRef: 'fake-credential:second', profileKey: `profile-${randomUUID()}`, status: 'READY', capabilitySnapshot: { platformId: 'fake-platform', mediaTypes: ['video/mp4'], scheduling: false, requiresHumanConfirmation: false } });
+    const handoffKey = `handoff-${randomUUID()}`;
+    const response = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/publisher/handoff`, payload: { accountIds: [data.accountId, second.id], assetId: data.assetId, title: '项目交接发布', description: '项目级交接', desiredPublishAt: null, createdBy: 'operator', idempotencyKey: handoffKey, correlationId: `handoff-correlation-${randomUUID()}` } });
+    assert.equal(response.statusCode, 201, response.body);
+    const body = response.json() as { projectId: string; items: Array<{ request: { accountId: string; status: string }; revision: { assetId: string } }> };
+    assert.equal(body.projectId, projectId);
+    assert.deepEqual(body.items.map((item) => item.request.accountId).sort(), [data.accountId, second.id].sort());
+    assert.ok(body.items.every((item) => item.request.status === 'DRAFT' && item.revision.assetId === data.assetId));
+    const duplicate = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/publisher/handoff`, payload: { accountIds: [data.accountId, second.id], assetId: data.assetId, title: '项目交接发布', description: '项目级交接', desiredPublishAt: null, createdBy: 'operator', idempotencyKey: handoffKey, correlationId: 'handoff-correlation-retry' } });
+    assert.equal(duplicate.statusCode, 201);
+    assert.equal((await app.inject({ method: 'GET', url: `/api/v1/projects/${projectId}/publisher/requests` })).json().items.length, 2);
+    const summary = await app.inject({ method: 'GET', url: `/api/v1/projects/${projectId}/publisher/summary` });
+    assert.equal(summary.statusCode, 200);
+    assert.equal(summary.json().requestCount, 2);
+    const project = await new ProjectService(db).get(projectId);
+    assert.equal(project?.status, 'READY_TO_PUBLISH');
+  } finally {
+    await app.close();
+    if (projectId) await cleanup(db, projectId);
+    await db.end();
+  }
+});
+
 test('Publisher queue endpoint requires an approved Publish Approval and is idempotent', async () => {
   const db = await createDatabase(databaseUrl);
   let projectId = '';

@@ -1,5 +1,7 @@
 import { JobRunner, type JobService, type JobRecord } from '../../../packages/modules/job/src/index.js';
 import { PublisherService, FakePublisherService, type PublisherPublishJobPayload } from '../../../packages/modules/publisher/src/index.js';
+import { ProjectService } from '../../../packages/modules/project/src/index.js';
+import { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
 import type { PublishResult, PublisherFailureClassification } from '../../../packages/contracts/src/index.js';
 import { WorkerRuntime, type JobHandler } from '../../../packages/shared/src/worker-runtime.js';
 
@@ -8,6 +10,8 @@ export const PUBLISH_RECONCILE_JOB_TYPE = 'PUBLISH_RECONCILE';
 export interface PublisherWorkerOptions {
   service: PublisherService;
   jobs: JobService;
+  projects: ProjectService;
+  assets: AssetCatalogService;
   fakePublisher: FakePublisherService;
   workerId?: string;
 }
@@ -33,7 +37,12 @@ function payloadFromJob(job: JobRecord): PublisherPublishJobPayload {
 
 function isRetryable(classification: PublisherFailureClassification | undefined): boolean { return classification === 'RETRYABLE'; }
 
-async function executePublish(service: PublisherService, jobs: JobService, fakePublisher: FakePublisherService, job: JobRecord, jobAttemptId: string): Promise<unknown> {
+async function syncProjectPublishingStatus(service: PublisherService, projects: ProjectService, assets: AssetCatalogService, projectId: string): Promise<void> {
+  const [summary, publishableAssets] = await Promise.all([service.getProjectSummary(projectId), assets.listPublishable(projectId)]);
+  await projects.syncPublishingStatus(projectId, { hasPublishableAsset: publishableAssets.length > 0, publishedRequestCount: summary.statusCounts.PUBLISHED });
+}
+
+async function executePublish(service: PublisherService, jobs: JobService, projects: ProjectService, assets: AssetCatalogService, fakePublisher: FakePublisherService, job: JobRecord, jobAttemptId: string): Promise<unknown> {
   const payload = payloadFromJob(job);
   const aggregate = await service.getRequestAggregate(payload.projectId, payload.requestId);
   if (!aggregate || aggregate.revision.id !== payload.revisionId) throw new PublisherHandlerError('PUBLISH_REQUEST_NOT_FOUND', 'Publisher request revision is not available', false);
@@ -59,6 +68,7 @@ async function executePublish(service: PublisherService, jobs: JobService, fakeP
     await service.finishAttempt(attempt.id, { status: 'SUCCEEDED', diagnostics: { outcome: 'PUBLISHED' } });
     await service.recordExternalPost({ requestId: payload.requestId, accountId: account.id, platformId: account.platformId, externalPostId: result.externalPostId, externalUrl: null });
     await service.transitionRequest(payload.requestId, 'PUBLISHED');
+    await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'PUBLISHED', requestId: payload.requestId, externalPostId: result.externalPostId };
   }
 
@@ -66,6 +76,7 @@ async function executePublish(service: PublisherService, jobs: JobService, fakeP
   if (result.status === 'UNKNOWN_EXTERNAL_STATE') {
     await service.finishAttempt(attempt.id, { status: 'UNKNOWN', failureCode: failure?.code || 'UNKNOWN_EXTERNAL_STATE', failureClassification: failure?.classification || 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'UNKNOWN_EXTERNAL_STATE' } });
     await service.transitionRequest(payload.requestId, 'RECONCILING', { code: failure?.code || 'UNKNOWN_EXTERNAL_STATE', message: failure?.message || 'External state requires reconciliation' });
+    await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     const idempotencyKey = `publisher:reconcile:${payload.requestId}:${payload.revisionId}`;
     const existing = await jobs.getByIdempotencyKey(idempotencyKey);
     if (existing) return { status: 'RECONCILING', requestId: payload.requestId, reconcileJobId: existing.id };
@@ -86,10 +97,11 @@ async function executePublish(service: PublisherService, jobs: JobService, fakeP
   const classification = failure?.classification || 'TERMINAL';
   await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: code, failureClassification: classification, diagnostics: { outcome: 'FAILED' } });
   await service.transitionRequest(payload.requestId, 'FAILED', { code, message: failure?.message || 'Publisher failed' });
+  await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
   throw new PublisherHandlerError(code, failure?.message || 'Publisher failed', isRetryable(classification));
 }
 
-async function executeReconcile(service: PublisherService, fakePublisher: FakePublisherService, job: JobRecord, jobAttemptId: string): Promise<unknown> {
+async function executeReconcile(service: PublisherService, projects: ProjectService, assets: AssetCatalogService, fakePublisher: FakePublisherService, job: JobRecord, jobAttemptId: string): Promise<unknown> {
   const payload = payloadFromJob(job);
   const aggregate = await service.getRequestAggregate(payload.projectId, payload.requestId);
   if (!aggregate || aggregate.revision.id !== payload.revisionId) throw new PublisherHandlerError('RECONCILE_REQUEST_NOT_FOUND', 'Publisher request revision is not available', false);
@@ -110,11 +122,13 @@ async function executeReconcile(service: PublisherService, fakePublisher: FakePu
     await service.finishAttempt(attempt.id, { status: 'SUCCEEDED', diagnostics: { outcome: 'PUBLISHED' } });
     await service.recordExternalPost({ requestId: payload.requestId, accountId: account.id, platformId: account.platformId, externalPostId: result.externalPostId, externalUrl: null });
     await service.transitionRequest(payload.requestId, 'PUBLISHED');
+    await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'PUBLISHED', requestId: payload.requestId, externalPostId: result.externalPostId };
   }
   if (result.status === 'NOT_FOUND') {
     await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'TERMINAL', diagnostics: { outcome: 'NOT_FOUND' } });
     await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN_EXTERNAL_STATE', message: 'Reconciliation confirmed no external post was found' });
+    await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'FAILED', requestId: payload.requestId };
   }
   await service.finishAttempt(attempt.id, { status: 'UNKNOWN', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'UNKNOWN' } });
@@ -132,12 +146,12 @@ export function createPublisherWorker(options?: PublisherWorkerOptions | JobHand
   runtime.register('PUBLISH', async (payload) => {
     const jobId = (payload as { jobId?: unknown })?.jobId;
     if (typeof jobId !== 'string' || !jobId) throw new PublisherHandlerError('INVALID_PUBLISH_JOB_REFERENCE', 'Publisher worker requires a Job id', false);
-    return runner.run(jobId, (job, attemptId) => executePublish(options.service, options.jobs, options.fakePublisher, job, attemptId));
+    return runner.run(jobId, (job, attemptId) => executePublish(options.service, options.jobs, options.projects, options.assets, options.fakePublisher, job, attemptId));
   });
   runtime.register(PUBLISH_RECONCILE_JOB_TYPE, async (payload) => {
     const jobId = (payload as { jobId?: unknown })?.jobId;
     if (typeof jobId !== 'string' || !jobId) throw new PublisherHandlerError('INVALID_RECONCILE_JOB_REFERENCE', 'Publisher reconciliation requires a Job id', false);
-    return runner.run(jobId, (job, attemptId) => executeReconcile(options.service, options.fakePublisher, job, attemptId));
+    return runner.run(jobId, (job, attemptId) => executeReconcile(options.service, options.projects, options.assets, options.fakePublisher, job, attemptId));
   });
   return runtime;
 }

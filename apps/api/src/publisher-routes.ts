@@ -37,6 +37,19 @@ const requestInput = z.object({
   }),
 });
 
+const handoffInput = z.object({
+  accountIds: z.array(z.string().trim().min(1)).min(1).max(20),
+  assetId: z.string().trim().min(1),
+  title: z.string().trim().min(1).max(200),
+  description: z.string().max(5000),
+  desiredPublishAt: z.string().datetime().nullable(),
+  createdBy: z.string().trim().min(1).max(200),
+  idempotencyKey: z.string().trim().min(1).max(200),
+  correlationId: z.string().trim().min(1).max(200),
+}).superRefine((value, context) => {
+  if (new Set(value.accountIds).size !== value.accountIds.length) context.addIssue({ code: z.ZodIssueCode.custom, path: ['accountIds'], message: 'accountIds must not contain duplicates' });
+});
+
 export interface PublisherRouteDependencies {
   projects: ProjectService;
   publisher: PublisherService;
@@ -53,6 +66,11 @@ function safeAccount<T extends { credentialRef: string; profileKey: string }>(ac
 }
 function safeAggregate(aggregate: PublisherRequestAggregate): Omit<PublisherRequestAggregate, 'attempts'> & { attempts: Array<Omit<PublisherRequestAggregate['attempts'][number], 'diagnostics'>> } {
   return { ...aggregate, attempts: aggregate.attempts.map(({ diagnostics: _diagnostics, ...safeAttempt }) => safeAttempt) };
+}
+
+async function refreshProjectPublishingStatus(projectId: string, projects: ProjectService, publisher: PublisherService, assets: AssetCatalogService): Promise<void> {
+  const [summary, publishableAssets] = await Promise.all([publisher.getProjectSummary(projectId), assets.listPublishable(projectId)]);
+  await projects.syncPublishingStatus(projectId, { hasPublishableAsset: publishableAssets.length > 0, publishedRequestCount: summary.statusCounts.PUBLISHED });
 }
 
 export function registerPublisherRoutes(app: FastifyInstance, dependencies: PublisherRouteDependencies): void {
@@ -82,6 +100,12 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     return { items: await assets.listPublishable(projectId) };
   });
 
+  app.get('/api/v1/projects/:projectId/publisher/summary', async (request, reply) => {
+    const projectId = projectIdOf(request);
+    if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    return publisher.getProjectSummary(projectId);
+  });
+
   app.get('/api/v1/projects/:projectId/publisher/requests', async (request, reply) => {
     const projectId = projectIdOf(request);
     if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
@@ -95,8 +119,39 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Publisher request input', details: parsed.error.issues } });
     const asset = await assets.getPublishableAsset(projectId, parsed.data.revision.assetId);
     if (!asset || asset.checksum !== parsed.data.revision.assetChecksum) return reply.code(422).send({ error: { code: 'PUBLISHER_ASSET_INVALID', message: 'A READY VIDEO_RENDER Asset owned by this project and matching the checksum is required', details: [] } });
-    try { return reply.code(201).send(await publisher.createRequest({ projectId, ...parsed.data })); }
+    try {
+      const result = await publisher.createRequest({ projectId, ...parsed.data });
+      await refreshProjectPublishingStatus(projectId, projects, publisher, assets);
+      return reply.code(201).send(result);
+    }
     catch (error) { return reply.code(409).send({ error: { code: 'PUBLISHER_REQUEST_CONFLICT', message: error instanceof Error ? error.message : 'Publisher request conflict', details: [] } }); }
+  });
+
+  app.post('/api/v1/projects/:projectId/publisher/handoff', async (request, reply) => {
+    const projectId = projectIdOf(request);
+    if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    const parsed = handoffInput.safeParse(request.body);
+    if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid project Publisher handoff input', details: parsed.error.issues } });
+    const asset = await assets.getPublishableAsset(projectId, parsed.data.assetId);
+    if (!asset) return reply.code(422).send({ error: { code: 'PUBLISHER_ASSET_INVALID', message: 'A READY VIDEO_RENDER Asset owned by this project is required', details: [] } });
+    const accounts = await Promise.all(parsed.data.accountIds.map((accountId) => publisher.getAccount(projectId, accountId)));
+    if (accounts.some((account) => !account)) return reply.code(422).send({ error: { code: 'PUBLISHER_ACCOUNT_INVALID', message: 'Every Publisher account must belong to this project', details: [] } });
+    try {
+      const items = [];
+      for (const accountId of parsed.data.accountIds) {
+        items.push(await publisher.createRequest({
+          projectId,
+          accountId,
+          idempotencyKey: `publisher:handoff:${parsed.data.idempotencyKey}:${accountId}`,
+          correlationId: parsed.data.correlationId,
+          revision: { assetId: asset.id, assetChecksum: asset.checksum, title: parsed.data.title, description: parsed.data.description, desiredPublishAt: parsed.data.desiredPublishAt, createdBy: parsed.data.createdBy },
+        }));
+      }
+      await refreshProjectPublishingStatus(projectId, projects, publisher, assets);
+      return reply.code(201).send({ projectId, assetId: asset.id, items });
+    } catch (error) {
+      return reply.code(409).send({ error: { code: 'PUBLISHER_HANDOFF_CONFLICT', message: error instanceof Error ? error.message : 'Publisher handoff conflict', details: [] } });
+    }
   });
 
   app.get('/api/v1/projects/:projectId/publisher/requests/:requestId', async (request, reply) => {
@@ -121,6 +176,7 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     const payload = await publisher.buildPublishJobPayload(projectId, requestId, jobId, null);
     const job = await jobs.createIdempotent({ id: jobId, type: 'PUBLISH', projectId, payload, idempotencyKey, maxAttempts: 3 });
     if (aggregate.request.status !== 'QUEUED') await publisher.transitionRequest(requestId, 'QUEUED');
+    await refreshProjectPublishingStatus(projectId, projects, publisher, assets);
     return reply.code(202).send({ jobId: job.id, requestId, state: job.state });
   });
 }

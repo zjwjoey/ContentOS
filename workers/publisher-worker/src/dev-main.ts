@@ -2,6 +2,8 @@ import { join } from 'node:path';
 import { createDatabase, migrateUp } from '../../../packages/database/src/index.js';
 import { loadConfig } from '../../../packages/config/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
+import { ProjectService } from '../../../packages/modules/project/src/index.js';
+import { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
 import { FakePublisherService, PublisherService } from '../../../packages/modules/publisher/src/index.js';
 import { createPublisherWorker, PUBLISH_RECONCILE_JOB_TYPE, type PublisherWorkerOptions } from './main.js';
 
@@ -53,6 +55,8 @@ async function startLocalWorker(): Promise<void> {
   const runner = createPublisherDevRunner({
     jobs,
     service: new PublisherService(db),
+    projects: new ProjectService(db),
+    assets: new AssetCatalogService(db),
     fakePublisher: new FakePublisherService(join(config.storageRoot, 'publisher-profiles')),
     workerId: 'publisher-worker-dev',
   });

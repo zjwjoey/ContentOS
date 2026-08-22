@@ -37,3 +37,7 @@ Adapters normalize at least `AUTH_EXPIRED`, `REQUIRES_VERIFICATION`, `PLATFORM_C
 ## Dependencies
 
 Publisher reads validated rendered Asset metadata through the public Asset contract and Project metadata snapshots through Project. It depends on Job for delivery, Approval for pre-publish gates and Review only through a metric-collection contract. It must not depend on Video implementation, FFmpeg, Director planning or AI provider SDKs.
+
+## Project integration
+
+Publisher exposes `PublisherProjectSummary` as a read-only public contract. The summary contains project-scoped account/request counts, normalized request status counts, confirmed external-post count and unresolved human-action count; it never contains attempt diagnostics, credentials or profile references. Project lifecycle updates are coordinated by API/Worker composition roots using this summary and the public Asset Catalog contract. Publisher never writes `content_projects` directly.

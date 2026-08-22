@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { createDatabase, migrateUp } from '../../packages/database/src/index.js';
 import { JobService } from '../../packages/modules/job/src/index.js';
 import { ProjectService } from '../../packages/modules/project/src/index.js';
+import { AssetCatalogService } from '../../packages/modules/asset/src/index.js';
 import { FakePublisherAdapter, FakePublisherService, PublisherService } from '../../packages/modules/publisher/src/index.js';
 import { createPublisherWorker } from '../../workers/publisher-worker/src/main.js';
 import { createPublisherDevRunner } from '../../workers/publisher-worker/src/dev-main.js';
@@ -20,6 +21,8 @@ async function fixture(db: Awaited<ReturnType<typeof createDatabase>>, outcome: 
   const checksum = `sha256:${randomUUID()}`;
   await db.query('insert into assets (id, project_id, kind, checksum, byte_size, storage_key, lifecycle, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8)', [assetId, project.id, 'VIDEO_RENDER', checksum, 100, `renders/${assetId}.mp4`, 'READY', { width: 1080, height: 1920 }]);
   const publisher = new PublisherService(db);
+  const projects = new ProjectService(db);
+  const assets = new AssetCatalogService(db);
   const account = await publisher.createAccount({ projectId: project.id, platformId: 'fake-platform', displayName: `Fake ${randomUUID()}`, credentialRef: 'fake-credential:worker', profileKey: `profile-${randomUUID()}`, status: 'READY', capabilitySnapshot: { platformId: 'fake-platform', mediaTypes: ['video/mp4'], scheduling: false, requiresHumanConfirmation: false } });
   const request = await publisher.createRequest({ projectId: project.id, accountId: account.id, idempotencyKey: `publisher-worker-${randomUUID()}`, correlationId: `correlation-${randomUUID()}`, revision: { assetId, assetChecksum: checksum, title: 'Worker 发布', description: '描述', desiredPublishAt: null, createdBy: 'test' } });
   await publisher.transitionRequest(request.request.id, 'QUEUED');
@@ -28,7 +31,7 @@ async function fixture(db: Awaited<ReturnType<typeof createDatabase>>, outcome: 
   const payload = await publisher.buildPublishJobPayload(project.id, request.request.id, jobId, null);
   const job = await jobs.create({ id: jobId, type: 'PUBLISH', projectId: project.id, payload, idempotencyKey: `job-publish-worker-${randomUUID()}`, maxAttempts: 3 });
   const root = await mkdtemp(join(tmpdir(), 'contentos-publisher-worker-product-'));
-  return { projectId: project.id, requestId: request.request.id, job, jobs, publisher, fake: new FakePublisherService(root, new FakePublisherAdapter(outcome)), root };
+  return { projectId: project.id, requestId: request.request.id, job, jobs, publisher, projects, assets, fake: new FakePublisherService(root, new FakePublisherAdapter(outcome)), root };
 }
 
 async function cleanup(db: Awaited<ReturnType<typeof createDatabase>>, projectId: string, root: string): Promise<void> {
@@ -53,12 +56,13 @@ test('Publisher Worker durably publishes and records external post', async () =>
   try {
     const data = await fixture(db);
     projectId = data.projectId; root = data.root;
-    const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, fakePublisher: data.fake, workerId: 'publisher-worker-test' });
+    const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, projects: data.projects, assets: data.assets, fakePublisher: data.fake, workerId: 'publisher-worker-test' });
     await worker.start();
     assert.deepEqual(worker.handlerTypes(), ['PUBLISH', 'PUBLISH_RECONCILE']);
     const result = await worker.execute('PUBLISH', { jobId: data.job.id });
     assert.equal((result as { state: string }).state, 'SUCCEEDED');
     assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'PUBLISHED');
+    assert.equal((await data.projects.get(data.projectId))?.status, 'PUBLISHED');
     const posts = await db.query('select external_post_id from publisher_external_posts where request_id = $1', [data.requestId]);
     assert.equal(posts.rowCount, 1);
     await worker.shutdown('test');
@@ -73,7 +77,7 @@ test('Publisher development runner polls queued PUBLISH Jobs', async () => {
   try {
     const data = await fixture(db);
     projectId = data.projectId; root = data.root;
-    runner = createPublisherDevRunner({ service: data.publisher, jobs: data.jobs, fakePublisher: data.fake, workerId: 'publisher-worker-dev-test' }, { pollIntervalMs: 10_000, batchSize: 1 });
+    runner = createPublisherDevRunner({ service: data.publisher, jobs: data.jobs, projects: data.projects, assets: data.assets, fakePublisher: data.fake, workerId: 'publisher-worker-dev-test' }, { pollIntervalMs: 10_000, batchSize: 1 });
     await runner.start();
     const completed = await data.jobs.get(data.job.id);
     assert.equal(completed?.state, 'SUCCEEDED', JSON.stringify(completed));
@@ -88,7 +92,7 @@ test('Publisher Worker maps retryable and human-action failures safely', async (
     try {
       const data = await fixture(db, outcome);
       projectId = data.projectId; root = data.root;
-      const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, fakePublisher: data.fake, workerId: `publisher-worker-${outcome}` });
+      const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, projects: data.projects, assets: data.assets, fakePublisher: data.fake, workerId: `publisher-worker-${outcome}` });
       await worker.start();
       const result = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
       assert.equal(result.state, expectedJobState);
@@ -105,11 +109,12 @@ test('Publisher Worker reconciles uncertain external state and confirms the post
   try {
     const data = await fixture(db, 'BROWSER_CRASH');
     projectId = data.projectId; root = data.root;
-    const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, fakePublisher: data.fake, workerId: 'publisher-worker-unknown' });
+    const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, projects: data.projects, assets: data.assets, fakePublisher: data.fake, workerId: 'publisher-worker-unknown' });
     await worker.start();
     const result = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
     assert.equal(result.state, 'SUCCEEDED');
     assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'RECONCILING');
+    assert.equal((await data.projects.get(data.projectId))?.status, 'READY_TO_PUBLISH');
     const attempts = await data.publisher.listAttempts(data.requestId);
     assert.equal(attempts[0]?.status, 'UNKNOWN');
     const reconcileJob = await data.jobs.getByIdempotencyKey(`publisher:reconcile:${data.requestId}:${(data.job.payload as { revisionId: string }).revisionId}`);
@@ -117,6 +122,7 @@ test('Publisher Worker reconciles uncertain external state and confirms the post
     const reconciliationResult = await worker.execute('PUBLISH_RECONCILE', { jobId: reconcileJob.id }) as { state: string };
     assert.equal(reconciliationResult.state, 'SUCCEEDED');
     assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'PUBLISHED');
+    assert.equal((await data.projects.get(data.projectId))?.status, 'PUBLISHED');
     const completedAttempts = await data.publisher.listAttempts(data.requestId);
     assert.deepEqual(completedAttempts.map((attempt) => attempt.operation), ['PUBLISH', 'RECONCILE']);
     const posts = await db.query('select external_post_id from publisher_external_posts where request_id = $1', [data.requestId]);

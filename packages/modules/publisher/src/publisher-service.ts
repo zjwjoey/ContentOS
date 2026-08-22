@@ -44,6 +44,14 @@ export interface CreatePublisherRequestInput {
 }
 
 export type PublisherNextAction = 'NEEDS_HUMAN_ACTION';
+export interface PublisherProjectSummary {
+  projectId: string;
+  accountCount: number;
+  requestCount: number;
+  statusCounts: Record<PublisherRequestStatus, number>;
+  confirmedExternalPostCount: number;
+  needsHumanActionCount: number;
+}
 export interface PublisherRequestAggregate { request: PublisherRequest; revision: PublisherRequestRevision; attempts: PublisherAttempt[]; nextAction: PublisherNextAction | null; }
 
 export interface PublisherPublishJobPayload {
@@ -185,6 +193,26 @@ export class PublisherService {
   async listRequests(projectId: string): Promise<PublisherRequest[]> {
     const result = await this.db.query('select * from publisher_requests where project_id = $1 order by created_at desc, id desc', [projectId]);
     return result.rows.map((row) => mapRequest(row as Record<string, unknown>));
+  }
+
+  async getProjectSummary(projectId: string): Promise<PublisherProjectSummary> {
+    const statuses: PublisherRequestStatus[] = ['DRAFT', 'SCHEDULED', 'QUEUED', 'PUBLISHING', 'RECONCILING', 'PUBLISHED', 'FAILED', 'CANCELLED'];
+    const [accounts, requests, posts, humanAction] = await Promise.all([
+      this.db.query<{ count: string }>('select count(*)::text as count from publisher_accounts where project_id = $1', [projectId]),
+      this.db.query<{ status: PublisherRequestStatus; count: string }>('select status, count(*)::text as count from publisher_requests where project_id = $1 group by status', [projectId]),
+      this.db.query<{ count: string }>('select count(*)::text as count from publisher_external_posts where request_id in (select id from publisher_requests where project_id = $1)', [projectId]),
+      this.db.query<{ count: string }>("select count(distinct a.request_id)::text as count from publisher_attempts a join publisher_requests p on p.id = a.request_id where p.project_id = $1 and p.status not in ('PUBLISHED', 'CANCELLED') and a.failure_classification = 'HUMAN_ACTION_REQUIRED'", [projectId]),
+    ]);
+    const statusCounts = Object.fromEntries(statuses.map((status) => [status, 0])) as Record<PublisherRequestStatus, number>;
+    for (const row of requests.rows) statusCounts[row.status] = Number(row.count);
+    return {
+      projectId,
+      accountCount: Number(accounts.rows[0]?.count || 0),
+      requestCount: Object.values(statusCounts).reduce((total, count) => total + count, 0),
+      statusCounts,
+      confirmedExternalPostCount: Number(posts.rows[0]?.count || 0),
+      needsHumanActionCount: Number(humanAction.rows[0]?.count || 0),
+    };
   }
 
   async getRequestAggregate(projectId: string, requestId: string): Promise<PublisherRequestAggregate | null> {
