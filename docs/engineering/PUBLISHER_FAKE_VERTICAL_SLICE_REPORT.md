@@ -45,9 +45,9 @@ The local operator launcher now starts API, Web, Director Worker and Publisher W
 
 ## Verification
 
-- `pnpm test`: 96 passed, 0 failed
+- `pnpm test`: 97 passed, 0 failed
 - `pnpm typecheck`: passed
-- `pnpm lint`: passed (`67` TypeScript files)
+- `pnpm lint`: passed (`72` TypeScript files)
 - `pnpm --dir apps/web build`: passed
 - PostgreSQL test database: `contentos_test` on local PostgreSQL 16 port `55433`
 
