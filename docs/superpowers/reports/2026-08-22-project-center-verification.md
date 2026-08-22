@@ -19,7 +19,7 @@
 The complete suite was run against the isolated existing PostgreSQL instance on port 55433 using database contentos_project_center_dev:
 
     pnpm test
-    122 tests passed, 0 failed
+    123 tests passed, 0 failed
 
 Additional checks:
 
