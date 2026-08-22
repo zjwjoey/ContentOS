@@ -78,6 +78,11 @@ test('publisher human action is surfaced as blocked attention', () => {
   assert.equal(deriveStages(input)[3]?.status, 'ACTION_REQUIRED');
 });
 
+test('publisher failure is blocked when no human-action classification exists', () => {
+  const input = { ...emptyInput, hasApprovedDirector: true, hasReadyVideo: true, approvalStatus: 'APPROVED', publisherStatusCounts: { FAILED: 1 } };
+  assert.equal(deriveStages(input)[3]?.status, 'BLOCKED');
+});
+
 test('published project is complete', () => {
   const input = { ...emptyInput, projectStatus: 'PUBLISHED', hasApprovedDirector: true, hasReadyVideo: true, approvalStatus: 'APPROVED', hasExternalPost: true, publisherStatusCounts: { PUBLISHED: 1 } };
   assert.equal(deriveHealth(input).level, 'COMPLETE');
