@@ -7,6 +7,8 @@
 
 第②步 Publisher → Content Project 集成已完成工程实现，等待正式人审验收。第③步 Project Center 及后续切片没有启动。
 
+本轮验收修复已完成：未知外部状态先落持久化 `PUBLISH_RECONCILE` Job，再同步 Project；Project 发布状态更新改为数据库内单调条件更新；Worker 只允许 `READY` 账号进入真实发布；重复幂等键必须匹配原请求的项目、账号和 Revision 快照；项目摘要的人为处理数只统计每个请求最新且未解决的人工动作。
+
 ## Delivered flow
 
 ```text
@@ -31,9 +33,9 @@ Content Project
 
 ## Verification
 
-- `pnpm test`: 101 passed, 0 failed
+- `pnpm test`: 106 passed, 0 failed
 - `pnpm typecheck`: passed
-- `pnpm lint`: passed (`67` TypeScript files)
+- `pnpm lint`: passed (`72` TypeScript files)
 - `pnpm --dir apps/web build`: passed
 - Targeted API/Worker/UI tests: passed
 

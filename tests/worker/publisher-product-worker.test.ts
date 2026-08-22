@@ -14,6 +14,10 @@ import { createPublisherDevRunner } from '../../workers/publisher-worker/src/dev
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://contentos_dev@127.0.0.1:55432/contentos_dev';
 
+class FailingProjectSyncService extends ProjectService {
+  async syncPublishingStatus(): Promise<never> { throw new Error('project sync unavailable'); }
+}
+
 async function fixture(db: Awaited<ReturnType<typeof createDatabase>>, outcome: ConstructorParameters<typeof FakePublisherAdapter>[0] = 'SUCCESS') {
   await migrateUp(db);
   const project = await new ProjectService(db).create(`Publisher Worker ${randomUUID()}`);
@@ -102,6 +106,24 @@ test('Publisher Worker revalidates the project-owned READY asset before publishi
   } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
 });
 
+test('Publisher Worker refuses to publish through an account that is no longer READY', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  let root = '';
+  try {
+    const data = await fixture(db);
+    projectId = data.projectId; root = data.root;
+    await db.query('update publisher_accounts set status = $2 where project_id = $1', [projectId, 'REAUTH_REQUIRED']);
+    const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, projects: data.projects, assets: data.assets, fakePublisher: data.fake, workerId: 'publisher-worker-account-not-ready' });
+    await worker.start();
+    const result = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
+    assert.equal(result.state, 'FAILED');
+    assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'QUEUED');
+    assert.equal((await db.query('select id from publisher_external_posts where request_id = $1', [data.requestId])).rowCount, 0);
+    await worker.shutdown('test');
+  } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
+});
+
 test('Publisher Worker maps retryable and human-action failures safely', async () => {
   for (const [outcome, expectedState, expectedJobState] of [['RATE_LIMIT', 'FAILED', 'RETRY_WAIT'], ['AUTH_EXPIRED', 'FAILED', 'FAILED']] as const) {
     const db = await createDatabase(databaseUrl);
@@ -145,6 +167,25 @@ test('Publisher Worker reconciles uncertain external state and confirms the post
     assert.deepEqual(completedAttempts.map((attempt) => attempt.operation), ['PUBLISH', 'RECONCILE']);
     const posts = await db.query('select external_post_id from publisher_external_posts where request_id = $1', [data.requestId]);
     assert.equal(posts.rowCount, 1);
+    await worker.shutdown('test');
+  } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
+});
+
+test('Publisher Worker preserves a durable reconcile job when project sync fails after an unknown outcome', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  let root = '';
+  try {
+    const data = await fixture(db, 'BROWSER_CRASH');
+    projectId = data.projectId; root = data.root;
+    const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, projects: new FailingProjectSyncService(db), assets: data.assets, fakePublisher: data.fake, workerId: 'publisher-worker-reconcile-recovery' });
+    await worker.start();
+    const result = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
+    assert.equal(result.state, 'RETRY_WAIT');
+    const revisionId = (data.job.payload as { revisionId: string }).revisionId;
+    const reconcileJob = await data.jobs.getByIdempotencyKey(`publisher:reconcile:${data.requestId}:${revisionId}`);
+    assert.ok(reconcileJob, 'reconcile job must exist even when project sync fails');
+    assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'RECONCILING');
     await worker.shutdown('test');
   } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
 });

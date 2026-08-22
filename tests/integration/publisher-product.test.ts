@@ -89,6 +89,28 @@ test('Publisher aggregate exposes a stable human-action state after auth failure
   }
 });
 
+test('Publisher idempotency rejects a reused key with different request input', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  try {
+    const data = await fixture(db);
+    projectId = data.projectId;
+    await assert.rejects(
+      () => data.publisher.createRequest({
+        projectId,
+        accountId: data.accountId,
+        idempotencyKey: data.request.request.idempotencyKey,
+        correlationId: data.request.request.correlationId,
+        revision: { ...data.request.revision, description: '不同输入' },
+      }),
+      /Idempotency key conflict/,
+    );
+  } finally {
+    if (projectId) await cleanup(db, projectId);
+    await db.end();
+  }
+});
+
 test('Publisher exposes a project summary without leaking private attempt diagnostics', async () => {
   const db = await createDatabase(databaseUrl);
   let projectId = '';
@@ -111,6 +133,23 @@ test('Publisher exposes a project summary without leaking private attempt diagno
   }
 });
 
+test('Publisher summary only counts the latest unresolved human-action attempt', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  try {
+    const data = await fixture(db);
+    projectId = data.projectId;
+    const first = await data.publisher.startAttempt({ requestId: data.request.request.id, revisionId: data.request.revision.id, operation: 'PUBLISH', jobId: null, jobAttemptId: null });
+    await data.publisher.finishAttempt(first.id, { status: 'FAILED', failureCode: 'AUTH_EXPIRED', failureClassification: 'HUMAN_ACTION_REQUIRED' });
+    const second = await data.publisher.startAttempt({ requestId: data.request.request.id, revisionId: data.request.revision.id, operation: 'PUBLISH', jobId: null, jobAttemptId: null });
+    await data.publisher.finishAttempt(second.id, { status: 'FAILED', failureCode: 'NETWORK_ERROR', failureClassification: 'RETRYABLE' });
+    assert.equal((await data.publisher.getProjectSummary(projectId)).needsHumanActionCount, 0);
+  } finally {
+    if (projectId) await cleanup(db, projectId);
+    await db.end();
+  }
+});
+
 test('Project lifecycle moves to READY_TO_PUBLISH and PUBLISHED from explicit publishing facts', async () => {
   const db = await createDatabase(databaseUrl);
   let projectId = '';
@@ -122,6 +161,28 @@ test('Project lifecycle moves to READY_TO_PUBLISH and PUBLISHED from explicit pu
     assert.equal(ready.status, 'READY_TO_PUBLISH');
     const published = await projects.syncPublishingStatus(projectId, { hasPublishableAsset: true, publishedRequestCount: 1 });
     assert.equal(published.status, 'PUBLISHED');
+  } finally {
+    if (projectId) await db.query('delete from content_projects where id = $1', [projectId]);
+    await db.end();
+  }
+});
+
+test('Project publishing lifecycle remains monotonic under concurrent status syncs', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  try {
+    const project = await new ProjectService(db).create(`Project lifecycle race ${randomUUID()}`);
+    projectId = project.id;
+    const first = new ProjectService(db);
+    const second = new ProjectService(db);
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await db.query('update content_projects set status = $2 where id = $1', [projectId, 'DRAFT']);
+      await Promise.all([
+        first.syncPublishingStatus(projectId, { hasPublishableAsset: true, publishedRequestCount: 1 }),
+        second.syncPublishingStatus(projectId, { hasPublishableAsset: true, publishedRequestCount: 0 }),
+      ]);
+      assert.equal((await new ProjectService(db).get(projectId))?.status, 'PUBLISHED');
+    }
   } finally {
     if (projectId) await db.query('delete from content_projects where id = $1', [projectId]);
     await db.end();

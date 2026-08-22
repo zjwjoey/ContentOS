@@ -91,6 +91,12 @@ export interface RecordPublisherExternalPostInput {
 function timestamp(value: unknown): string { return new Date(String(value)).toISOString(); }
 function nullableTimestamp(value: unknown): string | null { return value ? timestamp(value) : null; }
 function objectValue(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
+function sameNullableTimestamp(input: string | null, stored: unknown): boolean {
+  if (input === null || stored === null || stored === undefined) return input === null && (stored === null || stored === undefined);
+  const inputTime = Date.parse(input);
+  const storedTime = Date.parse(String(stored));
+  return Number.isFinite(inputTime) && Number.isFinite(storedTime) ? inputTime === storedTime : input === String(stored);
+}
 
 function mapAccount(row: Record<string, unknown>): PublisherAccount {
   return {
@@ -170,11 +176,24 @@ export class PublisherService {
       const id = `publisher-request-${randomUUID()}`;
       const inserted = await client.query('insert into publisher_requests (id, project_id, account_id, status, idempotency_key, correlation_id) values ($1, $2, $3, $4, $5, $6) on conflict (idempotency_key) do nothing returning *', [id, input.projectId, input.accountId, 'DRAFT', input.idempotencyKey, input.correlationId]);
       if (!inserted.rowCount) {
-        const existing = await client.query('select * from publisher_requests where idempotency_key = $1', [input.idempotencyKey]);
-        const request = mapRequest(existing.rows[0] as Record<string, unknown>);
-        const revision = await client.query('select * from publisher_request_revisions where id = $1', [request.currentRevisionId]);
+        const existing = await client.query('select * from publisher_requests where idempotency_key = $1 for update', [input.idempotencyKey]);
+        const existingRow = existing.rows[0] as Record<string, unknown> | undefined;
+        if (!existingRow) throw new Error('Idempotency key conflict: existing Publisher request could not be loaded');
+        const request = mapRequest(existingRow);
+        const revision = await client.query('select * from publisher_request_revisions where id = $1 and request_id = $2', [request.currentRevisionId, request.id]);
+        const revisionRow = revision.rows[0] as Record<string, unknown> | undefined;
+        const matches = revisionRow
+          && request.projectId === input.projectId
+          && request.accountId === input.accountId
+          && String(revisionRow.asset_id) === input.revision.assetId
+          && String(revisionRow.asset_checksum) === input.revision.assetChecksum
+          && String(revisionRow.title) === input.revision.title
+          && String(revisionRow.description) === input.revision.description
+          && sameNullableTimestamp(input.revision.desiredPublishAt, revisionRow.desired_publish_at)
+          && String(revisionRow.created_by) === input.revision.createdBy;
+        if (!matches) throw new Error('Idempotency key conflict: input does not match existing Publisher request');
         await client.query('commit');
-        return { request, revision: mapRevision(revision.rows[0] as Record<string, unknown>), attempts: [], nextAction: null };
+        return { request, revision: mapRevision(revisionRow), attempts: [], nextAction: null };
       }
       const revisionId = `publisher-revision-${randomUUID()}`;
       const revision = await client.query('insert into publisher_request_revisions (id, request_id, revision, asset_id, asset_checksum, title, description, desired_publish_at, created_by) values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning *', [revisionId, id, 1, input.revision.assetId, input.revision.assetChecksum, input.revision.title, input.revision.description, input.revision.desiredPublishAt, input.revision.createdBy]);
@@ -201,7 +220,7 @@ export class PublisherService {
       this.db.query<{ count: string }>('select count(*)::text as count from publisher_accounts where project_id = $1', [projectId]),
       this.db.query<{ status: PublisherRequestStatus; count: string }>('select status, count(*)::text as count from publisher_requests where project_id = $1 group by status', [projectId]),
       this.db.query<{ count: string }>('select count(*)::text as count from publisher_external_posts where request_id in (select id from publisher_requests where project_id = $1)', [projectId]),
-      this.db.query<{ count: string }>("select count(distinct a.request_id)::text as count from publisher_attempts a join publisher_requests p on p.id = a.request_id where p.project_id = $1 and p.status not in ('PUBLISHED', 'CANCELLED') and a.failure_classification = 'HUMAN_ACTION_REQUIRED'", [projectId]),
+      this.db.query<{ count: string }>("select count(*)::text as count from (select distinct on (a.request_id) a.failure_classification, p.status from publisher_attempts a join publisher_requests p on p.id = a.request_id where p.project_id = $1 order by a.request_id, a.attempt_number desc) latest where latest.status not in ('PUBLISHED', 'CANCELLED') and latest.failure_classification = 'HUMAN_ACTION_REQUIRED'", [projectId]),
     ]);
     const statusCounts = Object.fromEntries(statuses.map((status) => [status, 0])) as Record<PublisherRequestStatus, number>;
     for (const row of requests.rows) statusCounts[row.status] = Number(row.count);

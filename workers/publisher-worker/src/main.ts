@@ -42,12 +42,25 @@ async function syncProjectPublishingStatus(service: PublisherService, projects: 
   await projects.syncPublishingStatus(projectId, { hasPublishableAsset: publishableAssets.length > 0, publishedRequestCount: summary.statusCounts.PUBLISHED });
 }
 
+async function ensureReconcileJob(service: PublisherService, jobs: JobService, payload: PublisherPublishJobPayload): Promise<JobRecord> {
+  const idempotencyKey = `publisher:reconcile:${payload.requestId}:${payload.revisionId}`;
+  const reconcileJobId = `job-publish-reconcile-${payload.requestId}-${payload.revisionId}`;
+  const reconcilePayload = await service.buildPublishJobPayload(payload.projectId, payload.requestId, reconcileJobId, null);
+  return jobs.createIdempotent({ id: reconcileJobId, type: PUBLISH_RECONCILE_JOB_TYPE, projectId: payload.projectId, payload: reconcilePayload, idempotencyKey, maxAttempts: 3 });
+}
+
 async function executePublish(service: PublisherService, jobs: JobService, projects: ProjectService, assets: AssetCatalogService, fakePublisher: FakePublisherService, job: JobRecord, jobAttemptId: string): Promise<unknown> {
   const payload = payloadFromJob(job);
   const aggregate = await service.getRequestAggregate(payload.projectId, payload.requestId);
   if (!aggregate || aggregate.revision.id !== payload.revisionId) throw new PublisherHandlerError('PUBLISH_REQUEST_NOT_FOUND', 'Publisher request revision is not available', false);
   const account = await service.getAccount(payload.projectId, payload.accountId);
   if (!account || account.platformId !== payload.platformId) throw new PublisherHandlerError('PUBLISH_ACCOUNT_NOT_FOUND', 'Publisher account is not available', false);
+  if (aggregate.request.status === 'RECONCILING') {
+    const reconcileJob = await ensureReconcileJob(service, jobs, payload);
+    await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
+    return { status: 'RECONCILING', requestId: payload.requestId, reconcileJobId: reconcileJob.id };
+  }
+  if (account.status !== 'READY') throw new PublisherHandlerError('PUBLISH_ACCOUNT_NOT_READY', `Publisher account is ${account.status}`, false);
   const asset = await assets.getPublishableAsset(payload.projectId, aggregate.revision.assetId);
   if (!asset || asset.checksum !== aggregate.revision.assetChecksum) throw new PublisherHandlerError('PUBLISH_ASSET_NOT_READY', 'Publisher Asset is not a current READY render for this project', false);
 
@@ -78,20 +91,8 @@ async function executePublish(service: PublisherService, jobs: JobService, proje
   if (result.status === 'UNKNOWN_EXTERNAL_STATE') {
     await service.finishAttempt(attempt.id, { status: 'UNKNOWN', failureCode: failure?.code || 'UNKNOWN_EXTERNAL_STATE', failureClassification: failure?.classification || 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'UNKNOWN_EXTERNAL_STATE' } });
     await service.transitionRequest(payload.requestId, 'RECONCILING', { code: failure?.code || 'UNKNOWN_EXTERNAL_STATE', message: failure?.message || 'External state requires reconciliation' });
+    const reconcileJob = await ensureReconcileJob(service, jobs, payload);
     await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
-    const idempotencyKey = `publisher:reconcile:${payload.requestId}:${payload.revisionId}`;
-    const existing = await jobs.getByIdempotencyKey(idempotencyKey);
-    if (existing) return { status: 'RECONCILING', requestId: payload.requestId, reconcileJobId: existing.id };
-    const reconcileJobId = `job-publish-reconcile-${payload.requestId}-${payload.revisionId}`;
-    const reconcilePayload = await service.buildPublishJobPayload(payload.projectId, payload.requestId, reconcileJobId, null);
-    let reconcileJob;
-    try {
-      reconcileJob = await jobs.create({ id: reconcileJobId, type: PUBLISH_RECONCILE_JOB_TYPE, projectId: payload.projectId, payload: reconcilePayload, idempotencyKey, maxAttempts: 3 });
-    } catch (error) {
-      const duplicate = await jobs.getByIdempotencyKey(idempotencyKey);
-      if (!duplicate) throw error;
-      reconcileJob = duplicate;
-    }
     return { status: 'RECONCILING', requestId: payload.requestId, reconcileJobId: reconcileJob.id };
   }
 

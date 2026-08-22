@@ -84,11 +84,21 @@ test('Publisher service persists account, immutable revision and stable request 
       accountId: fixtureResult.accountId,
       idempotencyKey: fixtureResult.request.request.idempotencyKey,
       correlationId: fixtureResult.request.request.correlationId,
-      revision: { ...fixtureResult.request.revision, title: '不同标题' },
+      revision: { ...fixtureResult.request.revision },
     });
     assert.equal(duplicate.request.id, fixtureResult.request.request.id);
     assert.equal(duplicate.revision.id, fixtureResult.request.revision.id);
     assert.equal((await fixtureResult.publisher.getCurrentRevision(fixtureResult.request.request.id))?.title, '测试发布');
+    await assert.rejects(
+      () => fixtureResult.publisher.createRequest({
+        projectId,
+        accountId: fixtureResult.accountId,
+        idempotencyKey: fixtureResult.request.request.idempotencyKey,
+        correlationId: fixtureResult.request.request.correlationId,
+        revision: { ...fixtureResult.request.revision, title: '不同标题' },
+      }),
+      /Idempotency key conflict/,
+    );
     const account = await fixtureResult.publisher.getAccount(projectId, fixtureResult.accountId);
     assert.equal(account?.credentialRef, 'fake-credential:account');
     assert.equal(JSON.stringify(account).includes('password'), false);

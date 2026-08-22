@@ -30,16 +30,19 @@ export class ProjectService {
 
   async syncPublishingStatus(projectId: string, facts: ProjectPublishingFacts): Promise<ProjectRecord> {
     if (!Number.isInteger(facts.publishedRequestCount) || facts.publishedRequestCount < 0) throw new Error('publishedRequestCount must be a non-negative integer');
-    const current = await this.get(projectId);
-    if (!current) throw new Error(`Project ${projectId} not found`);
-    if (current.status === 'ARCHIVED' || current.status === 'REVIEWED') return current;
-    const nextStatus = facts.publishedRequestCount > 0
-      ? 'PUBLISHED'
-      : facts.hasPublishableAsset && (current.status === 'DRAFT' || current.status === 'IN_PRODUCTION')
-        ? 'READY_TO_PUBLISH'
-        : current.status;
-    if (nextStatus === current.status) return current;
-    const updated = await this.db.query('update content_projects set status = $2, updated_at = now() where id = $1 returning *', [projectId, nextStatus]);
+    const updated = await this.db.query(`
+      update content_projects
+      set status = case
+        when status in ('ARCHIVED', 'REVIEWED', 'PUBLISHED') then status
+        when $2::integer > 0 then 'PUBLISHED'
+        when $3::boolean and status in ('DRAFT', 'IN_PRODUCTION') then 'READY_TO_PUBLISH'
+        else status
+      end,
+      updated_at = now()
+      where id = $1
+      returning *
+    `, [projectId, facts.publishedRequestCount, facts.hasPublishableAsset]);
+    if (!updated.rowCount) throw new Error(`Project ${projectId} not found`);
     return mapProject(updated.rows[0] as Record<string, unknown>);
   }
 }

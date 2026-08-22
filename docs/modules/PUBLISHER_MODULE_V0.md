@@ -24,7 +24,7 @@ Platform adapters publish a capability profile: supported media types, title/des
 
 Publish requests move through `DRAFT -> SCHEDULED -> QUEUED -> PUBLISHING -> PUBLISHED | FAILED | CANCELLED`, with `RECONCILING` as the mandatory state after an uncertain external side effect. Attempts are separate historical records and request revisions are immutable. The worker receives `publishRequestId` and a snapshot revision, then revalidates account state, asset checksum and schedule window.
 
-The `0009_publisher_foundation` migration protects enum values, revision numbering, request idempotency and external-post uniqueness. `PublisherService` locks the request aggregate before transitions, creates one stable request idempotency key, and requires a reconciliation result before another publish attempt after an unknown outcome. `PUBLISH_RECONCILE` is a durable worker path, not an in-process callback.
+The `0009_publisher_foundation` migration protects enum values, revision numbering, request idempotency and external-post uniqueness. `PublisherService` locks the request aggregate before transitions, requires a reused idempotency key to match the original project/account/Revision snapshot, and requires a reconciliation result before another publish attempt after an unknown outcome. `PUBLISH_RECONCILE` is a durable worker path, not an in-process callback.
 
 ## Browser automation constraints
 
@@ -40,4 +40,4 @@ Publisher reads validated rendered Asset metadata through the public Asset contr
 
 ## Project integration
 
-Publisher exposes `PublisherProjectSummary` as a read-only public contract. The summary contains project-scoped account/request counts, normalized request status counts, confirmed external-post count and unresolved human-action count; it never contains attempt diagnostics, credentials or profile references. Project lifecycle updates are coordinated by API/Worker composition roots using this summary and the public Asset Catalog contract. Before an external publish call, the Worker revalidates the project-owned READY Render Asset and frozen checksum. Publisher never writes `content_projects` directly.
+Publisher exposes `PublisherProjectSummary` as a read-only public contract. The summary contains project-scoped account/request counts, normalized request status counts, confirmed external-post count and unresolved human-action count (based on each request's latest attempt); it never contains attempt diagnostics, credentials or profile references. Project lifecycle updates are coordinated by API/Worker composition roots using this summary and the public Asset Catalog contract. Before an external publish call, the Worker revalidates the project-owned READY Render Asset and frozen checksum, and rejects accounts that are not `READY`. Publisher never writes `content_projects` directly.
