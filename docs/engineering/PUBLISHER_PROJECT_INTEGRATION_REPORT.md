@@ -27,10 +27,11 @@ Content Project
 - `POST /api/v1/projects/:projectId/publisher/handoff` validates one project-owned READY Render Asset and multiple project-owned accounts, then creates idempotent account-specific requests.
 - `GET /api/v1/projects/:projectId/publisher/summary` exposes the safe summary for later Project Center consumption.
 - Publisher Worker updates Project state after publish, failure and reconciliation outcomes through public Project and Asset services; it never writes Project tables directly.
+- Publisher Worker revalidates the project-owned READY Render Asset and frozen checksum before any external publish call.
 
 ## Verification
 
-- `pnpm test`: 100 passed, 0 failed
+- `pnpm test`: 101 passed, 0 failed
 - `pnpm typecheck`: passed
 - `pnpm lint`: passed (`67` TypeScript files)
 - `pnpm --dir apps/web build`: passed

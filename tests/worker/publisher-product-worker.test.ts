@@ -31,7 +31,7 @@ async function fixture(db: Awaited<ReturnType<typeof createDatabase>>, outcome: 
   const payload = await publisher.buildPublishJobPayload(project.id, request.request.id, jobId, null);
   const job = await jobs.create({ id: jobId, type: 'PUBLISH', projectId: project.id, payload, idempotencyKey: `job-publish-worker-${randomUUID()}`, maxAttempts: 3 });
   const root = await mkdtemp(join(tmpdir(), 'contentos-publisher-worker-product-'));
-  return { projectId: project.id, requestId: request.request.id, job, jobs, publisher, projects, assets, fake: new FakePublisherService(root, new FakePublisherAdapter(outcome)), root };
+  return { projectId: project.id, assetId, requestId: request.request.id, job, jobs, publisher, projects, assets, fake: new FakePublisherService(root, new FakePublisherAdapter(outcome)), root };
 }
 
 async function cleanup(db: Awaited<ReturnType<typeof createDatabase>>, projectId: string, root: string): Promise<void> {
@@ -82,6 +82,24 @@ test('Publisher development runner polls queued PUBLISH Jobs', async () => {
     const completed = await data.jobs.get(data.job.id);
     assert.equal(completed?.state, 'SUCCEEDED', JSON.stringify(completed));
   } finally { if (runner) await runner.stop('test'); if (projectId) await cleanup(db, projectId, root); await db.end(); }
+});
+
+test('Publisher Worker revalidates the project-owned READY asset before publishing', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  let root = '';
+  try {
+    const data = await fixture(db);
+    projectId = data.projectId; root = data.root;
+    await db.query('update assets set lifecycle = $2 where id = $1', [data.assetId, 'FAILED']);
+    const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, projects: data.projects, assets: data.assets, fakePublisher: data.fake, workerId: 'publisher-worker-invalid-asset' });
+    await worker.start();
+    const result = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
+    assert.equal(result.state, 'FAILED');
+    assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'QUEUED');
+    assert.equal((await db.query('select id from publisher_external_posts where request_id = $1', [data.requestId])).rowCount, 0);
+    await worker.shutdown('test');
+  } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
 });
 
 test('Publisher Worker maps retryable and human-action failures safely', async () => {

@@ -48,6 +48,8 @@ async function executePublish(service: PublisherService, jobs: JobService, proje
   if (!aggregate || aggregate.revision.id !== payload.revisionId) throw new PublisherHandlerError('PUBLISH_REQUEST_NOT_FOUND', 'Publisher request revision is not available', false);
   const account = await service.getAccount(payload.projectId, payload.accountId);
   if (!account || account.platformId !== payload.platformId) throw new PublisherHandlerError('PUBLISH_ACCOUNT_NOT_FOUND', 'Publisher account is not available', false);
+  const asset = await assets.getPublishableAsset(payload.projectId, aggregate.revision.assetId);
+  if (!asset || asset.checksum !== aggregate.revision.assetChecksum) throw new PublisherHandlerError('PUBLISH_ASSET_NOT_READY', 'Publisher Asset is not a current READY render for this project', false);
 
   if (aggregate.request.status === 'FAILED') await service.transitionRequest(payload.requestId, 'QUEUED');
   const current = await service.getRequest(payload.requestId);
