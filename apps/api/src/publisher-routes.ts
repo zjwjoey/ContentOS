@@ -59,7 +59,8 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
     const parsed = accountInput.safeParse(request.body);
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Publisher account input', details: parsed.error.issues } });
-    try { return reply.code(201).send(await publisher.createAccount({ projectId, ...parsed.data })); }
+    const { status, ...input } = parsed.data;
+    try { return reply.code(201).send(await publisher.createAccount({ projectId, ...input, ...(status ? { status } : {}) })); }
     catch (error) { return reply.code(409).send({ error: { code: 'PUBLISHER_ACCOUNT_CONFLICT', message: error instanceof Error ? error.message : 'Publisher account conflict', details: [] } }); }
   });
 
@@ -105,4 +106,3 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     return reply.code(202).send({ jobId: job.id, requestId, state: job.state });
   });
 }
-
