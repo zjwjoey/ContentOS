@@ -195,3 +195,5 @@
 - Task 6 is next: idempotent Director Job creation and explicit Application Worker handlers.
 - Task 6 complete: added typed Director Job creation with idempotency keys, attempt-aware JobRunner errors, explicit Director Worker composition, two bounded handlers and Fake Provider execution. Worker/regression gate: **5 passed, 0 failed**; typecheck passed.
 - Task 7 is next: thin Director V1 API routes while preserving legacy Director Plan endpoints.
+- Task 7 complete: added thin V1 routes for Brief, Script generation/manual/accept, Storyboard generation/list/detail/approve and safe Job status, while preserving legacy Director Plan routes. API regression gate: **3 passed, 0 failed**; typecheck passed.
+- Task 8 is next: carry approved Script/Storyboard IDs through Video Job, Manifest and Render metadata.
