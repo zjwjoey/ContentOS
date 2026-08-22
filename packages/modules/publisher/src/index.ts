@@ -9,3 +9,7 @@ export { FetchDouyinHttpTransport } from './douyin-http.js';
 export type { DouyinHttpRequest, DouyinHttpTransport } from './douyin-http.js';
 export { withBrowserSession } from './browser-session.js';
 export type { BrowserPage, BrowserSession, BrowserSessionFactory } from './browser-session.js';
+export { WeChatChannelsPlaywrightAdapter } from './wechat-channels-playwright-adapter.js';
+export { defaultWeChatChannelsSelectors } from './wechat-channels-selectors.js';
+export type { WeChatChannelsAdapterOptions } from './wechat-channels-playwright-adapter.js';
+export type { WeChatChannelsSelectorProfile } from './wechat-channels-selectors.js';

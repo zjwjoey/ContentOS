@@ -1,4 +1,4 @@
-export type PublisherFailureCode = 'AUTH_EXPIRED' | 'REQUIRES_VERIFICATION' | 'PLATFORM_CHANGED' | 'RATE_LIMIT' | 'UPLOAD_FAILED' | 'NETWORK_ERROR' | 'UNKNOWN_EXTERNAL_STATE' | 'UNKNOWN';
+export type PublisherFailureCode = 'AUTH_EXPIRED' | 'REQUIRES_VERIFICATION' | 'HUMAN_CONFIRMATION_REQUIRED' | 'PLATFORM_CHANGED' | 'RATE_LIMIT' | 'UPLOAD_FAILED' | 'NETWORK_ERROR' | 'UNKNOWN_EXTERNAL_STATE' | 'UNKNOWN';
 export type PublisherFailureClassification = 'HUMAN_ACTION_REQUIRED' | 'PERMANENT' | 'RETRYABLE' | 'RECONCILIATION_REQUIRED' | 'TERMINAL';
 export type PublisherPlatformId = 'fake-platform' | 'douyin' | 'wechat-channels';
 export interface PublisherCredential { accessToken?: string; refreshToken?: string; clientKey?: string; clientSecret?: string; openId?: string; }
