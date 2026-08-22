@@ -7,7 +7,7 @@ const pnpmCommand = 'pnpm';
 const databaseUrl = process.env.CONTENTOS_OPERATOR_DATABASE_URL ?? process.env.DATABASE_URL ?? 'postgresql://contentos_dev@127.0.0.1:55433/contentos_operator_dev';
 const commonEnv = {
   ...process.env,
-  NODE_ENV: 'development',
+  NODE_ENV: 'development' as const,
   DATABASE_URL: databaseUrl,
   STORAGE_ROOT: process.env.STORAGE_ROOT ?? resolve(root, 'storage/local'),
   FFMPEG_PATH: process.env.FFMPEG_PATH ?? 'ffmpeg',
