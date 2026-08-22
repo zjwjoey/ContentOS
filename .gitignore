@@ -11,3 +11,5 @@ research/repos/
 *.mp4
 *.wav
 *.part*
+apps/web/.next/
+apps/web/next-env.d.ts

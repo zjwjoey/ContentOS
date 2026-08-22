@@ -21,6 +21,7 @@ export function registerDirectorV1Routes(app: FastifyInstance, deps: DirectorRou
     const input = ctaGoal === undefined ? briefFields : { ...briefFields, ctaGoal };
     try { return reply.code(201).send(await deps.director.createBrief((request.params as { projectId: string }).projectId, input)); } catch (error) { return failure(reply, 404, 'DIRECTOR_PROJECT_NOT_FOUND', error instanceof Error ? error.message : 'Project not found'); }
   });
+  app.get('/api/v1/projects/:projectId/director/brief/current', async (request, reply) => { const pair = await deps.director.getCurrentPair((request.params as { projectId: string }).projectId); return pair.brief ? pair.brief : failure(reply, 404, 'DIRECTOR_BRIEF_NOT_FOUND', 'No current Brief'); });
   app.post('/api/v1/projects/:projectId/scripts/generate', async (request, reply) => {
     const projectId = (request.params as { projectId: string }).projectId; const parsed = generateInput.safeParse(request.body); if (!parsed.success) return validation(reply, 'Invalid Script generation input', parsed.error.issues);
     try {

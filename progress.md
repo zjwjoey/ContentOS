@@ -199,3 +199,5 @@
 - Task 8 is next: carry approved Script/Storyboard IDs through Video Job, Manifest and Render metadata.
 - Task 8 complete: extended `EDIT_MANIFEST_V0` compatibly, added V1 Director→Video current-pair bridge, and preserved metadata through Planner/Video Render diagnostics without changing renderer behavior. Provenance/regression gate: **8 passed, 0 failed**; typecheck passed.
 - Task 9 is next: minimal API-backed Director Operator UI.
+- Task 9 complete: added Next Operator project list and Director page with Brief form, Job state, Script/Storyboard revision lists, accept/manual revision/approve actions, API rewrite and static smoke coverage. Web gate: Next production build passed; root typecheck passed; UI smoke **1 passed, 0 failed**.
+- Task 10 is next: full fake-provider Director→Video E2E, quality backlog and final verification report.
