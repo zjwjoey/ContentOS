@@ -108,6 +108,8 @@ test('Publisher service guards transitions, appends attempts and deduplicates ex
     const requestId = fixtureResult.request.request.id;
     await fixtureResult.publisher.transitionRequest(requestId, 'SCHEDULED');
     await fixtureResult.publisher.transitionRequest(requestId, 'QUEUED');
+    const queuedAgain = await fixtureResult.publisher.transitionRequest(requestId, 'QUEUED');
+    assert.equal(queuedAgain.status, 'QUEUED');
     await fixtureResult.publisher.transitionRequest(requestId, 'PUBLISHING');
     assert.throws(() => fixtureResult.publisher.assertTransition('PUBLISHED', 'QUEUED'), /Invalid Publisher request transition/);
     const attempt = await fixtureResult.publisher.startAttempt({ requestId, revisionId: fixtureResult.request.revision.id, operation: 'PUBLISH', jobId: null, jobAttemptId: null });

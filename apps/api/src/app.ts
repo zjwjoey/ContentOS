@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Pool } from 'pg';
 import { ProjectService } from '../../../packages/modules/project/src/index.js';
+import { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
 import { DirectorService } from '../../../packages/modules/director/src/index.js';
 import { DirectorVideoService, VideoService } from '../../../packages/modules/video/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
@@ -35,7 +36,7 @@ export async function buildApi(db: Pool): Promise<FastifyInstance> {
   const directorV1 = new DirectorV1Service(db);
   const jobs = new JobService(db);
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
-  registerPublisherRoutes(app, { projects, publisher: new PublisherService(db), approvals, jobs });
+  registerPublisherRoutes(app, { projects, publisher: new PublisherService(db), approvals, assets: new AssetCatalogService(db), jobs });
   registerApprovalRoutes(app, { projects, approvals });
   app.get('/health', async () => ({ status: 'ok' }));
   app.post('/api/v1/projects', async (request, reply) => {
@@ -102,11 +103,7 @@ export async function buildApi(db: Pool): Promise<FastifyInstance> {
     const projectId = (request.params as { id: string }).id;
     const parsed = reviewInput.safeParse(request.body);
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid review decision', details: parsed.error.issues } });
-    try { return reply.code(201).send(await reviews.create({ projectId, ...parsed.data })); }
-    catch (error) {
-      const message = error instanceof Error ? error.message : 'Review decision rejected';
-      return reply.code(message.includes('not found') ? 404 : 422).send({ error: { code: 'REVIEW_VALIDATION_ERROR', message, details: [] } });
-    }
+    return reply.code(410).send({ error: { code: 'REVIEW_LEGACY_READ_ONLY', message: 'Pre-publish decisions must use the Approval Gate', details: [] } });
   });
   app.get('/api/v1/projects/:id/reviews/:targetType/:targetId/current', async (request, reply) => {
     const params = request.params as { id: string; targetType: string; targetId: string };
@@ -121,16 +118,14 @@ export async function buildApi(db: Pool): Promise<FastifyInstance> {
     const targetType = z.enum(['RENDER', 'PUBLISH']).safeParse(params.targetType);
     const parsed = reviewActionInput.safeParse(request.body);
     if (!targetType.success || !parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid review approval', details: [...(targetType.success ? [] : targetType.error.issues), ...(parsed.success ? [] : parsed.error.issues)] } });
-    try { return await reviews.approve(params.id, targetType.data, params.targetId, parsed.data.reviewer); }
-    catch (error) { return reply.code(409).send({ error: { code: 'REVIEW_TRANSITION_CONFLICT', message: error instanceof Error ? error.message : 'Review transition conflict', details: [] } }); }
+    return reply.code(410).send({ error: { code: 'REVIEW_LEGACY_READ_ONLY', message: 'Pre-publish decisions must use the Approval Gate', details: [] } });
   });
   app.post('/api/v1/projects/:id/reviews/:targetType/:targetId/reject', async (request, reply) => {
     const params = request.params as { id: string; targetType: string; targetId: string };
     const targetType = z.enum(['RENDER', 'PUBLISH']).safeParse(params.targetType);
     const parsed = reviewActionInput.safeParse(request.body);
     if (!targetType.success || !parsed.success || !parsed.data.reason) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'A rejection reason is required', details: [...(targetType.success ? [] : targetType.error.issues), ...(parsed.success ? [] : parsed.error.issues)] } });
-    try { return await reviews.reject(params.id, targetType.data, params.targetId, parsed.data.reviewer, parsed.data.reason); }
-    catch (error) { return reply.code(409).send({ error: { code: 'REVIEW_TRANSITION_CONFLICT', message: error instanceof Error ? error.message : 'Review transition conflict', details: [] } }); }
+    return reply.code(410).send({ error: { code: 'REVIEW_LEGACY_READ_ONLY', message: 'Pre-publish decisions must use the Approval Gate', details: [] } });
   });
   app.setErrorHandler((error, _request, reply) => reply.code(500).send({ error: serializeError(error, 'InfrastructureError', 'api') }));
   return app;

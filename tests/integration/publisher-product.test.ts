@@ -71,3 +71,20 @@ test('Publisher product aggregate rejects a request from another project', async
     await db.end();
   }
 });
+
+test('Publisher aggregate exposes a stable human-action state after auth failure', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  try {
+    const data = await fixture(db);
+    projectId = data.projectId;
+    const attempt = await data.publisher.startAttempt({ requestId: data.request.request.id, revisionId: data.request.revision.id, operation: 'PUBLISH', jobId: null, jobAttemptId: null });
+    await data.publisher.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'AUTH_EXPIRED', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'AUTH_EXPIRED' } });
+    const aggregate = await data.publisher.getRequestAggregate(projectId, data.request.request.id);
+    assert.equal(aggregate?.nextAction, 'NEEDS_HUMAN_ACTION');
+    assert.equal(aggregate?.attempts.at(-1)?.failureCode, 'AUTH_EXPIRED');
+  } finally {
+    if (projectId) await cleanup(db, projectId);
+    await db.end();
+  }
+});

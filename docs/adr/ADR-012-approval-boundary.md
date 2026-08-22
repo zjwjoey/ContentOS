@@ -15,7 +15,7 @@ Publisher queueing checks the Approval contract for the exact `PublishRevision`.
 
 ## Compatibility boundary
 
-The pre-freeze `review_decisions` table and `/reviews` routes remain only as legacy compatibility surfaces for existing V0 clients and historical tests. New Publisher API, UI, Worker and documentation use `approval_decisions` and `/approvals`. No new feature may add writes to the legacy approval path.
+The pre-freeze `review_decisions` table remains historical data, and `/reviews` remains a read-only compatibility surface for existing V0 clients and historical tests. Its write routes return `REVIEW_LEGACY_READ_ONLY`; no new feature may add writes to that path. New Publisher API, UI, Worker and documentation use `approval_decisions` and `/approvals`.
 
 ## Consequences
 

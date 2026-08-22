@@ -15,6 +15,21 @@ async function setup() {
   return db;
 }
 
+test('Job idempotent creation returns one record for concurrent duplicate requests', async () => {
+  const db = await setup();
+  try {
+    const service = new JobService(db);
+    const input = { type: 'PUBLISH', projectId: null, payload: { value: 1 }, idempotencyKey: 'job-integration-idempotent', maxAttempts: 3 };
+    const [first, second] = await Promise.all([
+      service.createIdempotent({ ...input, id: 'job-integration-idempotent-a' }),
+      service.createIdempotent({ ...input, id: 'job-integration-idempotent-b' }),
+    ]);
+    assert.equal(first.id, second.id);
+    const rows = await db.query('select id from jobs where idempotency_key = $1', [input.idempotencyKey]);
+    assert.equal(rows.rowCount, 1);
+  } finally { await db.end(); }
+});
+
 test('Job claim, attempt history, success and duplicate delivery are idempotent', async () => {
   const db = await setup();
   try {

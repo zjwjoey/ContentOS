@@ -43,7 +43,8 @@ export interface CreatePublisherRequestInput {
   revision: PublisherRevisionInput;
 }
 
-export interface PublisherRequestAggregate { request: PublisherRequest; revision: PublisherRequestRevision; }
+export type PublisherNextAction = 'NEEDS_HUMAN_ACTION';
+export interface PublisherRequestAggregate { request: PublisherRequest; revision: PublisherRequestRevision; attempts: PublisherAttempt[]; nextAction: PublisherNextAction | null; }
 
 export interface PublisherPublishJobPayload {
   projectId: string;
@@ -165,13 +166,13 @@ export class PublisherService {
         const request = mapRequest(existing.rows[0] as Record<string, unknown>);
         const revision = await client.query('select * from publisher_request_revisions where id = $1', [request.currentRevisionId]);
         await client.query('commit');
-        return { request, revision: mapRevision(revision.rows[0] as Record<string, unknown>) };
+        return { request, revision: mapRevision(revision.rows[0] as Record<string, unknown>), attempts: [], nextAction: null };
       }
       const revisionId = `publisher-revision-${randomUUID()}`;
       const revision = await client.query('insert into publisher_request_revisions (id, request_id, revision, asset_id, asset_checksum, title, description, desired_publish_at, created_by) values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning *', [revisionId, id, 1, input.revision.assetId, input.revision.assetChecksum, input.revision.title, input.revision.description, input.revision.desiredPublishAt, input.revision.createdBy]);
       const updated = await client.query('update publisher_requests set current_revision_id = $2, desired_publish_at = $3, updated_at = now() where id = $1 returning *', [id, revisionId, input.revision.desiredPublishAt]);
       await client.query('commit');
-      return { request: mapRequest(updated.rows[0] as Record<string, unknown>), revision: mapRevision(revision.rows[0] as Record<string, unknown>) };
+      return { request: mapRequest(updated.rows[0] as Record<string, unknown>), revision: mapRevision(revision.rows[0] as Record<string, unknown>), attempts: [], nextAction: null };
     } catch (error) { await rollback(client); throw error; }
     finally { client.release(); }
   }
@@ -190,6 +191,7 @@ export class PublisherService {
     const result = await this.db.query('select p.*, r.id as revision_id, r.request_id as revision_request_id, r.revision, r.asset_id, r.asset_checksum, r.title, r.description, r.desired_publish_at as revision_desired_publish_at, r.created_by, r.created_at as revision_created_at from publisher_requests p left join publisher_request_revisions r on r.id = p.current_revision_id where p.project_id = $1 and p.id = $2', [projectId, requestId]);
     const row = result.rows[0] as Record<string, unknown> | undefined;
     if (!row || !row.revision_id) return null;
+    const attempts = await this.listAttempts(requestId);
     return {
       request: mapRequest(row),
       revision: mapRevision({
@@ -204,6 +206,8 @@ export class PublisherService {
         created_by: row.created_by,
         created_at: row.revision_created_at,
       }),
+      attempts,
+      nextAction: attempts.some((attempt) => attempt.failureClassification === 'HUMAN_ACTION_REQUIRED') ? 'NEEDS_HUMAN_ACTION' : null,
     };
   }
 
@@ -255,6 +259,7 @@ export class PublisherService {
       const current = await client.query('select * from publisher_requests where id = $1 for update', [id]);
       if (!current.rowCount) throw new Error('Publisher request not found');
       const from = String(current.rows[0].status) as PublisherRequestStatus;
+      if (from === to) { await client.query('commit'); return mapRequest(current.rows[0] as Record<string, unknown>); }
       assertPublisherRequestTransition(from, to);
       const updated = await client.query('update publisher_requests set status = $2, failure_code = $3, failure_message = $4, published_at = case when $2 = \'PUBLISHED\' then now() else published_at end, updated_at = now() where id = $1 returning *', [id, to, failure?.code || null, failure?.message || null]);
       await client.query('commit');

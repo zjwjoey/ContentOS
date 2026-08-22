@@ -2,7 +2,7 @@
 
 ## Boundary
 
-Publisher owns destinations, account references, platform capability profiles, publishing requests, schedules, attempts and confirmed external post references. It is the only module that creates `PUBLISH` jobs. It does not execute a browser; the Publisher Worker does. Pre-publish eligibility is owned by the separate Approval Gate contract; post-publish metrics are owned by Review.
+Publisher owns destinations, account references, platform capability profiles, publishing requests, schedules, attempts and confirmed external post references. It is the only module that creates `PUBLISH` and `PUBLISH_RECONCILE` jobs. It does not execute a browser; the Publisher Worker does. Pre-publish eligibility is owned by the separate Approval Gate contract; post-publish metrics are owned by Review.
 
 The foundation persistence is private to Publisher: `publisher_accounts`, `publisher_requests`, `publisher_request_revisions`, `publisher_attempts` and `publisher_external_posts`. Other modules use public service contracts and never read these tables directly.
 
@@ -24,7 +24,7 @@ Platform adapters publish a capability profile: supported media types, title/des
 
 Publish requests move through `DRAFT -> SCHEDULED -> QUEUED -> PUBLISHING -> PUBLISHED | FAILED | CANCELLED`, with `RECONCILING` as the mandatory state after an uncertain external side effect. Attempts are separate historical records and request revisions are immutable. The worker receives `publishRequestId` and a snapshot revision, then revalidates account state, asset checksum and schedule window.
 
-The `0009_publisher_foundation` migration protects enum values, revision numbering, request idempotency and external-post uniqueness. `PublisherService` locks the request aggregate before transitions, creates one stable request idempotency key, and requires a reconciliation result before another publish attempt after an unknown outcome.
+The `0009_publisher_foundation` migration protects enum values, revision numbering, request idempotency and external-post uniqueness. `PublisherService` locks the request aggregate before transitions, creates one stable request idempotency key, and requires a reconciliation result before another publish attempt after an unknown outcome. `PUBLISH_RECONCILE` is a durable worker path, not an in-process callback.
 
 ## Browser automation constraints
 
@@ -36,4 +36,4 @@ Adapters normalize at least `AUTH_EXPIRED`, `REQUIRES_VERIFICATION`, `PLATFORM_C
 
 ## Dependencies
 
-Publisher reads validated rendered Asset metadata through Asset and Project metadata snapshots through Project. It depends on Job for delivery, Approval for pre-publish gates and Review only through a metric-collection contract. It must not depend on Video implementation, FFmpeg, Director planning or AI provider SDKs.
+Publisher reads validated rendered Asset metadata through the public Asset contract and Project metadata snapshots through Project. It depends on Job for delivery, Approval for pre-publish gates and Review only through a metric-collection contract. It must not depend on Video implementation, FFmpeg, Director planning or AI provider SDKs.
