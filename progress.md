@@ -208,6 +208,11 @@
 ## Session: 2026-08-22 — Project Center design
 
 ### Phase 18: Slice ③ design
+- **Status:** Slice ③ implementation complete; Slice ④、⑤、⑥ remain closed.
+- Added ProjectCenterSnapshot Contract, safe Job summary query, deterministic rules, GET center API, project-list handoff and A3+B2+C1 desktop/compact Web page.
+- Isolated PostgreSQL verification: DATABASE_URL on 55433/contentos_project_center_dev with pnpm test — 122 passed, 0 failed.
+- Additional gates: pnpm typecheck passed; pnpm lint passed; pnpm --dir apps/web build passed; git diff --check passed.
+- pnpm format remains blocked by the repository existing Windows CRLF checkout; the same baseline failure reproduces in publisher-project-integration; no Slice ③-specific trailing whitespace was found.
 - **Status:** design written; waiting for user review before implementation planning.
 - Created visual companion screens under `.superpowers/brainstorm/456-1787388765/content/` and confirmed the user choices A3 + B2 + C1.
 - Wrote and committed `docs/superpowers/specs/2026-08-22-project-center-design.md` in feature worktree `E:\\ContentOS\\.worktrees\\project-center` (commit `c319e62`).

@@ -65,3 +65,10 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - 现有 Project、Director、AssetCatalog、Publisher、Approval 服务已有公开查询；JobService 需要最小的项目范围安全查询能力才能支持总控摘要。
 - 视觉方案已由用户确认：A3 健康度+待处理混合、B2 左侧阶段栏、C1 状态摘要+快捷动作。
 - 健康度不能使用模糊评分，应由明确的阶段和阻塞规则推导。
+
+## ContentOS Slice ③ Verification Findings — 2026-08-22
+
+- Project Center 是 API 组合层，只调用 Project、Director、AssetCatalog、Job、Approval、Publisher 的公开服务；没有新增事实表和跨模块私表 SQL。
+- JobService 新增项目范围安全摘要查询，只选择 id、project_id、type、state、attempt_count、max_attempts、created_at，避免 payload、错误诊断、lease 和进度进入浏览器。
+- 健康度按 BLOCKED、COMPLETE、ATTENTION、HEALTHY 的确定性优先级推导，覆盖空项目、Director 已批准、Render 失败、Approval 待处理、Publisher 人工动作和确认发布。
+- 独立 PostgreSQL 55433 数据库全量测试通过；共享 contentos_dev 因历史分支遗留 publisher_publication_states 表会使既有 Publisher migration 断言失败，未修改共享库。
