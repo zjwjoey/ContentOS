@@ -13,3 +13,5 @@ export { WeChatChannelsPlaywrightAdapter } from './wechat-channels-playwright-ad
 export { defaultWeChatChannelsSelectors } from './wechat-channels-selectors.js';
 export type { WeChatChannelsAdapterOptions } from './wechat-channels-playwright-adapter.js';
 export type { WeChatChannelsSelectorProfile } from './wechat-channels-selectors.js';
+export { PublisherAdapterRegistry, createPublisherHandler } from './publisher-registry.js';
+export type { PublisherHandlerOptions, PublisherJobPayload, ReviewApprovalProvider } from './publisher-registry.js';
