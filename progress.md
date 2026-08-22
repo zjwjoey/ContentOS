@@ -213,4 +213,3 @@
 - Wrote and committed `docs/superpowers/specs/2026-08-22-project-center-design.md` in feature worktree `E:\\ContentOS\\.worktrees\\project-center` (commit `c319e62`).
 - Design defines a read-only `ProjectCenterSnapshot` composite contract, `GET /api/v1/projects/:projectId/center`, deterministic health/stage rules, no new Project Center persistence, and no private-table access.
 - A planning-file preservation correction is pending: historical contents of `task_plan.md`, `findings.md`, and `progress.md` must remain intact while appending Slice ③ records.
-

@@ -181,4 +181,3 @@ Architecture V0 — formal design documentation and self-review.
 - [ ] 添加 API、规则、Web 回归测试并执行完整 Gate。
 
 约束：基于已验收分支 `codex/publisher-project-integration`；不跨读模块私表；不在 Project Center 重复执行模块写操作；不启动 Slice ④、⑤、⑥。
-

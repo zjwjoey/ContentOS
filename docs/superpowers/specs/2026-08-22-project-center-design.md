@@ -1,7 +1,7 @@
 # ContentOS Project Center V0 Design
 
-日期：2026-08-22  
-状态：待用户审阅  
+日期：2026-08-22
+状态：待用户审阅
 基线：Slice ② `Publisher → Content Project` 已通过正式验收
 
 ## 1. 目标
