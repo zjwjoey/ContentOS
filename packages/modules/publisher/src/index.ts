@@ -7,3 +7,5 @@ export { DouyinOpenApiAdapter, InMemoryPublishStateStore } from './douyin-open-a
 export type { DouyinEndpointProfile, PublishStateStore } from './douyin-open-api-adapter.js';
 export { FetchDouyinHttpTransport } from './douyin-http.js';
 export type { DouyinHttpRequest, DouyinHttpTransport } from './douyin-http.js';
+export { withBrowserSession } from './browser-session.js';
+export type { BrowserPage, BrowserSession, BrowserSessionFactory } from './browser-session.js';
