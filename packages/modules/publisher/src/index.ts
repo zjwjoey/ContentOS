@@ -3,3 +3,7 @@ export type { FakeOutcome } from './fake-publisher.js';
 export { EnvironmentCredentialProvider } from './credential-provider.js';
 export type { CredentialProvider } from './credential-provider.js';
 export type { PublisherFailureCode, PublisherPlatformId } from '../../../contracts/src/index.js';
+export { DouyinOpenApiAdapter, InMemoryPublishStateStore } from './douyin-open-api-adapter.js';
+export type { DouyinEndpointProfile, PublishStateStore } from './douyin-open-api-adapter.js';
+export { FetchDouyinHttpTransport } from './douyin-http.js';
+export type { DouyinHttpRequest, DouyinHttpTransport } from './douyin-http.js';
