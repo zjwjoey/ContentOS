@@ -39,8 +39,8 @@ test('Publisher API creates project-scoped account and request', async () => {
   try {
     const data = await fixture(db);
     projectId = data.projectId;
-    const accountResponse = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/publisher/accounts`, payload: { platformId: 'fake-platform', displayName: `Operator Fake ${randomUUID()}`, credentialRef: 'fake-credential:operator', profileKey: `operator-${randomUUID()}`, status: 'READY', capabilitySnapshot: { platformId: 'fake-platform', mediaTypes: ['video/mp4'], scheduling: false, requiresHumanConfirmation: false } } });
-    assert.equal(accountResponse.statusCode, 201);
+    const accountResponse = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/publisher/accounts`, payload: { platformId: 'fake-platform', displayName: `Operator Fake ${randomUUID()}`, status: 'READY', capabilitySnapshot: { platformId: 'fake-platform', mediaTypes: ['video/mp4'], scheduling: false, requiresHumanConfirmation: false } } });
+    assert.equal(accountResponse.statusCode, 201, accountResponse.body);
     const requestResponse = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/publisher/requests`, payload: { accountId: data.accountId, idempotencyKey: `publisher-api-${randomUUID()}`, correlationId: `correlation-${randomUUID()}`, revision: { assetId: data.assetId, assetChecksum: data.checksum, title: 'API 发布', description: '描述', desiredPublishAt: null, createdBy: 'operator' } } });
     assert.equal(requestResponse.statusCode, 201);
     const request = requestResponse.json() as { request: { id: string; projectId: string; status: string }; revision: { title: string } };

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { JobService } from '../../../packages/modules/job/src/index.js';
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
@@ -15,8 +16,8 @@ const capabilityProfile = z.object({
 const accountInput = z.object({
   platformId: z.string().trim().min(1).max(80),
   displayName: z.string().trim().min(1).max(200),
-  credentialRef: z.string().trim().min(1).max(200),
-  profileKey: z.string().trim().min(1).max(200),
+  credentialRef: z.string().trim().min(1).max(200).optional(),
+  profileKey: z.string().trim().min(1).max(200).optional(),
   status: z.enum(['UNVERIFIED', 'READY', 'REAUTH_REQUIRED', 'SUSPENDED', 'DISABLED']).optional(),
   capabilitySnapshot: capabilityProfile,
 });
@@ -44,6 +45,10 @@ export interface PublisherRouteDependencies {
 
 function projectIdOf(request: { params: unknown }): string { return (request.params as { projectId: string }).projectId; }
 function requestIdOf(request: { params: unknown }): string { return (request.params as { requestId: string }).requestId; }
+function safeAccount<T extends { credentialRef: string; profileKey: string }>(account: T): Omit<T, 'credentialRef' | 'profileKey'> {
+  const { credentialRef: _credentialRef, profileKey: _profileKey, ...safe } = account;
+  return safe;
+}
 
 export function registerPublisherRoutes(app: FastifyInstance, dependencies: PublisherRouteDependencies): void {
   const { projects, publisher, reviews, jobs } = dependencies;
@@ -51,7 +56,7 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
   app.get('/api/v1/projects/:projectId/publisher/accounts', async (request, reply) => {
     const projectId = projectIdOf(request);
     if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
-    return { items: await publisher.listAccounts(projectId) };
+    return { items: (await publisher.listAccounts(projectId)).map(safeAccount) };
   });
 
   app.post('/api/v1/projects/:projectId/publisher/accounts', async (request, reply) => {
@@ -59,8 +64,10 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
     const parsed = accountInput.safeParse(request.body);
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Publisher account input', details: parsed.error.issues } });
-    const { status, ...input } = parsed.data;
-    try { return reply.code(201).send(await publisher.createAccount({ projectId, ...input, ...(status ? { status } : {}) })); }
+    const { status, credentialRef, profileKey, ...input } = parsed.data;
+    if (input.platformId !== 'fake-platform' && (!credentialRef || !profileKey)) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'A non-Fake account requires server-managed references', details: [] } });
+    const createInput = { projectId, ...input, credentialRef: credentialRef || `fake-credential:${randomUUID()}`, profileKey: profileKey || `fake-profile-${randomUUID()}`, ...(status ? { status } : {}) };
+    try { return reply.code(201).send(safeAccount(await publisher.createAccount(createInput))); }
     catch (error) { return reply.code(409).send({ error: { code: 'PUBLISHER_ACCOUNT_CONFLICT', message: error instanceof Error ? error.message : 'Publisher account conflict', details: [] } }); }
   });
 
