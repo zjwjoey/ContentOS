@@ -18,6 +18,16 @@ class FailingProjectSyncService extends ProjectService {
   async syncPublishingStatus(): Promise<never> { throw new Error('project sync unavailable'); }
 }
 
+class FailOnProjectSyncCallService extends ProjectService {
+  private syncCalls = 0;
+  constructor(db: ConstructorParameters<typeof ProjectService>[0], private readonly failOnCall: number) { super(db); }
+  async syncPublishingStatus(projectId: string, facts: { hasPublishableAsset: boolean; publishedRequestCount: number }) {
+    this.syncCalls += 1;
+    if (this.syncCalls === this.failOnCall) throw new Error(`project sync unavailable on call ${this.failOnCall}`);
+    return super.syncPublishingStatus(projectId, facts);
+  }
+}
+
 async function fixture(db: Awaited<ReturnType<typeof createDatabase>>, outcome: ConstructorParameters<typeof FakePublisherAdapter>[0] = 'SUCCESS') {
   await migrateUp(db);
   const project = await new ProjectService(db).create(`Publisher Worker ${randomUUID()}`);
@@ -86,6 +96,28 @@ test('Publisher development runner polls queued PUBLISH Jobs', async () => {
     const completed = await data.jobs.get(data.job.id);
     assert.equal(completed?.state, 'SUCCEEDED', JSON.stringify(completed));
   } finally { if (runner) await runner.stop('test'); if (projectId) await cleanup(db, projectId, root); await db.end(); }
+});
+
+test('Publisher Worker repairs Project state when publish succeeds before a transient Project sync failure', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  let root = '';
+  try {
+    const data = await fixture(db);
+    projectId = data.projectId; root = data.root;
+    const projects = new FailOnProjectSyncCallService(db, 1);
+    const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, projects, assets: data.assets, fakePublisher: data.fake, workerId: 'publisher-worker-project-sync-retry' });
+    await worker.start();
+    const first = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
+    assert.equal(first.state, 'RETRY_WAIT');
+    assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'PUBLISHED');
+    assert.equal((await projects.get(data.projectId))?.status, 'DRAFT');
+    await data.jobs.requeue(data.job.id);
+    const second = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
+    assert.equal(second.state, 'SUCCEEDED');
+    assert.equal((await projects.get(data.projectId))?.status, 'PUBLISHED');
+    await worker.shutdown('test');
+  } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
 });
 
 test('Publisher Worker revalidates the project-owned READY asset before publishing', async () => {
@@ -186,6 +218,33 @@ test('Publisher Worker preserves a durable reconcile job when project sync fails
     const reconcileJob = await data.jobs.getByIdempotencyKey(`publisher:reconcile:${data.requestId}:${revisionId}`);
     assert.ok(reconcileJob, 'reconcile job must exist even when project sync fails');
     assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'RECONCILING');
+    await worker.shutdown('test');
+  } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
+});
+
+test('Publisher Worker repairs Project state when reconciliation succeeds before a transient Project sync failure', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  let root = '';
+  try {
+    const data = await fixture(db, 'BROWSER_CRASH');
+    projectId = data.projectId; root = data.root;
+    const projects = new FailOnProjectSyncCallService(db, 2);
+    const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, projects, assets: data.assets, fakePublisher: data.fake, workerId: 'publisher-worker-reconcile-sync-retry' });
+    await worker.start();
+    const publish = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
+    assert.equal(publish.state, 'SUCCEEDED');
+    const revisionId = (data.job.payload as { revisionId: string }).revisionId;
+    const reconcileJob = await data.jobs.getByIdempotencyKey(`publisher:reconcile:${data.requestId}:${revisionId}`);
+    assert.ok(reconcileJob);
+    const firstReconcile = await worker.execute('PUBLISH_RECONCILE', { jobId: reconcileJob.id }) as { state: string };
+    assert.equal(firstReconcile.state, 'RETRY_WAIT');
+    assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'PUBLISHED');
+    assert.equal((await projects.get(data.projectId))?.status, 'READY_TO_PUBLISH');
+    await data.jobs.requeue(reconcileJob.id);
+    const secondReconcile = await worker.execute('PUBLISH_RECONCILE', { jobId: reconcileJob.id }) as { state: string };
+    assert.equal(secondReconcile.state, 'SUCCEEDED');
+    assert.equal((await projects.get(data.projectId))?.status, 'PUBLISHED');
     await worker.shutdown('test');
   } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
 });

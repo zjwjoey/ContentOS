@@ -53,6 +53,10 @@ async function executePublish(service: PublisherService, jobs: JobService, proje
   const payload = payloadFromJob(job);
   const aggregate = await service.getRequestAggregate(payload.projectId, payload.requestId);
   if (!aggregate || aggregate.revision.id !== payload.revisionId) throw new PublisherHandlerError('PUBLISH_REQUEST_NOT_FOUND', 'Publisher request revision is not available', false);
+  if (aggregate.request.status === 'PUBLISHED') {
+    await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
+    return { status: 'PUBLISHED', requestId: payload.requestId };
+  }
   const account = await service.getAccount(payload.projectId, payload.accountId);
   if (!account || account.platformId !== payload.platformId) throw new PublisherHandlerError('PUBLISH_ACCOUNT_NOT_FOUND', 'Publisher account is not available', false);
   if (aggregate.request.status === 'RECONCILING') {
@@ -108,9 +112,12 @@ async function executeReconcile(service: PublisherService, projects: ProjectServ
   const payload = payloadFromJob(job);
   const aggregate = await service.getRequestAggregate(payload.projectId, payload.requestId);
   if (!aggregate || aggregate.revision.id !== payload.revisionId) throw new PublisherHandlerError('RECONCILE_REQUEST_NOT_FOUND', 'Publisher request revision is not available', false);
+  if (aggregate.request.status === 'PUBLISHED') {
+    await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
+    return { status: 'PUBLISHED', requestId: payload.requestId };
+  }
   const account = await service.getAccount(payload.projectId, payload.accountId);
   if (!account || account.platformId !== payload.platformId) throw new PublisherHandlerError('RECONCILE_ACCOUNT_NOT_FOUND', 'Publisher account is not available', false);
-  if (aggregate.request.status === 'PUBLISHED') return { status: 'PUBLISHED', requestId: payload.requestId };
   if (aggregate.request.status !== 'RECONCILING') throw new PublisherHandlerError('RECONCILE_REQUEST_NOT_READY', `Publisher request is ${aggregate.request.status}`, false);
 
   const attempt = await service.startAttempt({ requestId: payload.requestId, revisionId: payload.revisionId, operation: 'RECONCILE', jobId: job.id, jobAttemptId });

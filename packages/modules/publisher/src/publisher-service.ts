@@ -254,7 +254,7 @@ export class PublisherService {
         created_at: row.revision_created_at,
       }),
       attempts,
-      nextAction: attempts.some((attempt) => attempt.failureClassification === 'HUMAN_ACTION_REQUIRED') ? 'NEEDS_HUMAN_ACTION' : null,
+      nextAction: attempts.at(-1)?.failureClassification === 'HUMAN_ACTION_REQUIRED' ? 'NEEDS_HUMAN_ACTION' : null,
     };
   }
 

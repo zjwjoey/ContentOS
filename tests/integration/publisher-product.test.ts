@@ -89,6 +89,23 @@ test('Publisher aggregate exposes a stable human-action state after auth failure
   }
 });
 
+test('Publisher aggregate clears a human-action next action after a newer attempt', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  try {
+    const data = await fixture(db);
+    projectId = data.projectId;
+    const first = await data.publisher.startAttempt({ requestId: data.request.request.id, revisionId: data.request.revision.id, operation: 'PUBLISH', jobId: null, jobAttemptId: null });
+    await data.publisher.finishAttempt(first.id, { status: 'FAILED', failureCode: 'AUTH_EXPIRED', failureClassification: 'HUMAN_ACTION_REQUIRED' });
+    const second = await data.publisher.startAttempt({ requestId: data.request.request.id, revisionId: data.request.revision.id, operation: 'PUBLISH', jobId: null, jobAttemptId: null });
+    await data.publisher.finishAttempt(second.id, { status: 'FAILED', failureCode: 'NETWORK_ERROR', failureClassification: 'RETRYABLE' });
+    assert.equal((await data.publisher.getRequestAggregate(projectId, data.request.request.id))?.nextAction, null);
+  } finally {
+    if (projectId) await cleanup(db, projectId);
+    await db.end();
+  }
+});
+
 test('Publisher idempotency rejects a reused key with different request input', async () => {
   const db = await createDatabase(databaseUrl);
   let projectId = '';
