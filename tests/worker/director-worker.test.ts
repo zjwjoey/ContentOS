@@ -9,6 +9,7 @@ import { FakeAIProvider } from '../../packages/modules/ai/src/fake-provider.js';
 import { PromptRegistry } from '../../packages/modules/ai/src/prompt-registry.js';
 import { JobService } from '../../packages/modules/job/src/index.js';
 import { createDirectorWorker, type DirectorWorkerDependencies } from '../../workers/director-worker/src/main.js';
+import { createDirectorDevRunner } from '../../workers/director-worker/src/dev-main.js';
 import type { ModelProfile } from '../../packages/contracts/src/index.js';
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55432/contentos_dev';
@@ -47,6 +48,39 @@ test('Director jobs enqueue work and worker creates idempotent Script and Storyb
     await db.query('delete from director_project_state where project_id = $1', [project.id]);
     await db.query('delete from director_storyboard_revisions where project_id = $1', [project.id]);
     await db.query('delete from director_storyboards where project_id = $1', [project.id]);
+    await db.query('delete from director_script_revisions where project_id = $1', [project.id]);
+    await db.query('delete from director_scripts where project_id = $1', [project.id]);
+    await db.query('delete from director_briefs where project_id = $1', [project.id]);
+    await db.query('delete from ai_runs where project_id = $1', [project.id]);
+    await db.query('delete from job_events where job_id in (select id from jobs where project_id = $1)', [project.id]);
+    await db.query('delete from job_attempts where job_id in (select id from jobs where project_id = $1)', [project.id]);
+    await db.query('delete from jobs where project_id = $1', [project.id]);
+    await db.query('delete from content_projects where id = $1', [project.id]); await db.end();
+  }
+});
+
+test('local Director runner polls queued Jobs and completes Script generation', async () => {
+  const db = await createDatabase(databaseUrl); await migrateUp(db);
+  const project = await new ProjectService(db).create('Director Worker Polling');
+  const director = new DirectorV1Service(db); const jobs = new JobService(db); const jobService = new DirectorJobService(jobs);
+  const dependencies: DirectorWorkerDependencies = { jobs, director, ai: new AIService(db, new FakeAIProvider(), new PromptRegistry(), profile), modelProfile: profile };
+  const runner = createDirectorDevRunner(dependencies, { pollIntervalMs: 10 });
+  try {
+    const brief = await director.createBrief(project.id, briefInput);
+    const script = await director.createScript(project.id, brief.id);
+    const scriptJob = await jobService.createScriptGeneration({ projectId: project.id, briefId: brief.id, scriptAggregateId: script.id, correlationId: 'corr-worker-polling' });
+    await runner.start();
+    const deadline = Date.now() + 2_000;
+    let state = await jobs.get(scriptJob.id);
+    while (state?.state !== 'SUCCEEDED' && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      state = await jobs.get(scriptJob.id);
+    }
+    assert.equal(state?.state, 'SUCCEEDED');
+    assert.equal((await director.listScriptRevisions(project.id)).length, 1);
+  } finally {
+    await runner.stop();
+    await db.query('delete from director_project_state where project_id = $1', [project.id]);
     await db.query('delete from director_script_revisions where project_id = $1', [project.id]);
     await db.query('delete from director_scripts where project_id = $1', [project.id]);
     await db.query('delete from director_briefs where project_id = $1', [project.id]);

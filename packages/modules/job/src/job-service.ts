@@ -26,6 +26,12 @@ export class JobService {
     return result.rows[0] ? mapJob(result.rows[0] as Record<string, unknown>) : null;
   }
 
+  async listRunnable(types: string[], limit = 10): Promise<JobRecord[]> {
+    if (types.length === 0 || limit <= 0) return [];
+    const result = await this.db.query('select * from jobs where type = any($1::text[]) and (state = \'QUEUED\' or (state = \'RETRY_WAIT\' and (retry_at is null or retry_at <= now()))) order by created_at, id limit $2', [types, limit]);
+    return result.rows.map((row) => mapJob(row as Record<string, unknown>));
+  }
+
   async claim(id: string, workerId: string, leaseMs: number): Promise<{ job: JobRecord; attemptId: string } | null> {
     const client = await this.db.connect();
     try {

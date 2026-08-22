@@ -2,5 +2,5 @@
   "name": "@contentos/director-worker",
   "private": true,
   "type": "module",
-  "scripts": { "start": "tsx src/main.ts" }
+  "scripts": { "dev": "tsx src/dev-main.ts", "start": "tsx src/main.ts" }
 }

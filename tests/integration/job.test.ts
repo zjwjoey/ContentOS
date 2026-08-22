@@ -64,6 +64,19 @@ test('cooperative cancellation is durable and lease reconciliation recovers cras
   } finally { await db.end(); }
 });
 
+test('runnable job query filters by type and retry readiness', async () => {
+  const db = await setup();
+  try {
+    const service = new JobService(db);
+    await service.create({ id: 'job-integration-runnable-director', type: 'DIRECTOR_GENERATE_SCRIPT', projectId: null, payload: {}, idempotencyKey: 'job-integration-runnable-director', maxAttempts: 3 });
+    await service.create({ id: 'job-integration-runnable-video', type: 'VIDEO_RENDER', projectId: null, payload: {}, idempotencyKey: 'job-integration-runnable-video', maxAttempts: 3 });
+    const directorJobs = await service.listRunnable(['DIRECTOR_GENERATE_SCRIPT']);
+    assert.ok(directorJobs.some((job) => job.id === 'job-integration-runnable-director'));
+    assert.ok(directorJobs.every((job) => job.type === 'DIRECTOR_GENERATE_SCRIPT'));
+    assert.ok((await service.listRunnable(['DIRECTOR_GENERATE_STORYBOARD'])).every((job) => job.type === 'DIRECTOR_GENERATE_STORYBOARD'));
+  } finally { await db.end(); }
+});
+
 test('pg-boss is a delivery adapter over the database Job contract', async () => {
   const delivery = new PgBossDelivery(databaseUrl);
   await delivery.start();
