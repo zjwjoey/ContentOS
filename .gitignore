@@ -13,5 +13,6 @@ research/repos/
 *.part*
 apps/web/.next/
 apps/web/next-env.d.ts
+apps/web/tsconfig.tsbuildinfo
 .worktrees/
 .superpowers/

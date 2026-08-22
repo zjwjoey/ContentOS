@@ -12,6 +12,13 @@ const profile: ModelProfile = {
   capabilities: ['TEXT', 'STRUCTURED'], maxInputCharacters: 20_000, maxOutputTokens: 2_000, enabled: true,
 };
 
+async function cleanupFixture(db: Awaited<ReturnType<typeof createDatabase>>, projectId: string, jobId: string, attemptId: string): Promise<void> {
+  await db.query('delete from ai_runs where project_id = $1', [projectId]);
+  await db.query('delete from job_attempts where id = $1', [attemptId]);
+  await db.query('delete from jobs where id = $1', [jobId]);
+  await db.query('delete from content_projects where id = $1', [projectId]);
+}
+
 test('AIService persists a safe successful AI Run with prompt/model provenance', async () => {
   const db = await createDatabase(databaseUrl);
   const projectId = 'project-ai-run-001'; const jobId = 'job-ai-run-001'; const attemptId = 'attempt-ai-run-001';
@@ -31,13 +38,12 @@ test('AIService persists a safe successful AI Run with prompt/model provenance',
     });
     assert.match(result.output, /先验证/);
     const rows = await db.query<{ provider_id: string; model_profile_id: string; prompt_version_id: string; status: string; input_snapshot: Record<string, unknown> }>('select provider_id, model_profile_id, prompt_version_id, status, input_snapshot from ai_runs where id = $1', [result.aiRunId]);
+    const catalog = await db.query<{ id: string }>('select id from ai_model_profiles where provider_id = $1 and model_id = $2', [profile.providerId, profile.modelId]);
     assert.equal(rows.rows[0]?.provider_id, 'fake');
-    assert.equal(rows.rows[0]?.model_profile_id, profile.id);
+    assert.equal(rows.rows[0]?.model_profile_id, catalog.rows[0]?.id);
     assert.equal(rows.rows[0]?.status, 'SUCCEEDED');
     assert.equal((rows.rows[0]?.input_snapshot as Record<string, unknown>).credential, undefined);
-  } finally {
-    await db.end();
-  }
+  } finally { await cleanupFixture(db, projectId, jobId, attemptId); await db.end(); }
 });
 
 test('AIService rejects invalid structured output and records a failed AI Run', async () => {
@@ -60,7 +66,5 @@ test('AIService rejects invalid structured output and records a failed AI Run', 
     const rows = await db.query<{ status: string; error: Record<string, unknown> }>('select status, error from ai_runs where job_id = $1', [jobId]);
     assert.equal(rows.rows[0]?.status, 'FAILED');
     assert.equal((rows.rows[0]?.error as Record<string, unknown>).code, 'INVALID_STRUCTURED_OUTPUT');
-  } finally {
-    await db.end();
-  }
+  } finally { await cleanupFixture(db, projectId, jobId, attemptId); await db.end(); }
 });
