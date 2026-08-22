@@ -133,11 +133,11 @@ Architecture V0 — formal design documentation and self-review.
 - [x] Record the migration-state conflict caused by sharing `contentos_dev` across unreconciled branches.
 - [x] Write and review the Director V1 professional design and implementation plan.
 - [x] Freeze the Application Worker ADR and record the Director/AI contract gate.
-- [x] Add append-only Director V1 and AI provenance migrations.
+- [x] Add append-only Director V1 and AI provenance migrations/services.
 - [x] Add fake-provider AI infrastructure and AI Run provenance service.
 - [ ] Add Director V1 API, Video provenance bridge and minimal Operator UI.
 - [ ] Run Director→Video E2E, final verification gate and report.
-- **Status:** Tasks 1–4 complete; architecture decision, contracts, 0007/0008 schema and fake-provider AI infrastructure are committed, implementation continues with Director application services.
+- **Status:** Tasks 1–5 complete; architecture decision, contracts, schema, fake-provider AI infrastructure and Director stateful services are committed, implementation continues with durable Jobs/Worker.
 
 ## Key constraints
 - Only Phase-1 projects are in scope: MatrixMedia, short-video-factory, MoneyPrinterTurbo, AutoSocial, and Postiz.

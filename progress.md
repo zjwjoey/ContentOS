@@ -191,3 +191,5 @@
 - Task 4 is next: deterministic fake AI provider, prompt registry and AI Run service.
 - Task 4 complete: added immutable PromptRegistry, deterministic Chinese FakeAIProvider, normalized provider errors and AIService persistence of success/failure `ai_runs` with bounded snapshots and provenance. Focused gate: **5 passed, 0 failed**; typecheck passed.
 - Task 5 is next: append-only Director application services and state transitions.
+- Task 5 complete: added `DirectorV1Service` with brief/script/storyboard records, state-row locking and counters, append-only manual revisions, accepted/approved transitions, current-pair pointers and mismatch guards. Focused gate: **3 passed, 0 failed**; typecheck passed.
+- Task 6 is next: idempotent Director Job creation and explicit Application Worker handlers.
