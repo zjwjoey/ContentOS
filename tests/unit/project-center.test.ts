@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveHealth, deriveStages, type ProjectCenterRuleInput } from '../../apps/api/src/project-center.js';
+import { deriveCurrentStage, deriveHealth, deriveStages, type ProjectCenterRuleInput } from '../../apps/api/src/project-center.js';
 import { JobService } from '../../packages/modules/job/src/index.js';
 
 const emptyInput: ProjectCenterRuleInput = {
@@ -56,4 +56,31 @@ test('project job summaries select only safe fields', async () => {
   assert.equal(summary[0]?.id, 'job-1');
   assert.equal('payload' in (summary[0] || {}), false);
   assert.equal('error' in (summary[0] || {}), false);
+});
+
+test('failed render job blocks project health', () => {
+  const result = deriveHealth({ ...emptyInput, hasApprovedDirector: true, jobs: [{ type: 'VIDEO_RENDER', state: 'FAILED' }] });
+  assert.equal(result.level, 'BLOCKED');
+  assert.match(result.reasons.join(' '), /失败/);
+  assert.equal(deriveStages({ ...emptyInput, hasApprovedDirector: true, jobs: [{ type: 'VIDEO_RENDER', state: 'FAILED' }] })[1]?.status, 'BLOCKED');
+});
+
+test('pending approval requires attention', () => {
+  const input = { ...emptyInput, hasApprovedDirector: true, hasReadyVideo: true, approvalStatus: 'PENDING' };
+  assert.equal(deriveHealth(input).level, 'ATTENTION');
+  assert.equal(deriveStages(input)[2]?.status, 'ACTION_REQUIRED');
+  assert.equal(deriveCurrentStage(deriveStages(input)), 'APPROVAL');
+});
+
+test('publisher human action is surfaced as blocked attention', () => {
+  const input = { ...emptyInput, projectStatus: 'READY_TO_PUBLISH', hasApprovedDirector: true, hasReadyVideo: true, approvalStatus: 'APPROVED', needsHumanActionCount: 1, publisherStatusCounts: { FAILED: 1 } };
+  assert.equal(deriveHealth(input).level, 'BLOCKED');
+  assert.equal(deriveStages(input)[3]?.status, 'ACTION_REQUIRED');
+});
+
+test('published project is complete', () => {
+  const input = { ...emptyInput, projectStatus: 'PUBLISHED', hasApprovedDirector: true, hasReadyVideo: true, approvalStatus: 'APPROVED', hasExternalPost: true, publisherStatusCounts: { PUBLISHED: 1 } };
+  assert.equal(deriveHealth(input).level, 'COMPLETE');
+  assert.equal(deriveStages(input)[3]?.status, 'COMPLETE');
+  assert.equal(deriveCurrentStage(deriveStages(input)), 'PUBLISHER');
 });
