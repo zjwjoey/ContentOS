@@ -126,7 +126,17 @@ Architecture V0 — formal design documentation and self-review.
 - [x] Implement append-only Review decisions, approval/rejection transitions and API routes.
 - [x] Run the final format/lint/typecheck/test/build/doctor gate.
 - [x] Commit and push.
-- **Status:** complete; Slices 3, 4 and 6 are implemented, verified and pushed. Slice 5 real platform adapters explicitly deferred.
+- **Status:** complete; Slices 3, 4 and 6 were implemented, verified and pushed. Slice 5 was explicitly deferred at the end of this phase and is tracked in Phase 20.
+
+### Phase 20: Slice 5 real platform adapters
+- [x] Extend the Publisher contract with platform IDs, media paths and an in-memory credential provider boundary.
+- [x] Implement the Douyin official OpenAPI-shaped adapter with injected HTTP transport, normalized failures and idempotency state.
+- [x] Implement the WeChat Channels headed Playwright adapter with isolated account profiles, selector profiles, screenshots and human-confirmation gating.
+- [x] Register both adapters in the Publisher Worker behind the Review approval provider.
+- [x] Add opt-in, credential-redacting smoke configuration and setup documentation.
+- [x] Run focused adapter/Worker tests, format, lint and typecheck.
+- [ ] Run a live platform smoke test with explicit account credentials and final publish authorization.
+- **Status:** implementation and simulated verification complete; live platform smoke remains account-dependent and intentionally not executed.
 
 ## Key constraints
 - Only Phase-1 projects are in scope: MatrixMedia, short-video-factory, MoneyPrinterTurbo, AutoSocial, and Postiz.

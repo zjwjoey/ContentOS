@@ -19,7 +19,7 @@
 - Create: `packages/modules/publisher/src/credential-provider.ts`
 - Test: `tests/contract/publisher-real-platform.test.ts`
 
-- [ ] **Step 1: Write failing contract tests** for `PublisherCredential`, optional `mediaPath`/`coverPath`, platform IDs (`douyin`, `wechat-channels`), and the rule that serialized `PublishResult` never contains credential fields.
+- [x] **Step 1: Write failing contract tests** for `PublisherCredential`, optional `mediaPath`/`coverPath`, platform IDs (`douyin`, `wechat-channels`), and the rule that serialized `PublishResult` never contains credential fields.
 
   Use snapshots shaped like:
 
@@ -34,11 +34,11 @@
   };
   ```
 
-- [ ] **Step 2: Run the contract test and verify it fails** because the new types do not exist.
+- [x] **Step 2: Run the contract test and verify it fails** because the new types do not exist.
 
   Run: `pnpm exec tsx --test --test-concurrency=1 tests/contract/publisher-real-platform.test.ts`
 
-- [ ] **Step 3: Implement the minimal contract changes.** Add:
+- [x] **Step 3: Implement the minimal contract changes.** Add:
 
   ```ts
   export type PublisherPlatformId = 'fake-platform' | 'douyin' | 'wechat-channels';
@@ -57,11 +57,11 @@
 
   Add optional `credential` to `PublisherContext`, optional `mediaPath` and `coverPath` to `PublishSnapshot`, and export `PublisherCredential`, `PublisherPlatformId` and `CredentialProvider` from the contracts/module indexes. `CredentialProvider.resolve(ref)` returns an in-memory credential object and never appears in adapter results.
 
-- [ ] **Step 4: Run the contract test and all existing publisher tests.**
+- [x] **Step 4: Run the contract test and all existing publisher tests.**
 
   Run: `pnpm exec tsx --test --test-concurrency=1 tests/contract/publisher-real-platform.test.ts tests/contract/publisher.test.ts tests/integration/fake-publisher.test.ts`
 
-- [ ] **Step 5: Commit the boundary.**
+- [x] **Step 5: Commit the boundary.**
 
   ```powershell
   git add packages/contracts/src/publisher.ts packages/contracts/src/index.ts packages/modules/publisher/src/index.ts packages/modules/publisher/src/credential-provider.ts tests/contract/publisher-real-platform.test.ts
@@ -77,7 +77,7 @@
 - Test: `tests/contract/douyin-open-api-adapter.test.ts`
 - Test: `tests/integration/douyin-open-api-adapter.test.ts`
 
-- [ ] **Step 1: Write failing HTTP adapter tests** using an injected `fetch` function. Cover:
+- [x] **Step 1: Write failing HTTP adapter tests** using an injected `fetch` function. Cover:
   - upload request sends the access token, multipart media and no client secret in logs/results;
   - create request uses the returned encrypted `video_id`, `open_id`, title and description;
   - OAuth/expired-token errors map to `AUTH_EXPIRED`/`HUMAN_ACTION_REQUIRED`;
@@ -85,11 +85,11 @@
   - a transport failure after create returns `UNKNOWN_EXTERNAL_STATE` and calls reconcile before allowing a retry;
   - duplicate idempotency keys return the first external item ID without a second create call.
 
-- [ ] **Step 2: Run the focused tests and confirm red failure** because `DouyinOpenApiAdapter` and its transport do not exist.
+- [x] **Step 2: Run the focused tests and confirm red failure** because `DouyinOpenApiAdapter` and its transport do not exist.
 
   Run: `pnpm exec tsx --test --test-concurrency=1 tests/contract/douyin-open-api-adapter.test.ts tests/integration/douyin-open-api-adapter.test.ts`
 
-- [ ] **Step 3: Implement `DouyinHttpTransport` and `DouyinOpenApiAdapter`.** Keep endpoint paths in a `DouyinEndpointProfile` with defaults for the documented upload, create and list/data operations. Require `accessToken`, `openId` and `mediaPath`; use `FormData`/`Blob` for upload and JSON for create. Parse both HTTP errors and Douyin `data.error_code`/`extra.error_code`, then return only normalized `PublishResult`/`ExternalStateResult` values.
+- [x] **Step 3: Implement `DouyinHttpTransport` and `DouyinOpenApiAdapter`.** Keep endpoint paths in a `DouyinEndpointProfile` with defaults for the documented upload, create and list/data operations. Require `accessToken`, `openId` and `mediaPath`; use `FormData`/`Blob` for upload and JSON for create. Parse both HTTP errors and Douyin `data.error_code`/`extra.error_code`, then return only normalized `PublishResult`/`ExternalStateResult` values.
 
   The adapter shape is:
 
@@ -108,11 +108,11 @@
 
   Store idempotency only in the adapter's injected `PublishStateStore` port; do not claim process-memory idempotency is durable.
 
-- [ ] **Step 4: Run focused tests, existing Fake Publisher tests and typecheck.**
+- [x] **Step 4: Run focused tests, existing Fake Publisher tests and typecheck.**
 
   Run: `pnpm exec tsx --test --test-concurrency=1 tests/contract/douyin-open-api-adapter.test.ts tests/integration/douyin-open-api-adapter.test.ts tests/contract/publisher.test.ts tests/integration/fake-publisher.test.ts`; then `pnpm run typecheck`.
 
-- [ ] **Step 5: Commit the Douyin adapter.**
+- [x] **Step 5: Commit the Douyin adapter.**
 
   ```powershell
   git add packages/modules/publisher/src/douyin-open-api-adapter.ts packages/modules/publisher/src/douyin-http.ts packages/modules/publisher/src/index.ts tests/contract/douyin-open-api-adapter.test.ts tests/integration/douyin-open-api-adapter.test.ts
@@ -128,17 +128,17 @@
 - Modify: `package.json`
 - Test: `tests/contract/browser-session.test.ts`
 
-- [ ] **Step 1: Write failing browser-port tests** for persistent profile paths, headed/manual-login policy, page navigation, upload file, screenshot evidence and guaranteed close on failure.
+- [x] **Step 1: Write failing browser-port tests** for persistent profile paths, headed/manual-login policy, page navigation, upload file, screenshot evidence and guaranteed close on failure.
 
-- [ ] **Step 2: Run the test and verify red** because the browser session port and implementation are absent.
+- [x] **Step 2: Run the test and verify red** because the browser session port and implementation are absent.
 
   Run: `pnpm exec tsx --test --test-concurrency=1 tests/contract/browser-session.test.ts`
 
-- [ ] **Step 3: Add the Playwright dependency and port.** Run `pnpm add playwright`, then define a small `BrowserSession`/`BrowserSessionFactory` interface in the publisher module. Add the infrastructure implementation using `chromium.launchPersistentContext` with an explicit per-account profile directory, configurable headed mode and no anti-detection patches. The implementation must close context/browser in `finally` blocks and expose only page operations needed by the adapter.
+- [x] **Step 3: Add the Playwright dependency and port.** Run `pnpm add playwright`, then define a small `BrowserSession`/`BrowserSessionFactory` interface in the publisher module. Add the infrastructure implementation using `chromium.launchPersistentContext` with an explicit per-account profile directory, configurable headed mode and no anti-detection patches. The implementation must close context/browser in `finally` blocks and expose only page operations needed by the adapter.
 
-- [ ] **Step 4: Run browser-port tests without launching a real browser** by injecting a fake session, then run `pnpm run typecheck` and `pnpm run lint`.
+- [x] **Step 4: Run browser-port tests without launching a real browser** by injecting a fake session, then run `pnpm run typecheck` and `pnpm run lint`.
 
-- [ ] **Step 5: Commit the browser boundary.**
+- [x] **Step 5: Commit the browser boundary.**
 
   ```powershell
   git add package.json pnpm-lock.yaml packages/modules/publisher/src/browser-session.ts packages/infrastructure/playwright/src/index.ts packages/infrastructure/playwright/README.md tests/contract/browser-session.test.ts
@@ -154,7 +154,7 @@
 - Test: `tests/contract/wechat-channels-adapter.test.ts`
 - Test: `tests/integration/wechat-channels-adapter.test.ts`
 
-- [ ] **Step 1: Write failing adapter tests** with a fake `BrowserSession`. Cover:
+- [x] **Step 1: Write failing adapter tests** with a fake `BrowserSession`. Cover:
   - capabilities advertise `wechat-channels`, MP4 support and human confirmation;
   - login page maps to `AUTH_EXPIRED`;
   - verification/captcha page maps to `REQUIRES_VERIFICATION`;
@@ -163,17 +163,17 @@
   - uncertain submit result maps to `UNKNOWN_EXTERNAL_STATE`;
   - two account IDs use two separate profile directories.
 
-- [ ] **Step 2: Run the focused tests and verify red.**
+- [x] **Step 2: Run the focused tests and verify red.**
 
   Run: `pnpm exec tsx --test --test-concurrency=1 tests/contract/wechat-channels-adapter.test.ts tests/integration/wechat-channels-adapter.test.ts`
 
-- [ ] **Step 3: Implement the adapter and versioned selector profile.** Keep all selectors in `wechat-channels-selectors.ts`; use semantic selectors first, then narrow fallbacks. Require `mediaPath`, refuse to submit without an approved review flag and configured human-confirmation policy, and never read or write raw cookies. Use `BrowserSession.screenshot` only to a redacted evidence directory.
+- [x] **Step 3: Implement the adapter and versioned selector profile.** Keep all selectors in `wechat-channels-selectors.ts`; use semantic selectors first, then narrow fallbacks. Require `mediaPath`, refuse to submit without an approved review flag and configured human-confirmation policy, and never read or write raw cookies. Use `BrowserSession.screenshot` only to a redacted evidence directory.
 
-- [ ] **Step 4: Run focused tests, Fake Publisher tests and typecheck.**
+- [x] **Step 4: Run focused tests, Fake Publisher tests and typecheck.**
 
   Run: `pnpm exec tsx --test --test-concurrency=1 tests/contract/wechat-channels-adapter.test.ts tests/integration/wechat-channels-adapter.test.ts tests/contract/publisher.test.ts tests/integration/fake-publisher.test.ts`; then `pnpm run typecheck`.
 
-- [ ] **Step 5: Commit the WeChat Channels adapter.**
+- [x] **Step 5: Commit the WeChat Channels adapter.**
 
   ```powershell
   git add packages/modules/publisher/src/wechat-channels-playwright-adapter.ts packages/modules/publisher/src/wechat-channels-selectors.ts packages/modules/publisher/src/index.ts tests/contract/wechat-channels-adapter.test.ts tests/integration/wechat-channels-adapter.test.ts
@@ -189,13 +189,13 @@
 - Modify: `packages/shared/src/worker-runtime.ts` only if handler context is required
 - Test: `tests/worker/real-publisher-worker.test.ts`
 
-- [ ] **Step 1: Write failing Worker tests** for explicit `douyin`/`wechat-channels` dispatch, unsupported platform rejection, a required `reviewDecisionId` verified by an injected `ReviewApprovalProvider`, normalized result propagation and graceful shutdown. Keep the test adapters fake and never launch a browser.
+- [x] **Step 1: Write failing Worker tests** for explicit `douyin`/`wechat-channels` dispatch, unsupported platform rejection, a required `reviewDecisionId` verified by an injected `ReviewApprovalProvider`, normalized result propagation and graceful shutdown. Keep the test adapters fake and never launch a browser.
 
-- [ ] **Step 2: Run the Worker test and verify red.**
+- [x] **Step 2: Run the Worker test and verify red.**
 
   Run: `pnpm exec tsx --test --test-concurrency=1 tests/worker/real-publisher-worker.test.ts`
 
-- [ ] **Step 3: Implement `PublisherAdapterRegistry` and composition-root wiring.** Registry registration must be explicit and reject duplicate platform IDs. The worker handler resolves `{ platformId, accountId, snapshot, projectId, targetId, reviewDecisionId }`, verifies that `ReviewApprovalProvider` reports an approved `PUBLISH` decision for that project/target/revision, resolves `credentialRef` through `CredentialProvider`, creates the isolated profile path, and dispatches to the selected adapter. Results and errors pass through the existing redaction boundary; a boolean supplied in the Job payload is never trusted as approval.
+- [x] **Step 3: Implement `PublisherAdapterRegistry` and composition-root wiring.** Registry registration must be explicit and reject duplicate platform IDs. The worker handler resolves `{ platformId, accountId, snapshot, projectId, targetId, reviewDecisionId }`, verifies that `ReviewApprovalProvider` reports an approved `PUBLISH` decision for that project/target/revision, resolves `credentialRef` through `CredentialProvider`, creates the isolated profile path, and dispatches to the selected adapter. Results and errors pass through the existing redaction boundary; a boolean supplied in the Job payload is never trusted as approval.
 
   Define the approval port next to the registry so the worker has no direct Review-table dependency:
 
@@ -205,11 +205,11 @@
   }
   ```
 
-- [ ] **Step 4: Run Worker tests, all existing Worker tests and typecheck.**
+- [x] **Step 4: Run Worker tests, all existing Worker tests and typecheck.**
 
   Run: `pnpm exec tsx --test --test-concurrency=1 tests/worker/real-publisher-worker.test.ts tests/worker/fake-publisher-worker.test.ts tests/unit/worker-bootstrap.test.ts`; then `pnpm run typecheck`.
 
-- [ ] **Step 5: Commit Worker registration.**
+- [x] **Step 5: Commit Worker registration.**
 
   ```powershell
   git add packages/modules/publisher/src/publisher-registry.ts packages/modules/publisher/src/index.ts workers/publisher-worker/src/main.ts packages/shared/src/worker-runtime.ts tests/worker/real-publisher-worker.test.ts
@@ -226,17 +226,17 @@
 - Modify: `docs/development/LOCAL_SETUP.md`
 - Test: `tests/unit/publisher-smoke-config.test.ts`
 
-- [ ] **Step 1: Write failing smoke-config tests** proving that the command refuses to run without `CONTENTOS_REAL_PLATFORM_SMOKE=1`, refuses missing platform-specific credential refs, and never prints credential values.
+- [x] **Step 1: Write failing smoke-config tests** proving that the command refuses to run without `CONTENTOS_REAL_PLATFORM_SMOKE=1`, refuses missing platform-specific credential refs, and never prints credential values.
 
-- [ ] **Step 2: Run the test and verify red.**
+- [x] **Step 2: Run the test and verify red.**
 
   Run: `pnpm exec tsx --test --test-concurrency=1 tests/unit/publisher-smoke-config.test.ts`
 
-- [ ] **Step 3: Implement a guarded smoke command.** Accept exactly one platform (`douyin` or `wechat-channels`), require explicit account/profile/media arguments, require the opt-in environment flag, print only redacted request IDs and normalized outcomes, and stop before submission when human confirmation is not explicitly enabled. Do not make the normal `pnpm test` command call this script.
+- [x] **Step 3: Implement a guarded smoke command.** Accept exactly one platform (`douyin` or `wechat-channels`), require explicit account/profile/media arguments, require the opt-in environment flag, print only redacted request IDs and normalized outcomes, and stop before submission when human confirmation is not explicitly enabled. Do not make the normal `pnpm test` command call this script.
 
-- [ ] **Step 4: Document setup and risk boundaries.** Document Douyin app authorization requirements, WeChat manual login/profile setup, headed-browser requirement, verification handling, smoke-test invocation and cleanup. State that GitHub repositories were reference-only and no code/cookies were copied.
+- [x] **Step 4: Document setup and risk boundaries.** Document Douyin app authorization requirements, WeChat manual login/profile setup, headed-browser requirement, verification handling, smoke-test invocation and cleanup. State that GitHub repositories were reference-only and no code/cookies were copied.
 
-- [ ] **Step 5: Run smoke-config tests and update the serial test command.**
+- [x] **Step 5: Run smoke-config tests and update the serial test command.**
 
   Run: `pnpm exec tsx --test --test-concurrency=1 tests/unit/publisher-smoke-config.test.ts`; add all new contract/integration/Worker tests to the root `package.json` test script.
 

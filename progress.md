@@ -172,3 +172,13 @@
 - Slice 5 real platform adapters remain explicitly deferred; no Douyin/WeChat credentials or platform calls were added.
 - Final gate: format, lint, typecheck, full **41-test** suite, build and doctor all passed.
 - Pushed as commit `3f89304` to `origin/main`.
+
+## Session: 2026-08-22 - Slice 5 real platform adapters
+
+### Phase 20: Douyin and WeChat Channels publisher adapters
+- **Status:** implementation and simulated verification complete on branch `feature/slice-5-real-platform-adapters`; live account smoke remains pending explicit authorization.
+- Added the `PublisherCredential` boundary and environment-backed credential provider; secrets stay in memory and are excluded from results/logs.
+- Added the Douyin official OpenAPI-shaped upload/create/reconcile adapter with injected transport and normalized error taxonomy.
+- Added the WeChat Channels headed Playwright adapter with per-account persistent profiles, versioned selectors, manual login/verification handling and pre-submit approval gating.
+- Registered both adapters in the Publisher Worker and added an opt-in `pnpm publisher:smoke` command. Normal tests never launch a real browser or call a platform.
+- Focused adapter, browser-port, smoke-config and Worker tests pass; final full repository verification is the remaining engineering gate.

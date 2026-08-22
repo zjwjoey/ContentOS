@@ -1,6 +1,6 @@
 # Slice 5 Real Platform Adapters Design
 
-**Status:** Proposed for implementation after user review  
+**Status:** Implemented; simulated verification complete, live smoke remains account-dependent
 **Scope:** Douyin and WeChat Channels publishing adapters behind the existing Publisher Worker boundary.
 
 ## Goal
