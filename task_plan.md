@@ -181,7 +181,7 @@ Architecture V0 — formal design documentation and self-review.
 - [ ] 添加 API、规则、Web 回归测试并执行完整 Gate。
 
 - [x] Slice ③ Contract、Job 安全摘要、健康度规则、聚合 API、横屏总控页和回归测试已完成。
-- [x] 隔离数据库全量 Gate：123 tests passed；typecheck、lint、Web build、diff-check 通过。
+- [x] 隔离数据库全量 Gate：128 tests passed；typecheck、lint、Web build、diff-check 通过。
 - [x] 已确认格式检查失败来自 Windows 工作区既有 CRLF，不是 Slice ③ 文件特有问题；主线工作区同样复现。
 
 约束：基于已验收分支 `codex/publisher-project-integration`；不跨读模块私表；不在 Project Center 重复执行模块写操作；不启动 Slice ④、⑤、⑥。
