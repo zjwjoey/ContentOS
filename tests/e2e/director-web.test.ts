@@ -36,4 +36,6 @@ test('Director Operator exposes project creation, complete Brief inputs and Job 
   assert.match(director, /setInterval/);
   assert.match(director, /clearInterval/);
   assert.match(director, /error/);
+  assert.match(director, /scripts\/\$\{scriptId\}\/accept.*body: '\{\}'/);
+  assert.match(director, /storyboards\/\$\{storyboardId\}\/approve.*body: '\{\}'/);
 });

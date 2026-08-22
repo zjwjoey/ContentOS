@@ -67,7 +67,7 @@ export default function DirectorPage({ params }: { params: { id: string } }) {
   };
 
   const acceptScript = async (scriptId: string) => {
-    const response = await fetch(`/api/v1/projects/${projectId}/scripts/${scriptId}/accept`, { method: 'POST' });
+    const response = await fetch(`/api/v1/projects/${projectId}/scripts/${scriptId}/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     if (!response.ok) { setMessage(await responseMessage(response, '接受 Script 失败。')); return; }
     await refresh(); setMessage('Script 已接受。');
   };
@@ -85,7 +85,7 @@ export default function DirectorPage({ params }: { params: { id: string } }) {
   };
 
   const approveStoryboard = async (storyboardId: string) => {
-    const response = await fetch(`/api/v1/projects/${projectId}/storyboards/${storyboardId}/approve`, { method: 'POST' });
+    const response = await fetch(`/api/v1/projects/${projectId}/storyboards/${storyboardId}/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     if (!response.ok) { setMessage(await responseMessage(response, '批准 Storyboard 失败。')); return; }
     await refresh(); setMessage('Storyboard 已批准。');
   };
