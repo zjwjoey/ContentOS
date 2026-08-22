@@ -14,6 +14,8 @@ The first `Project -> Asset -> Job -> Video` slice and Director foundation are c
 
 Post-publish analytics, AI Review, workflow-builder UI and multi-platform orchestration remain deferred until evidence supports them. Preserve the PostgreSQL Job source of truth, Lease Reconciler, immutable Manifest, atomic Asset promotion and module boundaries established in Architecture V0.
 
-## Recommended next slice
+## Formal gate status
 
-**Current active slice: Publisher Fake product closure.** Complete Account, PublishRequest/Revision, Approval Gate, durable `PUBLISH` Job, Worker execution, PublishAttempt and confirmed ExternalPost. Then open Publisher-to-Project integration. Keep Project Center, Video MVP, post-publish Metric Snapshot/Review and real Douyin/WeChat adapters closed until their preceding gate is accepted.
+- **Slice ① — Publisher Fake product closure: APPROVED (2026-08-22).** Account, PublishRequest/Revision, exact-revision Approval Gate, durable `PUBLISH`/`PUBLISH_RECONCILE` Jobs, Worker execution, PublishAttempt and confirmed ExternalPost have passed acceptance.
+- **Slice ② — Publisher-to-Project integration: NEXT, GATE CLOSED.** It has not started and requires separate explicit authorization.
+- **Slices ③–⑥: CLOSED.** Project Center, Video MVP, post-publish Metric Snapshot/AI Review and real Douyin/WeChat adapters remain closed until each preceding gate is accepted.

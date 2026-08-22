@@ -5,7 +5,9 @@
 
 ## Gate result
 
-第①步 Publisher Fake 产品闭环已完成工程实现，等待合并前的人审确认；第②步及后续切片没有启动。
+**APPROVED — 2026-08-22**
+
+第①步 Publisher Fake 产品闭环已通过正式验收。批准范围仅限 Slice ①；第②步及后续切片仍处于关闭状态，必须获得新的明确授权后才能启动。
 
 ## Delivered flow
 
