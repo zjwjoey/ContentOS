@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for Slice ②, subject to the Slice ② Gate.
+Accepted.
 
 ## Decision
 
