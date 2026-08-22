@@ -26,3 +26,18 @@ test('Director V1 API creates briefs, queues jobs, preserves revisions and retur
     await db.query('delete from director_project_state where project_id = $1', [project.id]); await db.query('delete from director_storyboard_revisions where project_id = $1', [project.id]); await db.query('delete from director_storyboards where project_id = $1', [project.id]); await db.query('delete from director_script_revisions where project_id = $1', [project.id]); await db.query('delete from director_scripts where project_id = $1', [project.id]); await db.query('delete from director_briefs where project_id = $1', [project.id]); await db.query('delete from content_projects where id = $1', [project.id]); await db.end();
   }
 });
+
+test('Director V1 API distinguishes Brief validation from missing projects', async () => {
+  const db = await createDatabase(databaseUrl); await migrateUp(db); const project = await new ProjectService(db).create('Director V1 API Errors'); const app = await buildApi(db);
+  try {
+    const invalidBrief = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/director/brief`, payload: { ...brief, mustInclude: [], mustAvoid: [] } });
+    assert.equal(invalidBrief.statusCode, 422);
+    assert.equal(invalidBrief.json().error.code, 'DIRECTOR_VALIDATION_ERROR');
+    const missingProject = await app.inject({ method: 'POST', url: '/api/v1/projects/project-does-not-exist/director/brief', payload: brief });
+    assert.equal(missingProject.statusCode, 404);
+    assert.equal(missingProject.json().error.code, 'DIRECTOR_PROJECT_NOT_FOUND');
+  } finally {
+    await app.close();
+    await db.query('delete from content_projects where id = $1', [project.id]); await db.end();
+  }
+});

@@ -4,22 +4,25 @@ import { z } from 'zod';
 import { DirectorJobService } from '../../../packages/modules/director/src/director-job-service.js';
 import { DirectorV1Service } from '../../../packages/modules/director/src/director-v1-service.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
+import type { ProjectService } from '../../../packages/modules/project/src/index.js';
 
-const briefInput = z.object({ topic: z.string().trim().min(1).max(20_000), targetPlatform: z.string().trim().min(1).max(100), channelPositioning: z.string().trim().min(1).max(20_000), targetDurationSeconds: z.number().int().min(1).max(600), contentType: z.string().trim().min(1).max(100), audience: z.string().trim().min(1).max(20_000), coreThesis: z.string().trim().min(1).max(20_000), tone: z.string().trim().min(1).max(20_000), ctaGoal: z.string().trim().max(20_000).optional(), referenceMaterial: z.string().trim().min(1).max(20_000), mustInclude: z.array(z.string().trim().min(1).max(2_000)).max(32), mustAvoid: z.array(z.string().trim().min(1).max(2_000)).max(32), requirements: z.record(z.string(), z.unknown()), createdBy: z.string().trim().min(1).max(200) }).strict();
+const briefInput = z.object({ topic: z.string().trim().min(1).max(20_000), targetPlatform: z.string().trim().min(1).max(100), channelPositioning: z.string().trim().min(1).max(20_000), targetDurationSeconds: z.number().int().min(1).max(600), contentType: z.string().trim().min(1).max(100), audience: z.string().trim().min(1).max(20_000), coreThesis: z.string().trim().min(1).max(20_000), tone: z.string().trim().min(1).max(20_000), ctaGoal: z.string().trim().max(20_000).optional(), referenceMaterial: z.string().trim().min(1).max(20_000), mustInclude: z.array(z.string().trim().min(1).max(2_000)).min(1).max(32), mustAvoid: z.array(z.string().trim().min(1).max(2_000)).min(1).max(32), requirements: z.record(z.string(), z.unknown()), createdBy: z.string().trim().min(1).max(200) }).strict();
 const generateInput = z.object({ briefId: z.string().trim().min(1).max(200), scriptAggregateId: z.string().trim().min(1).max(200).optional(), modelProfileId: z.string().trim().min(1).max(200).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
 const scriptInput = z.object({ origin: z.enum(['MANUAL', 'IMPORTED']), title: z.string().trim().min(1).max(500), titleCandidates: z.array(z.string().trim().min(1).max(2_000)).min(1).max(8), coverText: z.string().trim().min(1).max(500), topicKeywords: z.array(z.string().trim().min(1).max(2_000)).min(1).max(32), hook: z.string().trim().min(1).max(20_000), body: z.string().trim().min(1).max(20_000), cta: z.string().trim().max(20_000).optional(), createdBy: z.string().trim().min(1).max(200) }).strict();
 const storyboardGenerateInput = z.object({ storyboardAggregateId: z.string().trim().min(1).max(200).optional(), modelProfileId: z.string().trim().min(1).max(200).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
 
-export interface DirectorRouteDependencies { director: DirectorV1Service; directorJobs: DirectorJobService; jobs: JobService; }
+export interface DirectorRouteDependencies { director: DirectorV1Service; directorJobs: DirectorJobService; jobs: JobService; projects: ProjectService; }
 function validation(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, message: string, details: unknown): unknown { return reply.code(422).send({ error: { code: 'DIRECTOR_VALIDATION_ERROR', message, details } }); }
 function failure(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, status: number, code: string, message: string): unknown { return reply.code(status).send({ error: { code, message, details: [] } }); }
 
 export function registerDirectorV1Routes(app: FastifyInstance, deps: DirectorRouteDependencies): void {
   app.post('/api/v1/projects/:projectId/director/brief', async (request, reply) => {
     const parsed = briefInput.safeParse(request.body); if (!parsed.success) return validation(reply, 'Invalid ContentBrief input', parsed.error.issues);
+    const projectId = (request.params as { projectId: string }).projectId;
+    if (!(await deps.projects.get(projectId))) return failure(reply, 404, 'DIRECTOR_PROJECT_NOT_FOUND', 'Project not found');
     const { ctaGoal, ...briefFields } = parsed.data;
     const input = ctaGoal === undefined ? briefFields : { ...briefFields, ctaGoal };
-    try { return reply.code(201).send(await deps.director.createBrief((request.params as { projectId: string }).projectId, input)); } catch (error) { return failure(reply, 404, 'DIRECTOR_PROJECT_NOT_FOUND', error instanceof Error ? error.message : 'Project not found'); }
+    try { return reply.code(201).send(await deps.director.createBrief(projectId, input)); } catch (error) { return validation(reply, error instanceof Error ? error.message : 'Invalid ContentBrief input', []); }
   });
   app.get('/api/v1/projects/:projectId/director/brief/current', async (request, reply) => { const pair = await deps.director.getCurrentPair((request.params as { projectId: string }).projectId); return pair.brief ? pair.brief : failure(reply, 404, 'DIRECTOR_BRIEF_NOT_FOUND', 'No current Brief'); });
   app.post('/api/v1/projects/:projectId/scripts/generate', async (request, reply) => {

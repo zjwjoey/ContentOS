@@ -29,7 +29,7 @@ export async function buildApi(db: Pool): Promise<FastifyInstance> {
   const reviews = new ReviewService(db, projects);
   const directorV1 = new DirectorV1Service(db);
   const jobs = new JobService(db);
-  registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs });
+  registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
   app.get('/health', async () => ({ status: 'ok' }));
   app.post('/api/v1/projects', async (request, reply) => {
     const parsed = projectInput.safeParse(request.body);
