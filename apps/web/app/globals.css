@@ -21,4 +21,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .project-list li, .revision-list li { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
 .project-list a { display: flex; justify-content: space-between; }
 .revision-list li { display: grid; gap: 5px; }
+.project-create { display: flex; align-items: end; gap: 12px; }
+.project-create label { flex: 1; margin: 0; }
+.form-error { color: #fda4af; }
+.revision-list button { justify-self: start; margin-top: 4px; }
+@media (max-width: 560px) { .project-create { align-items: stretch; flex-direction: column; } }
 @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } .shell { padding-top: 32px; } }

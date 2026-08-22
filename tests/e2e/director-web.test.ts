@@ -24,3 +24,16 @@ test('Director Operator exposes one-command local startup for API, Web and Worke
   assert.match(worker, /"dev"/);
   assert.match(launcher, /@contentos\/director-worker/);
 });
+
+test('Director Operator exposes project creation, complete Brief inputs and Job polling', async () => {
+  const home = await readFile('apps/web/app/page.tsx', 'utf8');
+  const director = await readFile('apps/web/app/projects/[id]/director/page.tsx', 'utf8');
+  assert.match(home, /method: 'POST'/);
+  assert.match(home, /创建项目/);
+  assert.match(director, /mustInclude/);
+  assert.match(director, /mustAvoid/);
+  assert.match(director, /\/api\/v1\/jobs\//);
+  assert.match(director, /setInterval/);
+  assert.match(director, /clearInterval/);
+  assert.match(director, /error/);
+});
