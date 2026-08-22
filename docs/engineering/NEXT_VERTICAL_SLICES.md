@@ -13,3 +13,7 @@ The first `Project -> Asset -> Job -> Video` slice and Director foundation are c
 4. **Slice 5 - Real platform adapter:** deferred by decision. Douyin and WeChat Channels are the initial candidate platforms, but no real account, credential, browser session or platform call is included. Future adapters must pass explicit credential-boundary, human-confirmation and platform smoke-test gates behind the existing Publisher Adapter contract.
 
 Analytics, AI review, workflow-builder UI and multi-platform orchestration also remain deferred until evidence supports them. Preserve the PostgreSQL Job source of truth, Lease Reconciler, immutable Manifest, atomic Asset promotion and module boundaries established in Architecture V0.
+
+## Recommended next slice
+
+**Publisher productization for Fake Platform first, followed by an explicitly authorized Douyin/WeChat sandbox gate.** Add Account, PublishRequest and PublishAttempt business records, scheduled publish state transitions and normalized reconciliation outcomes behind the existing Publisher Adapter contract. Do not add real credentials or platform calls until the sandbox prerequisites and human-confirmation policy are approved. Keep Metric Snapshot/Performance Review, benchmark scraping, TTS and workflow graphs out of that next slice unless a separate evidence-backed decision changes the order.

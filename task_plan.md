@@ -138,8 +138,8 @@ Architecture V0 — formal design documentation and self-review.
 - [x] Add Director V1 API.
 - [x] Add Video provenance bridge.
 - [x] Add minimal Operator UI.
-- [ ] Run Director→Video E2E, final verification gate and report.
-- **Status:** Tasks 7–9 complete; Director API, Video provenance bridge and minimal Operator UI are committed, implementation continues with fake-provider E2E and final report.
+- [x] Run Director→Video E2E, final verification gate and report.
+- **Status:** Phase 22 implementation complete; fake-provider E2E and all automated gates are green, real Provider Sandbox remains explicitly BLOCKED.
 
 ## Key constraints
 - Only Phase-1 projects are in scope: MatrixMedia, short-video-factory, MoneyPrinterTurbo, AutoSocial, and Postiz.

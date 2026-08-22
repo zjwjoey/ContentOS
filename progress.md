@@ -201,3 +201,5 @@
 - Task 9 is next: minimal API-backed Director Operator UI.
 - Task 9 complete: added Next Operator project list and Director page with Brief form, Job state, Script/Storyboard revision lists, accept/manual revision/approve actions, API rewrite and static smoke coverage. Web gate: Next production build passed; root typecheck passed; UI smoke **1 passed, 0 failed**.
 - Task 10 is next: full fake-provider Director→Video E2E, quality backlog and final verification report.
+- Task 10 complete: added the full fake-provider Director→Video→FFmpeg E2E, quality backlog, vertical slice report and one next-slice recommendation. Fixed 0008 down/up provenance cleanup after migration gate exposed dangling references. Final automated gate: **65 passed, 0 failed**; format, lint, typecheck, root build, doctor, Web build and diff-check passed.
+- Real Provider Sandbox remains `BLOCKED` because no provider choice, authorized sandbox project or credential reference was supplied; no real AI/platform request was made.
