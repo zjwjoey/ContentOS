@@ -1,7 +1,7 @@
 # ContentOS Project Center V0 Design
 
 日期：2026-08-22
-状态：待用户审阅
+状态：已确认；本轮修复补充矩阵状态与完整审批规则。
 基线：Slice ② `Publisher → Content Project` 已通过正式验收
 
 ## 1. 目标
@@ -62,8 +62,9 @@ Project Center 是 API 组合层的只读查询，不成为新的业务事实拥
 | 信息 | 来源 | 允许的公开数据 |
 |---|---|---|
 | 项目名称、生命周期 | `ProjectService` | `ProjectRecord` |
-| Director 当前/最近版本 | `DirectorService` | `DirectorRevision` 摘要 |
+| Director 当前/最近版本 | `DirectorProjectReadService` | V1 当前 Brief/Script/Storyboard 摘要；无 V1 状态时兼容 legacy 摘要 |
 | 可发布成片 | `AssetCatalogService` | READY `VIDEO_RENDER` Asset 摘要 |
+| 当前 Render | `VideoProjectReadService` | 最近成功 Render 与 Output Asset ID |
 | Job 状态 | `JobService` | 项目范围内最近安全 Job 摘要 |
 | Approval | `ApprovalService` | 项目范围内当前决策状态 |
 | Publisher 摘要与账号请求 | `PublisherService` | `PublisherProjectSummary` 和安全请求摘要 |
@@ -94,6 +95,7 @@ type ProjectCenterSnapshot = {
     summary: string;
   }>;
   currentStage: 'DIRECTOR' | 'VIDEO' | 'APPROVAL' | 'PUBLISHER' | null;
+  currentStageSummary: string | null;
   actions: Array<{
     id: string;
     kind: 'APPROVAL' | 'JOB_FAILURE' | 'HUMAN_ACTION' | 'PUBLISH_RETRY' | 'NAVIGATION';
@@ -114,21 +116,23 @@ type ProjectCenterSnapshot = {
 
 Contract 只返回页面需要的摘要字段。任何底层服务异常都记录为安全的聚合错误状态，不将 SQL、凭据或内部诊断传到浏览器。
 
+Approval 数据源不可用时，聚合层把审批状态视为 `UNKNOWN`，只返回安全的“Approval 数据暂时不可用”；不得把空读取结果解释为当前目标缺少审批，也不得生成“补充审批”动作。
+
 ## 6. 健康度与阶段规则
 
 规则必须是确定性的，并在测试中逐条覆盖：
 
 - `BLOCKED`：存在失败/阻塞 Job、Publisher `needsHumanActionCount > 0` 或明确需要人工处理的当前 Approval；
-- `ATTENTION`：存在待审批、排队/运行中的 Job、Publisher 草稿或待发布请求，但没有阻塞项；
+- `ATTENTION`：存在待审批、部分当前目标尚未形成审批决定、排队/运行中的 Job、Publisher 草稿、待发布、发布中或重对账请求，但没有阻塞项；
 - `COMPLETE`：项目状态为 `PUBLISHED`，且没有未解决的阻塞或人工动作；
 - `HEALTHY`：不存在上述问题，项目可以继续推进或尚未开始但没有错误。
 
 阶段推导采用公开事实：
 
 - Director：无版本为 `NOT_STARTED`，有草稿/接受版本为 `IN_PROGRESS`，有批准版本为 `COMPLETE`；
-- Video：无 Render Job/READY Render Asset 为 `NOT_STARTED`，Job 运行中为 `IN_PROGRESS`，Job 失败为 `BLOCKED`，存在 READY Render Asset 为 `READY`；
-- Approval：无当前决策为 `NOT_STARTED`，存在 PENDING 为 `ACTION_REQUIRED`，当前目标已 APPROVED 为 `COMPLETE`，REJECTED 为 `BLOCKED`；
-- Publisher：无请求为 `NOT_STARTED`，存在人工动作或失败为 `ACTION_REQUIRED`/`BLOCKED`，存在排队/发布中/重对账为 `IN_PROGRESS`，存在确认外部内容为 `COMPLETE`。
+- Video：无当前 Render/Render Job 为 `NOT_STARTED`，Job 运行中为 `IN_PROGRESS`，Job 失败为 `BLOCKED`；只有当前 `PERSISTED` Manifest 的成功 Render 且输出 Asset 仍可发布时才为 `READY`，历史 READY Asset 不决定当前阶段；
+- Approval：只按 `targetType + targetId + targetRevisionId` 匹配当前 Director、Render 和 Publish 目标；无当前目标为 `NOT_STARTED`，任一当前目标 PENDING 为 `ACTION_REQUIRED`，所有当前目标均 APPROVED 才为 `COMPLETE`，已部分形成决策但仍缺目标为 `IN_PROGRESS`，任一 REJECTED 为 `BLOCKED`；
+- Publisher：取消请求只作为历史，不改变阶段状态；存在人工动作或失败为 `ACTION_REQUIRED`/`BLOCKED`，存在排队/发布中/重对账为 `IN_PROGRESS`，所有未解决请求消失且存在确认外部内容才为 `COMPLETE`。
 
 ## 7. 交互和错误处理
 

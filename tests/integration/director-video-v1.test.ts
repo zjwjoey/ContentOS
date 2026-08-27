@@ -23,6 +23,20 @@ test('approved Director V1 pair preserves provenance in the Video Job payload', 
   }
 });
 
+test('Director V1 Video Job idempotency changes when render inputs change', async () => {
+  const db = await createDatabase(databaseUrl); await migrateUp(db); const project = await new ProjectService(db).create('Director Video V1 Idempotency'); const director = new DirectorV1Service(db); const video = new VideoService(db, new JobService(db)); const bridge = new DirectorVideoService(director, video);
+  try {
+    const createdBrief = await director.createBrief(project.id, brief); const aggregate = await director.createScript(project.id, createdBrief.id); const draft = await director.createScriptRevision(project.id, aggregate.id, script); const accepted = await director.acceptScript(project.id, draft.id); const board = await director.createStoryboard(project.id); const boardDraft = await director.createStoryboardRevision(project.id, board.id, { origin: 'MANUAL', scriptRevisionId: accepted.id, scenes, createdBy: 'editor' }); await director.approveStoryboard(project.id, boardDraft.id);
+    const first = await bridge.createVideoJob(project.id, { videoAssetIds: ['asset-video-1'], targetDurationMs: 3_000, seed: 1 });
+    const changed = await bridge.createVideoJob(project.id, { videoAssetIds: ['asset-video-2'], targetDurationMs: 3_000, seed: 1 });
+    assert.notEqual(changed.id, first.id);
+    const changedPayload = changed.payload as { videoAssetIds: string[] };
+    assert.deepEqual(changedPayload.videoAssetIds, ['asset-video-2']);
+  } finally {
+    await db.query('delete from job_events where job_id in (select id from jobs where project_id = $1)', [project.id]); await db.query('delete from job_attempts where job_id in (select id from jobs where project_id = $1)', [project.id]); await db.query('delete from jobs where project_id = $1', [project.id]); await db.query('delete from director_project_state where project_id = $1', [project.id]); await db.query('delete from director_storyboard_revisions where project_id = $1', [project.id]); await db.query('delete from director_storyboards where project_id = $1', [project.id]); await db.query('delete from director_script_revisions where project_id = $1', [project.id]); await db.query('delete from director_scripts where project_id = $1', [project.id]); await db.query('delete from director_briefs where project_id = $1', [project.id]); await db.query('delete from content_projects where id = $1', [project.id]); await db.end();
+  }
+});
+
 test('Director V1 Video bridge rejects a draft or incomplete current pair', async () => {
   const db = await createDatabase(databaseUrl); await migrateUp(db); const project = await new ProjectService(db).create('Director Video V1 Draft'); const director = new DirectorV1Service(db); const bridge = new DirectorVideoService(director, new VideoService(db, new JobService(db)));
   try {

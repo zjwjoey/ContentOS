@@ -13,6 +13,10 @@ ContentOS uses two distinct concepts:
 
 Publisher queueing checks the Approval contract for the exact `PublishRevision`. It never checks a vague request-level approval and never treats an external post or metric observation as an approval.
 
+Project-level aggregations apply the same exact-target rule to every Approval type. `SCRIPT`, `STORYBOARD`, `RENDER` and `PUBLISH` decisions are current only when both `targetId` and `targetRevisionId` match the owning module's published current-target summary. Superseded decisions remain append-only history and do not affect current health or actions.
+
+A cancelled Publish Request has no current Approval target. Its historical decisions remain auditable but never affect Project Center health, stage status, or actions.
+
 ## Compatibility boundary
 
 The pre-freeze `review_decisions` table remains historical data, and `/reviews` remains a read-only compatibility surface for existing V0 clients and historical tests. Its write routes return `REVIEW_LEGACY_READ_ONLY`; no new feature may add writes to that path. New Publisher API, UI, Worker and documentation use `approval_decisions` and `/approvals`.

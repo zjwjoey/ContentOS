@@ -52,19 +52,20 @@ test('Publisher foundation migration creates bounded tables and constraints', as
   }
 });
 
-test('Publisher foundation migration down and up restores the latest schema', async () => {
+test('Publisher foundation migration down and up restores its schema without assuming it is latest', async () => {
   const db = await createDatabase(databaseUrl);
   try {
     await migrateUp(db);
-    const approvalDown = await migrateDown(db);
-    assert.equal(approvalDown.removed, 1);
-    assert.equal((await db.query("select to_regclass('public.approval_decisions') as table_name")).rows[0]?.table_name, null);
-    const down = await migrateDown(db);
-    assert.equal(down.removed, 1);
-    const removed = await db.query("select to_regclass('public.publisher_requests') as table_name");
-    assert.equal(removed.rows[0]?.table_name, null);
+    let removedCount = 0;
+    while ((await db.query("select to_regclass('public.publisher_requests') as table_name")).rows[0]?.table_name) {
+      const down = await migrateDown(db);
+      assert.equal(down.removed, 1);
+      removedCount += 1;
+      assert.ok(removedCount < 20, 'Publisher migration boundary was not reached');
+    }
+    assert.ok(removedCount >= 1);
     const restored = await migrateUp(db);
-    assert.equal(restored.applied, 2);
+    assert.equal(restored.applied, removedCount);
     const present = await db.query("select to_regclass('public.publisher_requests') as table_name");
     assert.equal(present.rows[0]?.table_name, 'publisher_requests');
   } finally {

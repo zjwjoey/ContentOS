@@ -23,7 +23,10 @@ test('Asset import promotes a Unicode local file atomically and deduplicates byt
   const storage = new LocalStorageProvider(join(root, 'storage'));
   const assets = new AssetService(db, storage);
   try {
-    const first = await assets.importFile({ projectId: 'project-asset-test', sourcePath: source, kind: 'VIDEO' });
+    const input = { projectId: 'project-asset-test', sourcePath: source, kind: 'VIDEO' };
+    const prepared = await assets.prepareFile(input);
+    assert.equal(Object.isFrozen(prepared), true);
+    const first = await assets.commitPrepared(input, prepared);
     const second = await assets.importFile({ projectId: 'project-asset-test', sourcePath: source, kind: 'VIDEO' });
     assert.equal(first.status, 'READY');
     assert.equal(second.status, 'DEDUPED');
@@ -55,4 +58,23 @@ test('Asset reconciliation reports missing blobs and orphan blobs without auto-d
     assert.equal(report.missingAssets.length, 1);
     assert.equal(report.orphanBlobs.length, 1);
   } finally { await db.end(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('Asset commit rejects a forged prepared handle before creating a READY row', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-asset-capability-'));
+  const db = await createDatabase(databaseUrl);
+  await migrateUp(db);
+  const projectId = 'project-asset-capability-test';
+  await db.query('delete from project_assets where project_id = $1', [projectId]);
+  await db.query('delete from assets where project_id = $1', [projectId]);
+  await db.query('delete from content_projects where id = $1', [projectId]);
+  await db.query('insert into content_projects (id, name, status) values ($1, $2, $3)', [projectId, 'Asset Capability Test', 'DRAFT']);
+  const assets = new AssetService(db, new LocalStorageProvider(join(root, 'storage')));
+  try {
+    await assert.rejects(assets.commitPrepared({ projectId, sourcePath: 'forged.mp4', kind: 'VIDEO_RENDER' }, { checksum: 'forged', byteSize: 1, storageKey: 'objects/forged', originalName: 'forged.mp4' } as never), /not owned/);
+    assert.equal((await db.query('select 1 from assets where project_id = $1', [projectId])).rowCount, 0);
+  } finally {
+    await db.query('delete from content_projects where id = $1', [projectId]);
+    await db.end(); await rm(root, { recursive: true, force: true });
+  }
 });

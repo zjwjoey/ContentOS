@@ -1,22 +1,26 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
-import { JobService, type JobRecord } from '../../job/src/index.js';
+import type { AssetCatalogService } from '../../asset/src/index.js';
+import { JobService, type JobAttemptScope, type JobRecord } from '../../job/src/index.js';
 import { buildVideoManifest, type PlannerAsset } from './planner.js';
 
 export interface CreateVideoJobInput { projectId: string; videoAssetIds: string[]; voiceAssetId?: string; targetDurationMs: number; seed: number; subtitleText?: string; idempotencyKey?: string; directorRevisionId?: string; directorRevision?: number; directorBrief?: unknown; directorStoryboard?: unknown; metadata?: { briefId?: string; scriptRevisionId?: string; storyboardRevisionId?: string }; }
 export interface VideoJobPayload extends CreateVideoJobInput {}
+export interface VideoPlanResult { manifestId: string; renderId: string; manifest: ReturnType<typeof buildVideoManifest>; renderStatus: string; outputAssetId: string | null; }
 
 export class VideoService {
   private readonly db: Pool;
   private readonly storage: LocalStorageProvider | null;
   private readonly jobs: JobService;
-  constructor(db: Pool, storage: LocalStorageProvider, jobs: JobService);
-  constructor(db: Pool, jobs: JobService);
-  constructor(db: Pool, storageOrJobs: LocalStorageProvider | JobService, maybeJobs?: JobService) {
+  private readonly assets: AssetCatalogService | null;
+  constructor(db: Pool, storage: LocalStorageProvider, jobs: JobService, assets?: AssetCatalogService);
+  constructor(db: Pool, jobs: JobService, assets?: AssetCatalogService);
+  constructor(db: Pool, storageOrJobs: LocalStorageProvider | JobService, maybeJobs?: JobService | AssetCatalogService, maybeAssets?: AssetCatalogService) {
     this.db = db;
-    this.storage = maybeJobs ? storageOrJobs as LocalStorageProvider : null;
-    this.jobs = maybeJobs || storageOrJobs as JobService;
+    this.storage = maybeJobs && 'create' in maybeJobs ? storageOrJobs as LocalStorageProvider : null;
+    this.jobs = (maybeJobs && 'create' in maybeJobs ? maybeJobs : storageOrJobs) as JobService;
+    this.assets = (maybeJobs && !('create' in maybeJobs) ? maybeJobs : maybeAssets) || null;
   }
 
   async createJob(input: CreateVideoJobInput): Promise<JobRecord> {
@@ -27,40 +31,79 @@ export class VideoService {
     catch (error) { if ((error as { code?: string }).code === '23505') { const existing = await this.jobs.getByIdempotencyKey(idempotencyKey); if (existing) return existing; } throw error; }
   }
 
-  async planJob(job: JobRecord): Promise<{ manifestId: string; renderId: string; manifest: ReturnType<typeof buildVideoManifest> }> {
+  async planJob(job: JobRecord): Promise<VideoPlanResult> {
     const payload = job.payload as VideoJobPayload;
-    const result = await this.db.query<Record<string, unknown>>('select id, storage_key, metadata from assets where id = any($1::text[]) and lifecycle = $2 and kind = $3', [payload.videoAssetIds, 'READY', 'VIDEO']);
-    if (result.rows.length !== payload.videoAssetIds.length) throw new Error('One or more video assets are unavailable');
-    const byId = new Map(result.rows.map((row) => [String(row.id), row]));
+    const projectId = job.projectId;
+    if (!projectId || payload.projectId !== projectId) throw new Error('Job project scope does not match its Video payload');
+    const completed = await this.db.query<{ render_id: string; manifest_id: string; manifest: ReturnType<typeof buildVideoManifest>; render_status: string; output_asset_id: string }>("select r.id as render_id, m.id as manifest_id, m.manifest, r.status as render_status, r.output_asset_id from renders r join edit_manifests m on m.id = r.manifest_id and m.project_id = r.project_id where r.job_id = $1 and r.project_id = $2 and r.status = 'SUCCEEDED' and r.output_asset_id is not null order by r.created_at desc, r.id desc limit 1", [job.id, projectId]);
+    const completedRender = completed.rows[0];
+    if (completedRender) return { manifestId: completedRender.manifest_id, renderId: completedRender.render_id, manifest: completedRender.manifest, renderStatus: completedRender.render_status, outputAssetId: completedRender.output_asset_id };
     const storage = this.storage;
     if (!storage) throw new Error('Video storage is required to plan a render');
+    if (!this.assets) throw new Error('Asset catalog is required to plan a render');
+    const result = await this.assets.listReadySourceAssets(projectId, payload.videoAssetIds, 'VIDEO');
+    if (result.length !== payload.videoAssetIds.length) throw new Error('One or more video assets are unavailable');
+    const byId = new Map(result.map((row) => [row.id, row]));
     const plannerAssets: PlannerAsset[] = payload.videoAssetIds.map((id) => {
       const row = byId.get(id); if (!row) throw new Error(`Asset ${id} not found`);
-      const metadata = (row.metadata || {}) as Record<string, unknown>;
-      return { id, storageKey: String(row.storage_key), sourcePath: storage.objectPath(String(row.storage_key)), durationMs: Number(metadata.durationMs || 2000) };
+      return { id, storageKey: row.storageKey, sourcePath: storage.objectPath(row.storageKey), durationMs: Number(row.metadata.durationMs || 2000) };
     });
     let voicePath: string | undefined;
     if (payload.voiceAssetId) {
-      const voice = await this.db.query<{ storage_key: string }>('select storage_key from assets where id = $1 and lifecycle = $2 and kind = $3', [payload.voiceAssetId, 'READY', 'AUDIO']);
-      if (!voice.rows[0]) throw new Error('Voice asset is unavailable');
-      voicePath = storage.objectPath(voice.rows[0].storage_key);
+      const voice = await this.assets.getReadySourceAsset(projectId, payload.voiceAssetId, 'AUDIO');
+      if (!voice) throw new Error('Voice asset is unavailable');
+      voicePath = storage.objectPath(voice.storageKey);
     }
-    const manifest = buildVideoManifest({ ...payload, assets: plannerAssets, ...(voicePath ? { voicePath } : {}) });
-    await this.db.query("update edit_manifests set status = 'SUPERSEDED' where project_id = $1 and status = 'PERSISTED'", [payload.projectId]);
-    const revisionResult = await this.db.query<{ revision: number }>('select coalesce(max(revision), 0) + 1 as revision from edit_manifests where project_id = $1', [payload.projectId]);
-    const revision = Number(revisionResult.rows[0]?.revision || 1);
-    const manifestId = `manifest-${randomUUID()}`;
-    await this.db.query('insert into edit_manifests (id, project_id, revision, schema_version, manifest, status) values ($1, $2, $3, $4, $5, $6)', [manifestId, payload.projectId, revision, 'EDIT_MANIFEST_V0', manifest, 'PERSISTED']);
-    const renderId = `render-${randomUUID()}`;
-    await this.db.query('insert into renders (id, project_id, manifest_id, job_id, status, diagnostics) values ($1, $2, $3, $4, $5, $6)', [renderId, payload.projectId, manifestId, job.id, 'QUEUED', { seed: payload.seed, ...(payload.metadata ? { metadata: payload.metadata } : {}) }]);
-    return { manifestId, renderId, manifest };
+    const manifest = buildVideoManifest({ ...payload, projectId, assets: plannerAssets, ...(voicePath ? { voicePath } : {}) });
+    const client = await this.db.connect();
+    try {
+      await client.query('begin');
+      await client.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:video-manifest:${projectId}`]);
+      const existing = await client.query<{ render_id: string; manifest_id: string; manifest: ReturnType<typeof buildVideoManifest>; render_status: string; output_asset_id: string | null }>('select r.id as render_id, m.id as manifest_id, m.manifest, r.status as render_status, r.output_asset_id from renders r join edit_manifests m on m.id = r.manifest_id and m.project_id = r.project_id where r.job_id = $1 and r.project_id = $2 order by r.created_at desc, r.id desc limit 1', [job.id, projectId]);
+      const prior = existing.rows[0];
+      if (prior) {
+        await client.query('commit');
+        return { manifestId: prior.manifest_id, renderId: prior.render_id, manifest: prior.manifest, renderStatus: prior.render_status, outputAssetId: prior.output_asset_id };
+      }
+      await client.query("update edit_manifests set status = 'SUPERSEDED' where project_id = $1 and status = 'PERSISTED'", [projectId]);
+      const revisionResult = await client.query<{ revision: number }>('select coalesce(max(revision), 0) + 1 as revision from edit_manifests where project_id = $1', [projectId]);
+      const revision = Number(revisionResult.rows[0]?.revision || 1);
+      const manifestId = `manifest-${randomUUID()}`;
+      await client.query('insert into edit_manifests (id, project_id, revision, schema_version, manifest, status) values ($1, $2, $3, $4, $5, $6)', [manifestId, projectId, revision, 'EDIT_MANIFEST_V0', manifest, 'PERSISTED']);
+      const renderId = `render-${randomUUID()}`;
+      await client.query('insert into renders (id, project_id, manifest_id, job_id, status, diagnostics) values ($1, $2, $3, $4, $5, $6)', [renderId, projectId, manifestId, job.id, 'QUEUED', { seed: payload.seed, ...(payload.metadata ? { metadata: payload.metadata } : {}) }]);
+      await client.query('commit');
+      return { manifestId, renderId, manifest, renderStatus: 'QUEUED', outputAssetId: null };
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
-  async updateRender(renderId: string, status: string, diagnostics: unknown = {}): Promise<void> {
-    await this.db.query('update renders set status = $2, diagnostics = $3, finished_at = case when $2 in (\'SUCCEEDED\', \'FAILED\', \'CANCELLED\') then now() else finished_at end where id = $1', [renderId, status, diagnostics]);
+  async startRender(renderId: string, attempt: JobAttemptScope, diagnostics: unknown = {}): Promise<boolean> {
+    const result = await attempt.query("update renders set status = 'RUNNING', attempt_id = $2, attempt_number = $3, diagnostics = $4, finished_at = null where id = $1 and job_id = $5 and status not in ('SUCCEEDED', 'CANCELLED') and (attempt_number is null or attempt_number < $3 or (attempt_number = $3 and attempt_id = $2)) returning id", [renderId, attempt.attemptId, attempt.attemptNumber, diagnostics, attempt.jobId]);
+    return Boolean(result.rowCount);
   }
 
-  async completeRender(renderId: string, outputAssetId: string, diagnostics: unknown): Promise<void> {
-    await this.db.query('update renders set status = \'SUCCEEDED\', output_asset_id = $2, diagnostics = $3, finished_at = now() where id = $1', [renderId, outputAssetId, diagnostics]);
+  async completeRender(renderId: string, attempt: JobAttemptScope, outputAssetId: string, diagnostics: unknown): Promise<boolean> {
+    const result = await attempt.query("update renders set status = 'SUCCEEDED', output_asset_id = $3, diagnostics = $4, finished_at = now() where id = $1 and job_id = $5 and attempt_id = $2 and attempt_number = $6 and status = 'RUNNING' returning id", [renderId, attempt.attemptId, outputAssetId, diagnostics, attempt.jobId, attempt.attemptNumber]);
+    return Boolean(result.rowCount);
+  }
+
+  async failRender(renderId: string, attempt: JobAttemptScope, diagnostics: unknown): Promise<boolean> {
+    const result = await attempt.query("update renders set status = 'FAILED', diagnostics = $3, finished_at = now() where id = $1 and job_id = $4 and attempt_id = $2 and attempt_number = $5 and status = 'RUNNING' returning id", [renderId, attempt.attemptId, diagnostics, attempt.jobId, attempt.attemptNumber]);
+    return Boolean(result.rowCount);
+  }
+
+  async cancelRender(renderId: string, attempt: JobAttemptScope, diagnostics: unknown): Promise<boolean> {
+    const result = await attempt.query("update renders set status = 'CANCELLED', diagnostics = $3, finished_at = now() where id = $1 and job_id = $4 and attempt_id = $2 and attempt_number = $5 and status = 'RUNNING' returning id", [renderId, attempt.attemptId, diagnostics, attempt.jobId, attempt.attemptNumber]);
+    return Boolean(result.rowCount);
+  }
+
+  async cancelCurrentRender(attempt: JobAttemptScope, diagnostics: unknown): Promise<number> {
+    const result = await attempt.query("update renders set status = 'CANCELLED', diagnostics = $2, finished_at = now() where job_id = $1 and attempt_id = $3 and attempt_number = $4 and status = 'RUNNING' returning id", [attempt.jobId, diagnostics, attempt.attemptId, attempt.attemptNumber]);
+    return result.rowCount || 0;
   }
 }

@@ -9,6 +9,19 @@ export type CreateBriefInput = Omit<ContentBriefV1, 'schemaVersion' | 'id' | 'pr
 export type CreateScriptRevisionInput = Omit<ScriptRevisionV1, 'schemaVersion' | 'id' | 'projectId' | 'briefId' | 'revision' | 'status' | 'createdAt'> & { parentRevisionId?: string };
 export type CreateStoryboardRevisionInput = Omit<StoryboardRevisionV1, 'schemaVersion' | 'id' | 'projectId' | 'revision' | 'status' | 'createdAt'>;
 export interface DirectorCurrentPair { brief: ContentBriefV1 | null; script: ScriptRevisionV1 | null; storyboard: StoryboardRevisionV1 | null; }
+export interface DirectorProjectSummary {
+  source: 'V1';
+  hasRevision: boolean;
+  readyForVideo: boolean;
+  activeScript: { aggregateId: string; revisionId: string } | null;
+  activeStoryboard: { aggregateId: string; revisionId: string } | null;
+  legacyRevisionId: null;
+}
+export interface DirectorCurrentVideoInput {
+  brief: ContentBriefV1 | null;
+  script: ScriptRevisionV1 | null;
+  storyboard: StoryboardRevisionV1 | null;
+}
 
 function iso(value: unknown): string { return new Date(String(value)).toISOString(); }
 function json<T>(value: unknown, fallback: T): T { return (value ?? fallback) as T; }
@@ -141,7 +154,31 @@ export class DirectorV1Service {
   async listStoryboardRevisions(projectId: string): Promise<StoryboardRevisionV1[]> { const result = await this.db.query('select * from director_storyboard_revisions where project_id = $1 order by revision', [projectId]); return result.rows.map((row) => mapStoryboard(row as Record<string, unknown>)); }
 
   async getCurrentPair(projectId: string): Promise<DirectorCurrentPair> {
-    const stateResult = await this.db.query<{ active_brief_id: string | null; active_script_revision_id: string | null; active_storyboard_revision_id: string | null }>('select active_brief_id, active_script_revision_id, active_storyboard_revision_id from director_project_state where project_id = $1', [projectId]); const state = stateResult.rows[0]; if (!state) return { brief: null, script: null, storyboard: null };
-    const [brief, script, storyboard] = await Promise.all([state.active_brief_id ? this.getBrief(state.active_brief_id, projectId) : Promise.resolve(null), state.active_script_revision_id ? this.getScriptRevision(state.active_script_revision_id, projectId) : Promise.resolve(null), state.active_storyboard_revision_id ? this.getStoryboardRevision(state.active_storyboard_revision_id, projectId) : Promise.resolve(null)]); return { brief, script, storyboard };
+    return (await this.getCurrentVideoInput(projectId)) || { brief: null, script: null, storyboard: null };
+  }
+
+  async getCurrentVideoInput(projectId: string): Promise<DirectorCurrentVideoInput | null> {
+    const result = await this.db.query<{ brief: Record<string, unknown> | null; script: Record<string, unknown> | null; storyboard: Record<string, unknown> | null }>('select to_jsonb(b) as brief, to_jsonb(sr) as script, to_jsonb(sb) as storyboard from director_project_state s left join director_briefs b on b.id = s.active_brief_id and b.project_id = s.project_id left join director_script_revisions sr on sr.id = s.active_script_revision_id and sr.project_id = s.project_id left join director_storyboard_revisions sb on sb.id = s.active_storyboard_revision_id and sb.project_id = s.project_id where s.project_id = $1', [projectId]);
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      brief: row.brief ? mapBrief(row.brief) : null,
+      script: row.script ? mapScript(row.script) : null,
+      storyboard: row.storyboard ? mapStoryboard(row.storyboard) : null,
+    };
+  }
+
+  async getProjectSummary(projectId: string): Promise<DirectorProjectSummary | null> {
+    const state = await this.db.query<{ active_script_aggregate_id: string | null; active_script_revision_id: string | null; active_storyboard_aggregate_id: string | null; active_storyboard_revision_id: string | null; brief_id: string | null; script_id: string | null; script_status: string | null; storyboard_id: string | null; storyboard_status: string | null }>('select s.active_script_aggregate_id, s.active_script_revision_id, s.active_storyboard_aggregate_id, s.active_storyboard_revision_id, b.id as brief_id, sr.id as script_id, sr.status as script_status, sb.id as storyboard_id, sb.status as storyboard_status from director_project_state s left join director_briefs b on b.id = s.active_brief_id and b.project_id = s.project_id left join director_script_revisions sr on sr.id = s.active_script_revision_id and sr.project_id = s.project_id left join director_storyboard_revisions sb on sb.id = s.active_storyboard_revision_id and sb.project_id = s.project_id where s.project_id = $1', [projectId]);
+    const current = state.rows[0];
+    if (!current) return null;
+    return {
+      source: 'V1',
+      hasRevision: Boolean(current.brief_id || current.script_id || current.storyboard_id),
+      readyForVideo: current.script_status === 'ACCEPTED' && current.storyboard_status === 'APPROVED',
+      activeScript: current.active_script_aggregate_id && current.active_script_revision_id && current.script_id ? { aggregateId: current.active_script_aggregate_id, revisionId: current.active_script_revision_id } : null,
+      activeStoryboard: current.active_storyboard_aggregate_id && current.active_storyboard_revision_id && current.storyboard_id ? { aggregateId: current.active_storyboard_aggregate_id, revisionId: current.active_storyboard_revision_id } : null,
+      legacyRevisionId: null,
+    };
   }
 }

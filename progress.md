@@ -218,3 +218,36 @@
 - Wrote and committed `docs/superpowers/specs/2026-08-22-project-center-design.md` in feature worktree `E:\\ContentOS\\.worktrees\\project-center` (commit `c319e62`).
 - Design defines a read-only `ProjectCenterSnapshot` composite contract, `GET /api/v1/projects/:projectId/center`, deterministic health/stage rules, no new Project Center persistence, and no private-table access.
 - A planning-file preservation correction is pending: historical contents of `task_plan.md`, `findings.md`, and `progress.md` must remain intact while appending Slice ③ records.
+
+## Session: 2026-08-23 — Project Center final review repair
+
+- **Status:** complete; independent review passed
+- 已核验独立审查的 4 个 Important 和 1 个 Minor 均可由当前代码路径触发。
+- 采用 TDD：每个生产修复前先添加并运行失败回归测试。
+- Project Center 3 个状态回归用例先失败后通过：Approval unavailable 不再产生 MISSING；历史 Asset 不再决定 current Video；活动 Video Job 优先显示 IN_PROGRESS。
+- 成功 Render 在 SOURCE 关联删除后复用测试先失败后通过；`planJob` 现在先读取已完成结果。
+- Job stale attempt 与短租约 heartbeat 测试先失败后通过；Job succeed/fail 已按 attempt number fencing。
+- Render stale attempt 测试先失败后通过；新增 migration 0011、Render attempt CAS 和 attempt 独立 FFmpeg 输出路径。
+- Director→Video E2E 已加入标准 test 脚本；受影响测试集 53/53 通过。
+- 最新独立复审发现 lease recovery 到下一次 claim 之间仍存在旧 Render 最终化窗口；新增 Job 公共 current-attempt fence，在不跨读私表的前提下关闭窗口。
+- Video 最终化把 Asset import 与 Render CAS 放入同一 Job attempt fence；旧 attempt 的回调不会执行，因此不会产生可发布的孤立 READY Asset。
+- Job heartbeat 现在区分 ACTIVE/CANCEL_REQUESTED/STALE；取消通过 AbortSignal 传到 FFmpeg，Job/attempt 均进入 CANCELLED，attempt 临时输出在 finally 清理。
+- 新增/受影响的并发、取消、Renderer 与 Video E2E 聚焦测试 20/20 通过；全量 Gate 待执行。
+- 最终独立复审发现旧 fence callback 会持有一个 Pool 连接后让 Asset/Video 再借连接，4 路并发可耗尽连接池；该实现已替换为同一连接的 branded attempt transaction scope。
+- Video 的 start/complete/fail/cancel 公开契约不再接受裸 attemptId/number，只能在 Job 当前 attempt 事务内调用。
+- Asset READY 行、Render SUCCEEDED、JobAttempt/Job SUCCEEDED 与事件现为单事务提交；失败测试证明整体回滚且不留下 READY output Asset。
+- 活跃取消测试证明 FFmpeg 子进程被 abort，`.part.mp4` 被删除；Video/Job/attempt 取消终态通过同一事务提交。
+- lease recovery 新增模块 cancellation callback；Video 的 crashed-worker 测试证明 Render、JobAttempt、Job 同步进入 CANCELLED，并清理该 job/attempt 的 output 与 part 文件；无 callback 时保留 CANCEL_REQUESTED 等待正确编排。
+- current attempt 的 Render start CAS 返回 false 现在抛 `RENDER_START_REJECTED`，回归测试证明不会正常返回给 JobRunner。
+- Asset 文件准备已移出 attempt 数据库事务，事务内只提交不可变 blob 元数据和业务状态；Renderer abort 等待 child close。
+- cancellation callback 现在显式返回 handled；混合 VIDEO_RENDER/PUBLISH 回归证明未处理类型保持 CANCEL_REQUESTED。
+- lease recovery 逐 Job 加锁、重验和提交；poison callback 隔离测试证明其他过期 Job 仍可恢复。
+- Prepared Asset handle 由 Asset 模块内部签发并绑定 storage provider；伪造 handle 回归证明无法创建 READY 行。
+- 组合式 Video Worker 入口现于每次 delivery 前运行 typed lease cancellation recovery；标准 Video E2E 已改为通过该入口执行，而非直接调用 handler。
+- Video recovery 已从 delivery 前触发改为启动即执行 + 独立周期 supervisor；shutdown 清 timer 并等待 active pass，真实 CLI 通过环境配置组合依赖，dev-operator 同步启动 Video Worker。
+- Video Worker 现会在启动时并通过独立有界轮询消费 PostgreSQL 中的 `VIDEO_RENDER` Jobs；delivery 只保留为低延迟唤醒入口。标准 Video E2E 只创建 Job 并等待自主执行，不再调用 `worker.execute`。
+- 独立复审发现首批长渲染会延迟 supervisor timer 安装；新增阻塞首轮消费的回归测试并调整启动顺序，现先安装两个 timer 再异步触发消费，lease recovery 与 Worker 启动均不被渲染阻塞。
+- poison recovery 会追加不含异常详情的 `job.lease_recovery_failed` 事件，兼顾任务隔离与可诊断性。
+- 最终 Gate：format、lint、typecheck、root build、Web build、doctor、diff-check 全部通过；全量测试 **180/180**。
+- 最终独立复审未发现 Critical 或 Important，确认 PostgreSQL 自主消费、长首轮消费下的独立 lease recovery 和 shutdown 等待路径均满足验收要求。
+- 诊断时一次 `tsx -e` 命令因 CJS top-level await 及 PowerShell `$1` 展开失败；改用 IIFE 与 PowerShell 单引号后确认 `renewLease` SQL 返回 true。

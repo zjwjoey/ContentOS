@@ -35,6 +35,7 @@ export interface ProjectCenterSnapshot {
   health: { level: ProjectCenterHealthLevel; reasons: string[] };
   stages: ProjectCenterStage[];
   currentStage: ProjectCenterStageKey | null;
+  currentStageSummary: string | null;
   actions: ProjectCenterAction[];
   recentJobs: ProjectCenterJobSummary[];
 }

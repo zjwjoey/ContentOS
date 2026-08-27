@@ -16,6 +16,7 @@ type Snapshot = {
   health: { level: string; reasons: string[] };
   stages: Stage[];
   currentStage: string | null;
+  currentStageSummary: string | null;
   actions: Array<{ id: string; kind: string; title: string; detail: string; severity: string; href: string | null }>;
   recentJobs: Array<{ id: string; type: string; state: string; attemptCount: number; maxAttempts: number; createdAt: string }>;
 };
@@ -81,12 +82,14 @@ export default function ProjectCenterPage() {
       <div><p className="eyebrow">ContentOS / Project Center</p><h1>{snapshot.project.name}</h1><p className="muted">{snapshot.project.status} · 更新于 {new Date(snapshot.project.updatedAt).toLocaleString('zh-CN')}</p></div>
       <button type="button" onClick={() => void refresh()}>刷新</button>
     </header>
+    {message && snapshot && <section className="card form-error" role="alert">当前显示的是上一次成功读取的数据：{message} <button type="button" onClick={() => void refresh()}>重试</button></section>}
     <div className="project-center-layout">
       <nav className="project-stage-rail" aria-label="项目阶段">
         <Link className="project-stage-overview active" href={'/projects/' + projectId}>总览</Link>
         {snapshot.stages.map((stage) => stage.href ? <Link key={stage.key} className={stage.key === snapshot.currentStage ? 'project-stage-link active' : 'project-stage-link'} href={stage.href}><span>{stage.label}</span><small>{statusLabel(stage.status)}</small></Link> : <span key={stage.key} className="project-stage-link disabled"><span>{stage.label}</span><small>{statusLabel(stage.status)}</small></span>)}
       </nav>
       <section className="project-center-content">
+        <section className="card current-stage-summary" data-testid="current-stage-summary"><p className="eyebrow">当前阶段</p><h2>{snapshot.currentStage || '未开始'}</h2><p className="muted">{snapshot.currentStageSummary || '暂无阶段摘要。'}</p></section>
         <section className="card health-card" data-testid="health-level" data-status={snapshot.health.level}>
           <div><p className="eyebrow">项目健康度</p><h2>{statusLabel(snapshot.health.level)}</h2></div>
           <div className="health-reasons">{snapshot.health.reasons.length ? snapshot.health.reasons.map((reason) => <span key={reason}>{reason}</span>) : <span>当前没有需要处理的风险。</span>}</div>

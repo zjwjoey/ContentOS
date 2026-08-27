@@ -185,3 +185,31 @@ Architecture V0 — formal design documentation and self-review.
 - [x] 已确认格式检查失败来自 Windows 工作区既有 CRLF，不是 Slice ③ 文件特有问题；主线工作区同样复现。
 
 约束：基于已验收分支 `codex/publisher-project-integration`；不跨读模块私表；不在 Project Center 重复执行模块写操作；不启动 Slice ④、⑤、⑥。
+
+## Slice ③ final review repair — 2026-08-23
+
+- [x] RED：覆盖成功 Render 在源素材不可用时仍可复用。
+- [x] RED：覆盖租约恢复后旧 attempt 不能覆盖新 attempt，并使用隔离输出路径。
+- [x] RED：覆盖 Approval 读取失败时不生成伪 MISSING 动作。
+- [x] RED：覆盖旧 READY Asset 不能掩盖当前 Render 运行状态。
+- [x] 将 Director→Video 全链路 E2E 纳入标准测试命令。
+- [x] RED/GREEN：覆盖租约恢复后、下一次 claim 前的旧 attempt 落库窗口。
+- [x] RED/GREEN：Asset 导入与 Render 完成进入 Job 公共 attempt fence，旧 attempt 不产生 READY Asset。
+- [x] RED/GREEN：取消信号从 JobRunner 传播到 FFmpeg，取消落为 CANCELLED 且不重试。
+- [x] 清理每个 FFmpeg attempt 的临时输出文件。
+- [x] RED/GREEN：4 个并发 attempt fence 不再因嵌套借连接耗尽 `max=4` 连接池。
+- [x] RED/GREEN：Asset、Render、JobAttempt、Job 最终化使用同一 PostgreSQL 事务，失败整体回滚。
+- [x] RED/GREEN：Video 公开 Render 转换只接受不可伪造的活跃 Job attempt scope；取消 Render 落为 CANCELLED。
+- [x] RED/GREEN：正在运行的 FFmpeg 收到 abort 后终止并删除 `.part.mp4`。
+- [x] RED/GREEN：崩溃 Worker 的 CANCEL_REQUESTED lease recovery 通过 Video 公共 callback 原子关闭 Render；缺 callback 时保持待取消而不伪造终态。
+- [x] RED/GREEN：当前 attempt 的 startRender=false 抛出 invariant error，不再把 Job 记为成功。
+- [x] 文件 hash/probe/stage/promotion 移到短数据库事务之前；abort 等待子进程 close 后再返回。
+- [x] cancellation callback 返回 handled；混合 Job 类型不会被错误收敛为 CANCELLED。
+- [x] lease recovery 改为逐 Job 独立事务；poison callback 只回滚自身，不阻塞其他 Job。
+- [x] Prepared Asset 改为模块内部 branded capability，并验证 storage owner 与 blob 存在。
+- [x] 组合式 Video Worker 启动即执行并周期运行 lease recovery，shutdown 停止并等待；真实 CLI 与 dev-operator 已接线。
+- [x] Video Worker 启动即消费并周期轮询 PostgreSQL 中的待运行 `VIDEO_RENDER` Jobs；E2E 不再手工投递。
+- [x] RED/GREEN：首轮消费长期运行时，lease reconciliation 仍按独立周期执行且 Worker 启动不被阻塞。
+- [x] 更新 ADR/设计证据并完成格式、类型、Lint、构建、全量测试、doctor、diff-check 与独立复审。
+
+**Status:** complete; 180/180 tests and final independent review passed

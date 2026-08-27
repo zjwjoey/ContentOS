@@ -72,3 +72,11 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - JobService 新增项目范围安全摘要查询，只选择 id、project_id、type、state、attempt_count、max_attempts、created_at，避免 payload、错误诊断、lease 和进度进入浏览器。
 - 健康度按 BLOCKED、COMPLETE、ATTENTION、HEALTHY 的确定性优先级推导，覆盖空项目、Director 已批准、Render 失败、Approval 待处理、Publisher 人工动作和确认发布。
 - 独立 PostgreSQL 55433 数据库全量测试通过；共享 contentos_dev 因历史分支遗留 publisher_publication_states 表会使既有 Publisher migration 断言失败，未修改共享库。
+
+## Slice ③ final review findings — 2026-08-23
+
+- 同 Job 的成功 Render 查询位于 Asset Catalog 校验之后，源素材归档会阻断成功结果复用。
+- Job/Render 完成更新没有 attempt fencing；租约恢复后旧、新 attempt 可以并发写同一输出并互相覆盖状态。
+- Approval 查询失败被空数组替代，导致真实当前目标被错误推导为 MISSING。
+- Project Center 的 Video READY 仍由历史 READY Asset 决定，未使用 current PERSISTED Manifest 的成功 Render 事实。
+- Director→Video 完整 FFmpeg E2E 已修改但未进入标准 `pnpm test` 清单。
