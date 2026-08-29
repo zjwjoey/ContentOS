@@ -1,8 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readdir } from 'node:fs/promises';
 import { createDatabase, migrateDown, migrateUp, resolveMigrationsDirectory } from '../../packages/database/src/index.js';
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55432/contentos_dev';
+
+test('migration files form a complete ordered 0001 through 0011 chain', async () => {
+  const names = (await readdir(resolveMigrationsDirectory())).filter((file) => /^\d+_.+\.sql$/.test(file) && !file.endsWith('.down.sql')).sort();
+  assert.deepEqual(names.map((file) => file.slice(0, 4)), Array.from({ length: 11 }, (_, index) => String(index + 1).padStart(4, '0')));
+});
 
 test('migration directory resolution is independent of the process working directory', () => {
   const originalCwd = process.cwd();
