@@ -443,7 +443,7 @@
 - [ ] Run documentation consistency checks:
 
   ```powershell
-  rg -n "PUBLISHER_REAL_ADAPTERS_ENABLED=true|CONTENTOS_REAL_PLATFORM_SMOKE=1" docs .env.example
+  rg -n "PUBLISHER_REAL_ADAPTERS_ENABLED=(true|1)|CONTENTOS_REAL_PLATFORM_SMOKE=(1|true)" docs .env.example
   rg -n "Approval Gate|RECONCILING|IMPLEMENTED.*LIVE-VERIFIED" docs/contracts docs/adr docs/modules docs/superpowers/reports
   git diff --check
   ```
