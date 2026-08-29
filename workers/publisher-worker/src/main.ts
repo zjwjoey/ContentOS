@@ -1,8 +1,11 @@
+import { join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
 import { JobRunner, type JobService, type JobRecord } from '../../../packages/modules/job/src/index.js';
-import { PublisherService, FakePublisherService, type PublisherPublishJobPayload } from '../../../packages/modules/publisher/src/index.js';
+import { PublisherService, FakePublisherService, PublisherAdapterRegistry, type CredentialProvider, type PublisherPublishJobPayload } from '../../../packages/modules/publisher/src/index.js';
 import { ProjectService } from '../../../packages/modules/project/src/index.js';
 import { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
-import type { PublishResult, PublisherFailureClassification } from '../../../packages/contracts/src/index.js';
+import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
+import type { ExternalStateResult, PublishResult, PublisherContext, PublisherFailureClassification, PublisherPlatformId } from '../../../packages/contracts/src/index.js';
 import { WorkerRuntime, type JobHandler } from '../../../packages/shared/src/worker-runtime.js';
 
 export const PUBLISH_RECONCILE_JOB_TYPE = 'PUBLISH_RECONCILE';
@@ -13,6 +16,11 @@ export interface PublisherWorkerOptions {
   projects: ProjectService;
   assets: AssetCatalogService;
   fakePublisher: FakePublisherService;
+  adapterRegistry?: PublisherAdapterRegistry;
+  credentials?: CredentialProvider;
+  storage?: LocalStorageProvider;
+  profileRoot?: string;
+  realAdaptersEnabled?: boolean;
   workerId?: string;
 }
 
@@ -37,6 +45,40 @@ function payloadFromJob(job: JobRecord): PublisherPublishJobPayload {
 
 function isRetryable(classification: PublisherFailureClassification | undefined): boolean { return classification === 'RETRYABLE'; }
 
+async function executeAdapterPublish(options: PublisherWorkerOptions, account: Awaited<ReturnType<PublisherService['getAccount']>>, asset: Awaited<ReturnType<AssetCatalogService['getPublishableAsset']>>, snapshot: Parameters<FakePublisherService['publish']>[1]): Promise<PublishResult> {
+  if (!account || !asset) return { status: 'FAILED', failure: { code: 'UNKNOWN', classification: 'TERMINAL', message: 'Publisher account or asset is unavailable' } };
+  if (account.platformId === 'fake-platform') return options.fakePublisher.publish(account.id, snapshot);
+  if (!options.realAdaptersEnabled) return { status: 'FAILED', failure: { code: 'UNKNOWN', classification: 'TERMINAL', message: 'Real publisher adapter is disabled' } };
+  if (!options.adapterRegistry || !options.credentials || !options.storage) return { status: 'FAILED', failure: { code: 'UNKNOWN', classification: 'TERMINAL', message: 'Real publisher adapter composition is unavailable' } };
+  if (!['douyin', 'wechat-channels'].includes(account.platformId)) return { status: 'FAILED', failure: { code: 'UNKNOWN', classification: 'TERMINAL', message: 'Publisher platform is unsupported' } };
+  if (!/^[a-f0-9]{64}$/i.test(asset.checksum)) return { status: 'FAILED', failure: { code: 'UPLOAD_FAILED', classification: 'PERMANENT', message: 'Real publisher asset checksum is unavailable' } };
+  let credential;
+  try { credential = await options.credentials.resolve(account.credentialRef); }
+  catch { return { status: 'FAILED', failure: { code: 'AUTH_EXPIRED', classification: 'HUMAN_ACTION_REQUIRED', message: 'Publisher credentials require human attention' } }; }
+  const profileRoot = options.profileRoot || join(process.cwd(), 'storage', 'publisher-profiles');
+  const profileDir = join(profileRoot, account.platformId, account.profileKey);
+  await mkdir(profileDir, { recursive: true });
+  const context: PublisherContext = { profileDir, accountId: account.id, credentialRef: account.credentialRef, credential };
+  const adapter = options.adapterRegistry.get(account.platformId as PublisherPlatformId);
+  const auth = await adapter.authenticate(context);
+  if (auth.status === 'FAILED') return { status: 'FAILED', ...(auth.failure ? { failure: auth.failure } : {}) };
+  return adapter.publish(context, snapshot);
+}
+
+async function executeAdapterReconcile(options: PublisherWorkerOptions, account: Awaited<ReturnType<PublisherService['getAccount']>>, idempotencyKey: string): Promise<ExternalStateResult> {
+  if (!account) return { status: 'UNKNOWN' };
+  if (account.platformId === 'fake-platform') return options.fakePublisher.reconcile(account.id, idempotencyKey);
+  if (!options.realAdaptersEnabled || !options.adapterRegistry || !options.credentials) return { status: 'UNKNOWN' };
+  if (!['douyin', 'wechat-channels'].includes(account.platformId)) return { status: 'UNKNOWN' };
+  let credential;
+  try { credential = await options.credentials.resolve(account.credentialRef); } catch { return { status: 'UNKNOWN' }; }
+  const profileRoot = options.profileRoot || join(process.cwd(), 'storage', 'publisher-profiles');
+  const profileDir = join(profileRoot, account.platformId, account.profileKey);
+  await mkdir(profileDir, { recursive: true });
+  const context: PublisherContext = { profileDir, accountId: account.id, credentialRef: account.credentialRef, credential };
+  return options.adapterRegistry.get(account.platformId as PublisherPlatformId).reconcile(context, idempotencyKey);
+}
+
 async function syncProjectPublishingStatus(service: PublisherService, projects: ProjectService, assets: AssetCatalogService, projectId: string): Promise<void> {
   const [summary, publishableAssets] = await Promise.all([service.getProjectSummary(projectId), assets.listPublishable(projectId)]);
   await projects.syncPublishingStatus(projectId, { hasPublishableAsset: publishableAssets.length > 0, publishedRequestCount: summary.statusCounts.PUBLISHED });
@@ -49,7 +91,8 @@ async function ensureReconcileJob(service: PublisherService, jobs: JobService, p
   return jobs.createIdempotent({ id: reconcileJobId, type: PUBLISH_RECONCILE_JOB_TYPE, projectId: payload.projectId, payload: reconcilePayload, idempotencyKey, maxAttempts: 3 });
 }
 
-async function executePublish(service: PublisherService, jobs: JobService, projects: ProjectService, assets: AssetCatalogService, fakePublisher: FakePublisherService, job: JobRecord, jobAttemptId: string): Promise<unknown> {
+async function executePublish(options: PublisherWorkerOptions, job: JobRecord, jobAttemptId: string): Promise<unknown> {
+  const { service, jobs, projects, assets } = options;
   const payload = payloadFromJob(job);
   const aggregate = await service.getRequestAggregate(payload.projectId, payload.requestId);
   if (!aggregate || aggregate.revision.id !== payload.revisionId) throw new PublisherHandlerError('PUBLISH_REQUEST_NOT_FOUND', 'Publisher request revision is not available', false);
@@ -74,9 +117,9 @@ async function executePublish(service: PublisherService, jobs: JobService, proje
   else if (current?.status !== 'PUBLISHING') throw new PublisherHandlerError('PUBLISH_REQUEST_NOT_QUEUEABLE', `Publisher request is ${current?.status || 'missing'}`, false);
 
   const attempt = await service.startAttempt({ requestId: payload.requestId, revisionId: payload.revisionId, operation: 'PUBLISH', jobId: job.id, jobAttemptId });
-  const snapshot = { requestId: payload.requestId, idempotencyKey: aggregate.request.idempotencyKey, assetId: aggregate.revision.assetId, title: aggregate.revision.title, description: aggregate.revision.description };
+  const snapshot = { requestId: payload.requestId, idempotencyKey: aggregate.request.idempotencyKey, assetId: aggregate.revision.assetId, assetSha256: asset.checksum, ...(options.storage ? { mediaPath: options.storage.objectPath(asset.storageKey) } : {}), title: aggregate.revision.title, description: aggregate.revision.description };
   let result: PublishResult;
-  try { result = await fakePublisher.publish(account.id, snapshot); }
+  try { result = await executeAdapterPublish(options, account, asset, snapshot); }
   catch (error) {
     await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'RETRYABLE', diagnostics: { code: 'HANDLER_EXCEPTION' } });
     await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN', message: 'Publisher adapter failed before returning a normalized result' });
@@ -108,7 +151,8 @@ async function executePublish(service: PublisherService, jobs: JobService, proje
   throw new PublisherHandlerError(code, failure?.message || 'Publisher failed', isRetryable(classification));
 }
 
-async function executeReconcile(service: PublisherService, projects: ProjectService, assets: AssetCatalogService, fakePublisher: FakePublisherService, job: JobRecord, jobAttemptId: string): Promise<unknown> {
+async function executeReconcile(options: PublisherWorkerOptions, job: JobRecord, jobAttemptId: string): Promise<unknown> {
+  const { service, projects, assets } = options;
   const payload = payloadFromJob(job);
   const aggregate = await service.getRequestAggregate(payload.projectId, payload.requestId);
   if (!aggregate || aggregate.revision.id !== payload.revisionId) throw new PublisherHandlerError('RECONCILE_REQUEST_NOT_FOUND', 'Publisher request revision is not available', false);
@@ -122,7 +166,7 @@ async function executeReconcile(service: PublisherService, projects: ProjectServ
 
   const attempt = await service.startAttempt({ requestId: payload.requestId, revisionId: payload.revisionId, operation: 'RECONCILE', jobId: job.id, jobAttemptId });
   let result;
-  try { result = await fakePublisher.reconcile(account.id, aggregate.request.idempotencyKey); }
+  try { result = await executeAdapterReconcile(options, account, aggregate.request.idempotencyKey); }
   catch (error) {
     await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'RETRYABLE', diagnostics: { code: 'RECONCILE_HANDLER_EXCEPTION' } });
     throw new PublisherHandlerError('RECONCILE_ADAPTER_ERROR', error instanceof Error ? error.message : 'Publisher reconciliation failed', true);
@@ -156,12 +200,12 @@ export function createPublisherWorker(options?: PublisherWorkerOptions | JobHand
   runtime.register('PUBLISH', async (payload) => {
     const jobId = (payload as { jobId?: unknown })?.jobId;
     if (typeof jobId !== 'string' || !jobId) throw new PublisherHandlerError('INVALID_PUBLISH_JOB_REFERENCE', 'Publisher worker requires a Job id', false);
-    return runner.run(jobId, (job, attemptId) => executePublish(options.service, options.jobs, options.projects, options.assets, options.fakePublisher, job, attemptId));
+    return runner.run(jobId, (job, attemptId) => executePublish(options, job, attemptId));
   });
   runtime.register(PUBLISH_RECONCILE_JOB_TYPE, async (payload) => {
     const jobId = (payload as { jobId?: unknown })?.jobId;
     if (typeof jobId !== 'string' || !jobId) throw new PublisherHandlerError('INVALID_RECONCILE_JOB_REFERENCE', 'Publisher reconciliation requires a Job id', false);
-    return runner.run(jobId, (job, attemptId) => executeReconcile(options.service, options.projects, options.assets, options.fakePublisher, job, attemptId));
+    return runner.run(jobId, (job, attemptId) => executeReconcile(options, job, attemptId));
   });
   return runtime;
 }

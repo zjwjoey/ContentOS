@@ -15,6 +15,16 @@ test('config parses boot values without logging raw secrets', () => {
   assert.equal(config.databaseUrl, 'postgresql://user:password@localhost/db');
 });
 
+test('publisher real adapter configuration is disabled and fail-closed by default', () => {
+  const defaults = loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgresql://user:password@localhost/db', STORAGE_ROOT: './storage/test' });
+  assert.equal(defaults.publisherRealAdaptersEnabled, false);
+  assert.equal(defaults.publisherWechatAllowSubmit, false);
+  assert.throws(() => loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgresql://user:password@localhost/db', STORAGE_ROOT: './storage/test', PUBLISHER_WECHAT_ALLOW_SUBMIT: '1' }), /Real adapters are disabled/);
+  const enabled = loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgresql://user:password@localhost/db', STORAGE_ROOT: './storage/test', PUBLISHER_REAL_ADAPTERS_ENABLED: '1', PUBLISHER_WECHAT_ALLOW_SUBMIT: '1' });
+  assert.equal(enabled.publisherRealAdaptersEnabled, true);
+  assert.equal(enabled.publisherWechatAllowSubmit, true);
+});
+
 test('structured logger redacts password, token, cookie and authorization values', () => {
   const lines: string[] = [];
   const logger = createLogger((line) => lines.push(line));

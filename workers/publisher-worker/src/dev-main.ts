@@ -4,7 +4,9 @@ import { loadConfig } from '../../../packages/config/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
 import { ProjectService } from '../../../packages/modules/project/src/index.js';
 import { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
-import { FakePublisherService, PublisherService } from '../../../packages/modules/publisher/src/index.js';
+import { DouyinOpenApiAdapter, EnvironmentCredentialProvider, FakePublisherService, PublisherAdapterRegistry, PublisherService, PostgresPublishStateStore, WeChatChannelsPlaywrightAdapter } from '../../../packages/modules/publisher/src/index.js';
+import { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
+import { PlaywrightBrowserSessionFactory } from '../../../packages/infrastructure/playwright/src/index.js';
 import { createPublisherWorker, PUBLISH_RECONCILE_JOB_TYPE, type PublisherWorkerOptions } from './main.js';
 
 export interface PublisherDevRunnerOptions { pollIntervalMs?: number; batchSize?: number; }
@@ -52,12 +54,24 @@ async function startLocalWorker(): Promise<void> {
   const db = await createDatabase(config.databaseUrl);
   await migrateUp(db);
   const jobs = new JobService(db);
+  const storage = new LocalStorageProvider(config.storageRoot);
+  const registry = new PublisherAdapterRegistry();
+  if (config.publisherRealAdaptersEnabled) {
+    const state = new PostgresPublishStateStore(db);
+    registry.register(new DouyinOpenApiAdapter(undefined, state));
+    registry.register(new WeChatChannelsPlaywrightAdapter(new PlaywrightBrowserSessionFactory(), { headed: config.publisherWechatHeaded, allowSubmit: config.publisherWechatAllowSubmit, evidenceDir: config.publisherEvidenceRoot }, state));
+  }
   const runner = createPublisherDevRunner({
     jobs,
     service: new PublisherService(db),
     projects: new ProjectService(db),
     assets: new AssetCatalogService(db),
     fakePublisher: new FakePublisherService(join(config.storageRoot, 'publisher-profiles')),
+    adapterRegistry: registry,
+    credentials: new EnvironmentCredentialProvider(),
+    storage,
+    profileRoot: config.publisherProfileRoot,
+    realAdaptersEnabled: config.publisherRealAdaptersEnabled,
     workerId: 'publisher-worker-dev',
   });
   await runner.start();
@@ -67,4 +81,3 @@ async function startLocalWorker(): Promise<void> {
 }
 
 if (process.argv[1]?.endsWith('dev-main.ts')) await startLocalWorker();
-
