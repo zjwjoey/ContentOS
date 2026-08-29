@@ -63,7 +63,7 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   else filters.push(`${manifest.timeline.map((_, i) => `[v${i}]`).join('')}concat=n=${manifest.timeline.length}:v=1:a=0[vout]`);
   args.push('-filter_complex', filters.join(';'), '-map', '[vout]');
   if (voiceIndex >= 0) args.push('-map', `${voiceIndex}:a?`, '-c:a', 'aac', '-strict', '-2', '-shortest'); else args.push('-an');
-  args.push('-c:v', 'mpeg4', '-q:v', '5', '-movflags', '+faststart', tempOutput);
+  args.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '23', '-movflags', '+faststart', tempOutput);
   try {
     await run(ffmpegPath, args, options.signal);
     const probe = await probeMedia(tempOutput, ffprobePath, options.signal);

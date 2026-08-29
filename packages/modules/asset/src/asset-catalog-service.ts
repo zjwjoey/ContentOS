@@ -81,6 +81,11 @@ export class AssetCatalogService {
     return result.rows[0] ? mapSourceAsset(result.rows[0] as Record<string, unknown>) : null;
   }
 
+  async listReadyVideoAssets(projectId: string): Promise<ReadySourceAsset[]> {
+    const result = await this.db.query('select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and pa.role = $2 where a.kind = $3 and a.lifecycle = $4 order by a.created_at, a.id', [projectId, 'SOURCE', 'VIDEO', 'READY']);
+    return result.rows.map((row) => mapSourceAsset(row as Record<string, unknown>));
+  }
+
   async listProjectAssets(projectId: string): Promise<AssetSummaryV0[]> {
     const result = await this.db.query('select a.* from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 order by a.created_at', [projectId]);
     return result.rows.map((row) => {

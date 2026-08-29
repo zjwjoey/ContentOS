@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 
 export type JobState = 'QUEUED' | 'RUNNING' | 'RETRY_WAIT' | 'FAILED' | 'SUCCEEDED' | 'CANCEL_REQUESTED' | 'CANCELLED' | 'BLOCKED';
-export interface JobRecord { id: string; projectId: string | null; type: string; state: JobState; payload: unknown; result: unknown; error: unknown; attemptCount: number; maxAttempts: number; leaseOwner: string | null; leaseExpiresAt: Date | null; progress: unknown; }
+export interface JobRecord { id: string; projectId: string | null; workspaceId: string | null; type: string; state: JobState; payload: unknown; result: unknown; error: unknown; attemptCount: number; maxAttempts: number; leaseOwner: string | null; leaseExpiresAt: Date | null; progress: unknown; }
 export interface JobSummary { id: string; projectId: string; type: string; state: JobState; attemptCount: number; maxAttempts: number; createdAt: string; }
 export interface ProjectJobStateSummary { stateCounts: Record<string, number>; videoStateCounts: Record<string, number>; }
-export interface CreateJobInput { id: string; type: string; projectId: string | null; payload: unknown; idempotencyKey: string; maxAttempts: number; }
+export interface CreateJobInput { id: string; type: string; projectId: string | null; workspaceId?: string | null; payload: unknown; idempotencyKey: string; maxAttempts: number; }
 export type JobHeartbeat = 'ACTIVE' | 'CANCEL_REQUESTED' | 'STALE';
 export type JobAttemptFenceResult<T> = { executed: true; value: T } | { executed: false };
 export type JobAttemptCommitResult<T> = { executed: true; value: T; job: JobRecord } | { executed: false; job: JobRecord };
@@ -32,19 +32,19 @@ class ActiveJobAttemptScope implements JobAttemptScope {
 }
 
 function mapJob(row: Record<string, unknown>): JobRecord {
-  return { id: String(row.id), projectId: row.project_id ? String(row.project_id) : null, type: String(row.type), state: row.state as JobState, payload: row.payload, result: row.result, error: row.error, attemptCount: Number(row.attempt_count), maxAttempts: Number(row.max_attempts), leaseOwner: row.lease_owner ? String(row.lease_owner) : null, leaseExpiresAt: row.lease_expires_at ? new Date(String(row.lease_expires_at)) : null, progress: row.progress };
+  return { id: String(row.id), projectId: row.project_id ? String(row.project_id) : null, workspaceId: row.workspace_id ? String(row.workspace_id) : null, type: String(row.type), state: row.state as JobState, payload: row.payload, result: row.result, error: row.error, attemptCount: Number(row.attempt_count), maxAttempts: Number(row.max_attempts), leaseOwner: row.lease_owner ? String(row.lease_owner) : null, leaseExpiresAt: row.lease_expires_at ? new Date(String(row.lease_expires_at)) : null, progress: row.progress };
 }
 
 export class JobService {
   constructor(private readonly db: Pool) {}
 
   async create(input: CreateJobInput): Promise<JobRecord> {
-    const result = await this.db.query('insert into jobs (id, project_id, type, state, idempotency_key, payload, max_attempts) values ($1, $2, $3, $4, $5, $6, $7) returning *', [input.id, input.projectId, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts]);
+    const result = await this.db.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts) values ($1, $2, $3, $4, $5, $6, $7, $8) returning *', [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts]);
     return mapJob(result.rows[0] as Record<string, unknown>);
   }
 
   async createIdempotent(input: CreateJobInput): Promise<JobRecord> {
-    const result = await this.db.query('insert into jobs (id, project_id, type, state, idempotency_key, payload, max_attempts) values ($1, $2, $3, $4, $5, $6, $7) on conflict (idempotency_key) do update set id = jobs.id returning *', [input.id, input.projectId, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts]);
+    const result = await this.db.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts) values ($1, $2, $3, $4, $5, $6, $7, $8) on conflict (idempotency_key) do update set id = jobs.id returning *', [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts]);
     return mapJob(result.rows[0] as Record<string, unknown>);
   }
 

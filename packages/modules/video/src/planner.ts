@@ -1,7 +1,13 @@
 import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
 
 export interface PlannerAsset { id: string; storageKey: string; sourcePath: string; durationMs: number; }
-export interface BuildManifestInput { projectId: string; seed: number; assets: PlannerAsset[]; targetDurationMs: number; voiceAssetId?: string; voicePath?: string; subtitleText?: string; metadata?: EditManifestV0['metadata']; }
+export interface BuildManifestInput { projectId?: string; workspaceId?: string; seed: number; assets: PlannerAsset[]; targetDurationMs: number; voiceAssetId?: string; voicePath?: string; subtitleText?: string; metadata?: EditManifestV0['metadata']; }
+
+function ownerOf(input: { projectId?: string; workspaceId?: string }): { projectId: string } | { workspaceId: string } {
+  if (input.projectId !== undefined) return { projectId: input.projectId };
+  if (input.workspaceId !== undefined) return { workspaceId: input.workspaceId };
+  throw new Error('Video planner requires exactly one projectId or workspaceId');
+}
 
 function seededRandom(seed: number): () => number {
   let state = (seed >>> 0) || 1;
@@ -11,6 +17,7 @@ function seededRandom(seed: number): () => number {
 export function buildVideoManifest(input: BuildManifestInput): EditManifestV0 {
   if (input.assets.length === 0) throw new Error('Video planner requires at least one video asset');
   if (!Number.isInteger(input.targetDurationMs) || input.targetDurationMs <= 0) throw new Error('targetDurationMs must be positive');
+  const owner = ownerOf(input);
   const random = seededRandom(input.seed);
   const shuffled = [...input.assets].sort(() => random() - 0.5);
   const timeline: EditManifestV0['timeline'] = [];
@@ -29,13 +36,57 @@ export function buildVideoManifest(input: BuildManifestInput): EditManifestV0 {
     cursor += 1;
   }
   const manifest: EditManifestV0 = {
-    schemaVersion: 'EDIT_MANIFEST_V0', projectId: input.projectId, seed: input.seed,
+    schemaVersion: 'EDIT_MANIFEST_V0', ...owner, seed: input.seed,
     canvas: { width: 1080, height: 1920, aspectRatio: '9:16', fps: 30 }, timeline,
     audio: { ...(input.voiceAssetId ? { voiceAssetId: input.voiceAssetId } : {}), ...(input.voicePath ? { voicePath: input.voicePath } : {}), volume: 1 },
     ...(input.subtitleText ? { subtitles: [{ text: input.subtitleText, startMs: 0, endMs: input.targetDurationMs }] } : {}),
     ...(input.metadata ? { metadata: input.metadata } : {}),
-    output: { format: 'mp4', videoCodec: 'mpeg4', audioCodec: 'aac' },
+    output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' },
   };
   validateEditManifest(manifest);
   return manifest;
 }
+
+export interface RandomMontageInput {
+  projectId?: string;
+  workspaceId?: string;
+  seed: number;
+  assets: PlannerAsset[];
+  targetDurationMs: number;
+  voiceAssetId?: string;
+  voicePath?: string;
+  minClipDurationMs?: number;
+  maxClipDurationMs?: number;
+}
+
+/** Deterministic, source-rotating planner used by Standalone Quick Edit. */
+export function buildRandomMontageManifest(input: RandomMontageInput): EditManifestV0 {
+  const minClipDurationMs = input.minClipDurationMs ?? 2_000;
+  const maxClipDurationMs = input.maxClipDurationMs ?? 5_000;
+  if (!Number.isInteger(minClipDurationMs) || minClipDurationMs <= 0 || !Number.isInteger(maxClipDurationMs) || maxClipDurationMs < minClipDurationMs) throw new Error('Random Montage clip bounds are invalid');
+  if (input.assets.length === 0) throw new Error('Random Montage requires at least one video asset');
+  if (!Number.isInteger(input.targetDurationMs) || input.targetDurationMs <= 0) throw new Error('targetDurationMs must be positive');
+  const owner = ownerOf(input);
+  const random = seededRandom(input.seed);
+  const assets = [...input.assets].sort((a, b) => a.id.localeCompare(b.id));
+  const usage = new Map(assets.map((asset) => [asset.id, 0]));
+  const timeline: EditManifestV0['timeline'] = [];
+  let remaining = input.targetDurationMs;
+  while (remaining > 0) {
+    const previous = timeline.at(-1)?.assetId;
+    const lowestUsage = Math.min(...assets.map((asset) => usage.get(asset.id) || 0));
+    const rotation = assets.filter((asset) => (usage.get(asset.id) || 0) === lowestUsage && asset.id !== previous);
+    const candidates = rotation.length > 0 ? rotation : assets.filter((asset) => asset.id !== previous);
+    const asset = candidates[Math.floor(random() * candidates.length)] || assets[0]!;
+    const durationMs = remaining <= maxClipDurationMs ? remaining : Math.min(remaining, minClipDurationMs + Math.floor(random() * (maxClipDurationMs - minClipDurationMs + 1)));
+    if (durationMs <= 0) throw new Error('Random Montage generated an invalid clip duration');
+    const maxIn = Math.max(0, asset.durationMs - durationMs);
+    const sourceInMs = maxIn === 0 ? 0 : Math.floor(random() * (maxIn + 1));
+    timeline.push({ assetId: asset.id, sourcePath: asset.sourcePath, sourceInMs, durationMs, transition: timeline.length ? 'cut' : 'cut' });
+    usage.set(asset.id, (usage.get(asset.id) || 0) + 1);
+    remaining -= durationMs;
+  }
+  return validateAndReturn({ schemaVersion: 'EDIT_MANIFEST_V0', ...owner, seed: input.seed, canvas: { width: 1080, height: 1920, aspectRatio: '9:16', fps: 30 }, timeline, audio: { ...(input.voiceAssetId ? { voiceAssetId: input.voiceAssetId } : {}), ...(input.voicePath ? { voicePath: input.voicePath } : {}), volume: 1 }, output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' } });
+}
+
+function validateAndReturn(manifest: EditManifestV0): EditManifestV0 { validateEditManifest(manifest); return manifest; }

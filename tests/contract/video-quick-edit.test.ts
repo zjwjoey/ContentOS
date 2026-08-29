@@ -63,3 +63,21 @@ test('does not mutate the parent manifest', () => {
   assert.equal(parent.timeline[0]?.sourceInMs, 0);
   assert.equal(next.timeline[0]?.sourceInMs, 20);
 });
+
+test('supports replace and reroll while preserving non-target timeline slots', () => {
+  const operations = parseQuickEditOperations([
+    { type: 'REPLACE', clipIndex: 1, assetId: 'asset-d', sourceInMs: 200 },
+    { type: 'REROLL', clipIndex: 2, seed: 9 },
+  ]);
+  const next = applyQuickEditOperations(fixture(), operations, [
+    { id: 'asset-a', durationMs: 2_000 },
+    { id: 'asset-b', durationMs: 2_000 },
+    { id: 'asset-c', durationMs: 2_000 },
+    { id: 'asset-d', durationMs: 2_000 },
+  ]);
+  assert.equal(next.timeline[0]?.assetId, 'asset-a');
+  assert.equal(next.timeline[1]?.assetId, 'asset-d');
+  assert.equal(next.timeline[1]?.durationMs, 1_000);
+  assert.notEqual(next.timeline[2]?.assetId, 'asset-c');
+  assert.equal(next.timeline[2]?.durationMs, 1_000);
+});

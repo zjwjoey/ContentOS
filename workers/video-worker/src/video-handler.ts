@@ -34,7 +34,7 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
     const outputPath = join(deps.storage.root, 'renders', `${job.id}-${attemptId}.mp4`);
     try {
       const rendered = await renderEditManifest({ manifest: planned.manifest, outputPath, ffmpegPath: deps.ffmpegPath, ffprobePath: deps.ffprobePath, signal, ...(deps.fontFile ? { fontFile: deps.fontFile } : {}) });
-      const outputInput = { projectId: job.projectId || planned.manifest.projectId, sourcePath: outputPath, kind: 'VIDEO_RENDER' };
+      const outputInput = { ...(job.projectId ? { projectId: job.projectId } : planned.manifest.workspaceId ? { workspaceId: planned.manifest.workspaceId } : {}), sourcePath: outputPath, kind: 'VIDEO_RENDER' };
       const preparedOutput = await deps.assets.prepareFile(outputInput);
       const finalized = await deps.jobs.succeedWithCurrentAttempt(job.id, attemptId, async (scope) => {
         const outputAsset = await deps.assets.commitPrepared(outputInput, preparedOutput, scope);

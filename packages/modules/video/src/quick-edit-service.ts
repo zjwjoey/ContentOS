@@ -53,7 +53,7 @@ function sourceDuration(asset: { metadata: Record<string, unknown> }, assetId: s
   return duration;
 }
 
-export class VideoQuickEditService {
+export class VideoAdjustmentService {
   constructor(private readonly db: Pool, private readonly assets: AssetCatalogService) {}
 
   async listManifests(projectId: string): Promise<QuickEditManifestRecord[]> {
@@ -92,8 +92,9 @@ export class VideoQuickEditService {
       const sourceIds = [...new Set(parentValue.timeline.map((clip) => clip.assetId))];
       const sourceRows = await this.assets.listReadySourceAssets(input.projectId, sourceIds, 'VIDEO');
       if (sourceRows.length !== sourceIds.length) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
-      const sourceById = new Map(sourceRows.map((asset) => [asset.id, asset]));
-      const next = applyQuickEditOperations(parentValue, operations);
+      const allSources = await this.assets.listReadyVideoAssets(input.projectId);
+      const sourceById = new Map(allSources.map((asset) => [asset.id, asset]));
+      const next = applyQuickEditOperations(parentValue, operations, allSources.map((asset) => ({ id: asset.id, durationMs: sourceDuration(asset, asset.id), sourcePath: asset.storageKey })));
       next.timeline = next.timeline.map((clip) => {
         const source = sourceById.get(clip.assetId);
         if (!source) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`);
@@ -120,3 +121,6 @@ export class VideoQuickEditService {
     } finally { client.release(); }
   }
 }
+
+/** @deprecated Use VideoAdjustmentService. */
+export { VideoAdjustmentService as VideoQuickEditService };
