@@ -288,3 +288,8 @@
 - Added a disabled-by-default Publisher adapter registry and composed real adapters only in the Publisher Worker. The worker checks platform, asset checksum, credential resolution, storage and profile boundaries before invoking an adapter; Fake Publisher remains the default path.
 - Added `test:integration-closure` for the new contract, adapter, state, migration and real-worker gates. The Stage 1 combined Fake Director→Video→Approval→Publisher E2E and final acceptance report remain outstanding.
 - Combined E2E is now green: 4/4 scenarios cover the complete Fake product flow, retry, human action and unknown-state reconciliation. Final local Gate is green: format, lint, typecheck, root build, Web build, migration matrix, full test (**186/186**), doctor and diff-check. Stage 1 is ready to push for user acceptance; Stage 2 remains closed.
+## Session: 2026-08-29 — Unified Product Flow Stage 2 baseline
+
+- Created `E:\ContentOS\.worktrees\unified-product-flow` on `codex/unified-product-flow` from accepted `integration/contentos-v1@0fbafee` (local and remote heads matched).
+- `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test` (**186/186**) and `pnpm --dir apps/web build` all passed before Stage 2 code changes.
+- Stage 2 scope is limited to browser-operated Fake flow: durable Asset Import, Assets/Video/Approval workspaces, Publisher completion and unified project navigation. Real adapters, live calls and Review Analytics remain disabled/out of scope.
