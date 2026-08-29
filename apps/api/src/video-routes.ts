@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
 import type { ApprovalService } from '../../../packages/modules/approval/src/index.js';
 import type { DirectorV1Service } from '../../../packages/modules/director/src/index.js';
-import type { DirectorVideoService, VideoProjectReadService } from '../../../packages/modules/video/src/index.js';
+import type { DirectorVideoService, VideoProjectReadService, VideoQuickEditService, VideoService, QuickEditOperation } from '../../../packages/modules/video/src/index.js';
 import type { JobService } from '../../../packages/modules/job/src/index.js';
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
 import type { AssetSummaryV0 } from '../../../packages/contracts/src/index.js';
@@ -16,6 +16,7 @@ const videoJobInput = z.object({
   videoAssetIds: z.array(z.string().trim().min(1)).min(1).max(64),
 });
 const legacyVideoJobInput = videoJobInput.partial();
+const quickEditInput = z.object({ parentManifestId: z.string().trim().min(1), operations: z.array(z.record(z.string(), z.unknown())).max(128), createdBy: z.string().trim().min(1).max(200), idempotencyKey: z.string().trim().min(1).max(200).optional() });
 
 export interface VideoRouteDependencies {
   projects: ProjectService;
@@ -25,6 +26,8 @@ export interface VideoRouteDependencies {
   assets: AssetCatalogService;
   approvals: ApprovalService;
   jobs: JobService;
+  video: VideoService;
+  quickEdit: VideoQuickEditService;
 }
 
 function projectIdOf(request: { params: unknown }): string { return (request.params as { projectId: string }).projectId; }
@@ -47,9 +50,22 @@ function legacyVideoOptions(input: z.infer<typeof legacyVideoJobInput>): { video
     ...(input.seed !== undefined ? { seed: input.seed } : {}),
   };
 }
+function safeManifest(manifest: Record<string, unknown>): Record<string, unknown> {
+  const timeline = Array.isArray(manifest.timeline) ? manifest.timeline.map((clip) => {
+    if (!clip || typeof clip !== 'object') return clip;
+    const { sourcePath: _sourcePath, ...safeClip } = clip as Record<string, unknown>;
+    return safeClip;
+  }) : [];
+  const audio = manifest.audio && typeof manifest.audio === 'object' ? (() => { const { voicePath: _voicePath, ...safeAudio } = manifest.audio as Record<string, unknown>; return safeAudio; })() : manifest.audio;
+  return { ...manifest, timeline, audio };
+}
+function safeManifestRecord(record: Awaited<ReturnType<VideoQuickEditService['getManifest']>>): unknown {
+  if (!record) return null;
+  return { ...record, manifest: safeManifest(record.manifest as unknown as Record<string, unknown>) };
+}
 
 export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRouteDependencies): void {
-  const { projects, director, videoFromDirector, videoRead, assets, approvals, jobs } = dependencies;
+  const { projects, director, videoFromDirector, videoRead, assets, approvals, jobs, video, quickEdit } = dependencies;
 
   app.get('/api/v1/projects/:projectId/video', async (request, reply) => {
     const projectId = projectIdOf(request);
@@ -72,6 +88,44 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
       renderHistory: history.map(({ jobId: _jobId, ...item }) => item), job,
       approval: approval ? { targetType: approval.targetType, targetId: approval.targetId, targetRevisionId: approval.targetRevisionId, status: approval.status } : null,
     };
+  });
+
+  app.get('/api/v1/projects/:projectId/video/manifests', async (request, reply) => {
+    const projectId = projectIdOf(request);
+    if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    return { items: (await quickEdit.listManifests(projectId)).map((record) => safeManifestRecord(record)) };
+  });
+
+  app.get('/api/v1/projects/:projectId/video/manifests/:manifestId', async (request, reply) => {
+    const { projectId, manifestId } = request.params as { projectId: string; manifestId: string };
+    if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    const record = await quickEdit.getManifest(projectId, manifestId);
+    if (!record) return reply.code(404).send({ error: { code: 'VIDEO_MANIFEST_NOT_FOUND', message: 'Video Manifest not found', details: [] } });
+    return safeManifestRecord(record);
+  });
+
+  app.post('/api/v1/projects/:projectId/video/quick-edits', async (request, reply) => {
+    const projectId = projectIdOf(request);
+    if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    const parsed = quickEditInput.safeParse(request.body || {});
+    if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Quick Edit input', details: parsed.error.issues } });
+    try {
+      const result = await quickEdit.createVersion({ projectId, parentManifestId: parsed.data.parentManifestId, operations: parsed.data.operations as QuickEditOperation[], createdBy: parsed.data.createdBy, ...(parsed.data.idempotencyKey ? { idempotencyKey: parsed.data.idempotencyKey } : {}) });
+      return reply.code(201).send(safeManifestRecord(result));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Quick Edit rejected';
+      const code = message.includes('NOT_FOUND') ? 404 : message.includes('IDEMPOTENCY') || message.includes('CURRENT') ? 409 : 422;
+      return reply.code(code).send({ error: { code: message.split(':')[0] || 'VIDEO_QUICK_EDIT_INVALID', message, details: [] } });
+    }
+  });
+
+  app.post('/api/v1/projects/:projectId/video/manifests/:manifestId/render', async (request, reply) => {
+    const { projectId, manifestId } = request.params as { projectId: string; manifestId: string };
+    if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    const manifest = await quickEdit.getManifest(projectId, manifestId);
+    if (!manifest) return reply.code(404).send({ error: { code: 'VIDEO_MANIFEST_NOT_FOUND', message: 'Video Manifest not found', details: [] } });
+    try { return reply.code(201).send(await video.createManifestRenderJob(projectId, manifestId)); }
+    catch (error) { return reply.code(409).send({ error: { code: 'VIDEO_MANIFEST_RENDER_CONFLICT', message: error instanceof Error ? error.message : 'Manifest render conflict', details: [] } }); }
   });
 
   app.post('/api/v1/projects/:projectId/video/jobs', async (request, reply) => {

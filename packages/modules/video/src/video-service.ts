@@ -4,9 +4,10 @@ import type { LocalStorageProvider } from '../../../infrastructure/storage/src/i
 import type { AssetCatalogService } from '../../asset/src/index.js';
 import { JobService, type JobAttemptScope, type JobRecord } from '../../job/src/index.js';
 import { buildVideoManifest, type PlannerAsset } from './planner.js';
+import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
 
 export interface CreateVideoJobInput { projectId: string; videoAssetIds: string[]; voiceAssetId?: string; targetDurationMs: number; seed: number; subtitleText?: string; idempotencyKey?: string; directorRevisionId?: string; directorRevision?: number; directorBrief?: unknown; directorStoryboard?: unknown; metadata?: { briefId?: string; scriptRevisionId?: string; storyboardRevisionId?: string }; }
-export interface VideoJobPayload extends CreateVideoJobInput {}
+export interface VideoJobPayload extends CreateVideoJobInput { manifestId?: string; manifestRevision?: number; }
 export interface VideoPlanResult { manifestId: string; renderId: string; manifest: ReturnType<typeof buildVideoManifest>; renderStatus: string; outputAssetId: string | null; }
 
 export class VideoService {
@@ -31,6 +32,18 @@ export class VideoService {
     catch (error) { if ((error as { code?: string }).code === '23505') { const existing = await this.jobs.getByIdempotencyKey(idempotencyKey); if (existing) return existing; } throw error; }
   }
 
+  async createManifestRenderJob(projectId: string, manifestId: string): Promise<JobRecord> {
+    const manifest = await this.db.query<{ revision: number; project_id: string }>('select revision, project_id from edit_manifests where id = $1 and project_id = $2', [manifestId, projectId]);
+    const row = manifest.rows[0];
+    if (!row) throw new Error('VIDEO_MANIFEST_NOT_FOUND');
+    const manifestRevision = Number(row.revision);
+    const idempotencyKey = `video-render:manifest:${projectId}:${manifestId}:v${manifestRevision}`;
+    const id = `job-${randomUUID()}`;
+    const payload = { projectId, manifestId, manifestRevision } as unknown as VideoJobPayload;
+    try { return await this.jobs.create({ id, projectId, type: 'VIDEO_RENDER', payload, idempotencyKey, maxAttempts: 3 }); }
+    catch (error) { if ((error as { code?: string }).code === '23505') { const existing = await this.jobs.getByIdempotencyKey(idempotencyKey); if (existing) return existing; } throw error; }
+  }
+
   async planJob(job: JobRecord): Promise<VideoPlanResult> {
     const payload = job.payload as VideoJobPayload;
     const projectId = job.projectId;
@@ -38,6 +51,7 @@ export class VideoService {
     const completed = await this.db.query<{ render_id: string; manifest_id: string; manifest: ReturnType<typeof buildVideoManifest>; render_status: string; output_asset_id: string }>("select r.id as render_id, m.id as manifest_id, m.manifest, r.status as render_status, r.output_asset_id from renders r join edit_manifests m on m.id = r.manifest_id and m.project_id = r.project_id where r.job_id = $1 and r.project_id = $2 and r.status = 'SUCCEEDED' and r.output_asset_id is not null order by r.created_at desc, r.id desc limit 1", [job.id, projectId]);
     const completedRender = completed.rows[0];
     if (completedRender) return { manifestId: completedRender.manifest_id, renderId: completedRender.render_id, manifest: completedRender.manifest, renderStatus: completedRender.render_status, outputAssetId: completedRender.output_asset_id };
+    if (payload.manifestId) return this.planManifestJob(job, payload);
     const storage = this.storage;
     if (!storage) throw new Error('Video storage is required to plan a render');
     if (!this.assets) throw new Error('Asset catalog is required to plan a render');
@@ -80,6 +94,47 @@ export class VideoService {
     } finally {
       client.release();
     }
+  }
+
+  private async planManifestJob(job: JobRecord, payload: VideoJobPayload): Promise<VideoPlanResult> {
+    if (!payload.manifestId || !Number.isInteger(payload.manifestRevision)) throw new Error('VIDEO_MANIFEST_REVISION_REQUIRED');
+    if (!this.storage || !this.assets) throw new Error('Video storage and asset catalog are required for exact Manifest rendering');
+    const selected = await this.db.query<{ id: string; project_id: string; revision: number; manifest: EditManifestV0 }>('select id, project_id, revision, manifest from edit_manifests where id = $1 and project_id = $2', [payload.manifestId, job.projectId]);
+    const row = selected.rows[0];
+    if (!row) throw new Error('VIDEO_MANIFEST_NOT_FOUND');
+    if (Number(row.revision) !== payload.manifestRevision) throw new Error('VIDEO_MANIFEST_REVISION_CONFLICT');
+    const persisted = row.manifest;
+    validateEditManifest(persisted);
+    const ids = [...new Set(persisted.timeline.map((clip) => clip.assetId))];
+    const sources = await this.assets.listReadySourceAssets(job.projectId!, ids, 'VIDEO');
+    if (sources.length !== ids.length) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
+    const byId = new Map(sources.map((source) => [source.id, source]));
+    const manifest = structuredClone(persisted);
+    manifest.timeline = manifest.timeline.map((clip) => {
+      const source = byId.get(clip.assetId);
+      if (!source) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`);
+      const duration = Number(source.metadata.durationMs);
+      if (!Number.isFinite(duration) || clip.sourceInMs + clip.durationMs > duration) throw new Error(`VIDEO_MANIFEST_CLIP_OUT_OF_BOUNDS: ${clip.assetId}`);
+      return { ...clip, sourcePath: this.storage!.objectPath(source.storageKey) };
+    });
+    if (manifest.audio.voiceAssetId) {
+      const voice = await this.assets.getReadySourceAsset(job.projectId!, manifest.audio.voiceAssetId, 'AUDIO');
+      if (!voice) throw new Error('VIDEO_MANIFEST_VOICE_UNAVAILABLE');
+      manifest.audio = { ...manifest.audio, voicePath: this.storage.objectPath(voice.storageKey) };
+    }
+    const client = await this.db.connect();
+    try {
+      await client.query('begin');
+      await client.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:video-manifest:${job.projectId}`]);
+      const existing = await client.query<{ render_id: string; manifest_id: string; manifest: EditManifestV0; render_status: string; output_asset_id: string | null }>('select r.id as render_id, m.id as manifest_id, m.manifest, r.status as render_status, r.output_asset_id from renders r join edit_manifests m on m.id = r.manifest_id and m.project_id = r.project_id where r.job_id = $1 and r.project_id = $2 order by r.created_at desc, r.id desc limit 1', [job.id, job.projectId]);
+      const prior = existing.rows[0];
+      if (prior) { await client.query('commit'); return { manifestId: prior.manifest_id, renderId: prior.render_id, manifest: prior.manifest, renderStatus: prior.render_status, outputAssetId: prior.output_asset_id }; }
+      const renderId = `render-${randomUUID()}`;
+      await client.query('insert into renders (id, project_id, manifest_id, job_id, status, diagnostics) values ($1, $2, $3, $4, $5, $6)', [renderId, job.projectId, payload.manifestId, job.id, 'QUEUED', { manifestRevision: payload.manifestRevision }]);
+      await client.query('commit');
+      return { manifestId: payload.manifestId, renderId, manifest, renderStatus: 'QUEUED', outputAssetId: null };
+    } catch (error) { await client.query('rollback'); throw error; }
+    finally { client.release(); }
   }
 
   async startRender(renderId: string, attempt: JobAttemptScope, diagnostics: unknown = {}): Promise<boolean> {

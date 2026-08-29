@@ -160,7 +160,7 @@
 - Modify: `tests/unit/video-handler-idempotency.test.ts`
 - Create: `tests/e2e/video-quick-edit-vertical-slice.test.ts`
 
-- [ ] **Step 1: Write failing exact-version tests**
+- [x] **Step 1: Write failing exact-version tests**
 
   Add API assertions for Manifest list/detail, Quick Edit creation and render
   Job payload. Add a Worker test that inserts two valid Manifest versions with
@@ -169,7 +169,7 @@
   mismatched revision or changed source checksum fails before FFmpeg and does
   not create a READY output Asset.
 
-- [ ] **Step 2: Run tests and confirm RED**
+- [x] **Step 2: Run tests and confirm RED**
 
   Run:
 
@@ -180,7 +180,7 @@
   Expected: FAIL because the API has no Manifest routes and Video Worker only
   plans from `videoAssetIds`.
 
-- [ ] **Step 3: Add exact Manifest Job support**
+- [x] **Step 3: Add exact Manifest Job support**
 
   Extend the Video public payload with optional `manifestId` and
   `manifestRevision`. Add `createManifestRenderJob(projectId, manifestId)` to
@@ -199,7 +199,7 @@
   atomic output promotion path. Only the source of the immutable Manifest
   changes.
 
-- [ ] **Step 4: Run focused tests and commit**
+- [x] **Step 4: Run focused tests and commit**
 
   Run the exact-version API, Worker and E2E tests, then `pnpm typecheck` and
   `pnpm build`.
