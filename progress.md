@@ -251,3 +251,13 @@
 - 最终 Gate：format、lint、typecheck、root build、Web build、doctor、diff-check 全部通过；全量测试 **180/180**。
 - 最终独立复审未发现 Critical 或 Important，确认 PostgreSQL 自主消费、长首轮消费下的独立 lease recovery 和 shutdown 等待路径均满足验收要求。
 - 诊断时一次 `tsx -e` 命令因 CJS top-level await 及 PowerShell `$1` 展开失败；改用 IIFE 与 PowerShell 单引号后确认 `renewLease` SQL 返回 true。
+
+## Session: 2026-08-29 — Integration and unified product planning
+
+- **Status:** written design awaiting user review
+- User selected the safe integration endpoint: push `integration/contentos-v1` and stop before merging to `main`.
+- Verified branch heads, ancestry, migration inventory, API routes, Web pages and current E2E coverage.
+- Selected Project Center head `d257229` as the integration base because it already contains Director V1 and both Publisher product lines.
+- Reserved Stage 1 for branch/migration/runtime convergence and a public API/Worker combined E2E; Stage 2 remains closed until that Gate passes.
+- Defined Stage 2 as a Web-operated Fake product flow with durable asset ingestion and minimal Assets/Video/Approval stages; real AI, live platform verification and Review Analytics remain out of scope.
+- Added `docs/superpowers/specs/2026-08-29-contentos-integration-and-unified-flow-design.md`; no business code changed.

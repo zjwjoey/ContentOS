@@ -213,3 +213,18 @@ Architecture V0 — formal design documentation and self-review.
 - [x] 更新 ADR/设计证据并完成格式、类型、Lint、构建、全量测试、doctor、diff-check 与独立复审。
 
 **Status:** complete; 180/180 tests and final independent review passed
+
+## ContentOS Integration Closure + Unified Product Flow planning — 2026-08-29
+
+- [x] 恢复并核对现有规划文件、治理文档和分支状态。
+- [x] 确认第一步终点：只推送 `integration/contentos-v1`，不自动合并 `main`。
+- [x] 核验分支祖先关系和迁移编号，确认 Project Center 已包含 Director V1 与 Publisher Project Integration。
+- [x] 比较三种集成方式并选择以 `codex/project-center@d257229` 为集成基线。
+- [x] 确认 `0006_publisher_state` 与真实 Adapter 代码在第一步集成，但保持默认关闭且不做 Live Smoke。
+- [x] 冻结第一步 Integration Closure 与第二步 Unified Product Flow 的设计边界、数据流和 Gate。
+- [x] 写入设计文档 `docs/superpowers/specs/2026-08-29-contentos-integration-and-unified-flow-design.md`。
+- [ ] 用户审阅并确认书面设计。
+- [ ] 分别编写第一步和第二步实施计划并完成自检。
+- [ ] 用户选择后续执行方式。
+
+**Status:** written design awaiting user review; no business code changed

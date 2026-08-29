@@ -80,3 +80,13 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - Approval 查询失败被空数组替代，导致真实当前目标被错误推导为 MISSING。
 - Project Center 的 Video READY 仍由历史 READY Asset 决定，未使用 current PERSISTED Manifest 的成功 Render 事实。
 - Director→Video 完整 FFmpeg E2E 已修改但未进入标准 `pnpm test` 清单。
+
+## Integration Closure planning findings — 2026-08-29
+
+- Git ancestry confirms `codex/director-v1 -> codex/publisher-productization -> codex/publisher-project-integration -> codex/project-center`; re-merging those branches would be redundant and conflict-prone.
+- `main` is not an ancestor of Project Center only because `main` has the unique `752e8c4 chore: ignore local worktrees` commit; the integration branch must merge it to record convergence.
+- The Project Center head `d257229` already contains Director V1, Publisher Foundation, Approval, Publisher-to-Project integration, Project Center and the final Job/Video reliability repairs.
+- Project Center has migrations `0001`–`0005` and `0007`–`0011`; `feature/slice-5-real-platform-adapters` owns `0006_publisher_state`. A trustworthy integrated migration chain must reconcile `0006` before accepting the branch.
+- Real adapter implementation can be integrated while remaining disabled by default. `IMPLEMENTED` does not mean `LIVE-VERIFIED`; credentials and live smoke stay outside Stage 1.
+- The current Web app has Project Center, Director and Publisher pages but no dedicated Assets, Video or Approval pages. A complete browser flow therefore requires durable asset ingestion and minimal Video/Approval product stages.
+- A read-only line-count diagnostic used incompatible `Get-Content` positional and `-LiteralPath` arguments. It did not change files or affect conclusions; exact-path reads must use only `-LiteralPath` in future checks.
