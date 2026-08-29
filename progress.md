@@ -278,3 +278,12 @@
 - Initial `pnpm test` attempt used the test files' fallback `127.0.0.1:55432` and returned 92 connection-refused failures; no test reached product assertions. The local PostgreSQL service was verified on port 5432 with existing `contentos_test`.
 - Re-run with `DATABASE_URL=postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test`: **180/180 tests passed**, 0 failed, duration 27.1s.
 - No source or migration changes have been made yet on the integration branch; next task is the explicit `main@752e8c4` convergence.
+
+### Execution updates
+
+- Merged `main@752e8c4` with an explicit non-fast-forward merge (`bafd081`) and verified both the accepted Project Center baseline `d257229` and main convergence commit are ancestors of `integration/contentos-v1`.
+- Migration RED/GREEN gate found the reviewed Publisher state migration absent from the baseline. Added `0006_publisher_state.sql` and its down migration, then added an isolated-schema migration matrix so each run uses the existing PostgreSQL service without requiring CREATEDB privileges.
+- Added Publisher contract boundaries for real platform IDs, credential references, immutable snapshot digests, browser-session lifecycle and secret-safe environment credential resolution. Playwright is isolated under the infrastructure browser package and is not called from request handlers.
+- Added durable Douyin HTTP and WeChat Channels Playwright adapters with Postgres-backed publication state, idempotency and UNKNOWN_EXTERNAL_STATE reconciliation. WeChat manual confirmation maps to the current `REQUIRES_VERIFICATION` application state because the frozen 0009 constraint does not contain a separate `HUMAN_CONFIRMATION_REQUIRED` value.
+- Added a disabled-by-default Publisher adapter registry and composed real adapters only in the Publisher Worker. The worker checks platform, asset checksum, credential resolution, storage and profile boundaries before invoking an adapter; Fake Publisher remains the default path.
+- Added `test:integration-closure` for the new contract, adapter, state, migration and real-worker gates. The Stage 1 combined Fake Director→Video→Approval→Publisher E2E and final acceptance report remain outstanding.
