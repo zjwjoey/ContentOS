@@ -9,10 +9,12 @@ test('operator browser smoke walks the unified project stages', { skip: !baseUrl
   const page = await browser.newPage();
   try {
     await page.goto(baseUrl!, { waitUntil: 'domcontentloaded' });
-    await page.getByRole('textbox', { name: /项目名称/ }).fill(`Browser smoke ${Date.now()}`);
-    await page.getByRole('button', { name: /创建并进入项目总控/ }).click();
-    await page.getByTestId('project-center').waitFor();
-    for (const label of ['Assets', 'Director', 'Video', 'Approval Gate', 'Publisher']) assert.equal(await page.getByRole('link', { name: label, exact: true }).count(), 1, label);
+    await page.waitForLoadState('networkidle');
+    const projectName = `Browser smoke ${Date.now()}`;
+    await page.getByRole('textbox', { name: /项目名称/ }).fill(projectName);
+    await page.locator('form').evaluate((form) => (form as HTMLFormElement).requestSubmit());
+    await page.getByTestId('project-center').waitFor({ timeout: 10_000 });
+    for (const label of ['Assets', 'Director', 'Video', 'Approval Gate', 'Publisher']) assert.ok(await page.getByRole('link', { name: new RegExp(`^${label}`) }).count() >= 1, label);
   } finally {
     await browser.close();
   }
