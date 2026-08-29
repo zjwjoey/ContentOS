@@ -53,6 +53,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .action-list p { margin: 5px 0 0; }
 .job-list li { display: flex; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 9px; padding: 10px; }
 .project-center-loading { min-height: 180px; display: grid; place-items: center; }
+.upload-box { border: 1px dashed var(--accent); border-radius: 12px; padding: 18px; text-align: center; }
+.revision-list video, .revision-list audio { max-width: 100%; margin-top: 8px; }
 @media (max-width: 1050px) { .stage-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 900px) { .project-center-layout { grid-template-columns: 1fr; } .project-stage-rail { position: static; display: flex; overflow-x: auto; } .project-stage-overview, .project-stage-link { min-width: 150px; } }
 @media (max-width: 640px) { .project-center-header, .health-card { align-items: stretch; flex-direction: column; } .health-reasons { justify-content: flex-start; } .stage-card-grid, .project-center-columns { grid-template-columns: 1fr; } }
