@@ -188,7 +188,7 @@
   - `PublisherContext` adds `accountId` and optional `credential`;
   - `createPublishSnapshotDigest` hashes only immutable reviewed fields and identifiers.
 
-- [ ] Keep `PublisherRequestRevision.assetChecksum` and `ApprovalDecision.targetRevisionId` as the authoritative approval binding. Do not introduce the old `ReviewApprovalProvider` or rename Approval to Review.
+- [ ] Keep `PublisherRequestRevision.assetChecksum` and `ApprovalDecision.targetRevisionId` as the authoritative approval binding. Do not introduce the historical Review-based handler or rename Approval to Review.
 
 - [ ] Run focused contract tests and typecheck:
 
@@ -336,7 +336,7 @@
   pnpm tsx --test --test-concurrency=1 tests/worker/publisher-product-worker.test.ts tests/worker/real-publisher-worker.test.ts tests/unit/config-logging.test.ts
   ```
 
-- [ ] Implement `PublisherAdapterRegistry` as a platform dispatch boundary, but keep the current Worker as the only owner of Request transitions, Attempt history, ExternalPost creation, retry policy, and reconcile Job creation. Do not import the historical `createPublisherHandler` or `ReviewApprovalProvider` design.
+- [ ] Implement `PublisherAdapterRegistry` as a platform dispatch boundary, but keep the current Worker as the only owner of Request transitions, Attempt history, ExternalPost creation, retry policy, and reconcile Job creation. Do not import the historical handler composition design.
 
 - [ ] Extend Worker composition with `LocalStorageProvider`, `CredentialProvider`, profile root, durable state store, and optional real adapters. Build `mediaPath` inside the Worker from the verified Asset `storageKey`; never place credentials or browser profile state into `PublisherPublishJobPayload`.
 
@@ -443,7 +443,7 @@
 - [ ] Run documentation consistency checks:
 
   ```powershell
-  rg -n "ReviewApprovalProvider|PUBLISHER_REAL_ADAPTERS_ENABLED=true|CONTENTOS_REAL_PLATFORM_SMOKE=1" docs .env.example
+  rg -n "PUBLISHER_REAL_ADAPTERS_ENABLED=true|CONTENTOS_REAL_PLATFORM_SMOKE=1" docs .env.example
   rg -n "Approval Gate|RECONCILING|IMPLEMENTED.*LIVE-VERIFIED" docs/contracts docs/adr docs/modules docs/superpowers/reports
   git diff --check
   ```
