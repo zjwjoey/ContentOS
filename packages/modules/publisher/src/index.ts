@@ -4,6 +4,8 @@ export type { CreatePublisherAccountInput, CreatePublisherRequestInput, FinishPu
 export type { FakeOutcome } from './fake-publisher.js';
 export { withBrowserSession } from './browser-session.js';
 export type { BrowserPage, BrowserSession, BrowserSessionFactory } from './browser-session.js';
+export { EnvironmentCredentialProvider } from './credential-provider.js';
+export type { CredentialProvider } from './credential-provider.js';
 export { assertPublisherRequestTransition } from '../../../contracts/src/index.js';
 export type {
   PublisherAccount,
