@@ -54,8 +54,9 @@ type QuickEditOperation =
   | { type: 'REORDER'; clipIndexes: number[] };
 ```
 
-操作按数组顺序应用于内存中的基准 Manifest。`clipIndex` 指基准时间线中的
-索引；一次请求中不允许对同一索引产生无法确定的多次修改。操作完成后必须
+操作按数组顺序应用于内存中的时间线。每个 `clipIndex` 指该操作执行前的
+当前时间线索引；因此操作顺序是请求语义的一部分，UI 默认一次只修改一个
+镜头。一次请求中不允许对同一索引产生无法确定的多次修改。操作完成后必须
 重新执行 `EDIT_MANIFEST_V0` 合同校验。
 
 ### 校验规则
@@ -75,6 +76,8 @@ type QuickEditOperation =
 - `parent_manifest_id`：指向产生当前版本的 Manifest；首个规划版本为 null。
 - `edit_operations`：经过 schema 校验的 Quick Edit 操作 JSON。
 - `created_by`：操作员标识，不保存凭据或浏览器会话信息。
+- `idempotency_key` 和 `input_digest`：绑定同一项目中的重复提交，保证同一
+  操作只生成一个版本；相同键但摘要不同必须冲突。
 
 每次创建版本在一个数据库事务内完成：项目级 advisory lock、读取当前版本、
 校验父版本、写入 vN+1、将上一 `PERSISTED` 版本标记为 `SUPERSEDED`。唯一约束
