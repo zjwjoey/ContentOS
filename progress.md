@@ -304,6 +304,7 @@
 - Task 11 complete: Publisher queue requires pre-existing exact Publish Approval and safely displays attempts, human action and ExternalPost state.
 - Task 12 complete: shared five-stage navigation shell is used by Project Center and Assets/Director pages; Video/Approval/Publisher routes are part of the frozen product model.
 - Task 13 partial: opt-in Playwright smoke harness added and verified against the running operator composition; the full isolated-process browser journey remains outstanding.
-- Verification: root `pnpm test` **188/188 passed**; Stage2 product suite with operator URL **13/13 passed**; standalone browser smoke **1/1 passed**; format, lint, typecheck, root/Web build, migration matrix, doctor and diff-check passed.
+- Verification: root `pnpm test` **189/189 passed**; Stage2 product suite with operator URL **13/13 passed**; standalone browser smoke **1/1 passed**; format, lint, typecheck, root/Web build, migration matrix, doctor and diff-check passed.
 - Acceptance fix: narrowed the Publisher Worker production-entry guard so `dev-main.ts` no longer starts the production worker; focused Publisher regression **12/12 passed**.
+- Acceptance diagnosis: a first full-suite rerun overlapped the browser-test operator on the same PostgreSQL test database, so its Publisher Worker consumed test Jobs and produced three false failures. The owned operator was stopped, its two exact residues were removed, and the clean single-executor rerun passed 189/189.
 - Current branch remains local `codex/unified-product-flow`; no remote push or merge to `main` has been performed.

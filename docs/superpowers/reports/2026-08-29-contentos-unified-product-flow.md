@@ -33,7 +33,7 @@ Real AI providers, live Douyin/WeChat calls, Review analytics and merge to
 - `pnpm typecheck`: passed.
 - `pnpm --dir apps/web build`: passed with routes for Assets, Director, Video,
   Approval Gate and Publisher.
-- `pnpm test` with the local PostgreSQL service on port 5432: **188 passed, 0
+- `pnpm test` with the local PostgreSQL service on port 5432: **189 passed, 0
   failed**.
 - `pnpm test:stage2-product` with
   `DATABASE_URL=postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test`
@@ -47,6 +47,10 @@ Real AI providers, live Douyin/WeChat calls, Review analytics and merge to
 - Acceptance found and fixed a Publisher dev-composition guard that mistakenly
   launched the production worker from `dev-main.ts`; the regression suite is
   green (`publisher-web` + Publisher Worker: **12/12 passed**).
+- One acceptance rerun was invalidated because the browser-test operator was
+  still consuming Jobs from the same test database. After stopping that owned
+  composition and removing its two exact test residues, the focused 12/12 and
+  full 189/189 suites passed with a single test executor.
 
 ## Known limits before final Stage 2 acceptance
 
