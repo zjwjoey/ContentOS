@@ -36,17 +36,24 @@ Real AI providers, live Douyin/WeChat calls, Review analytics and merge to
 - `pnpm test` with the local PostgreSQL service on port 5432: **188 passed, 0
   failed**.
 - `pnpm test:stage2-product` with
-  `DATABASE_URL=postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test`:
-  **12 passed, 0 failed, 1 skipped**. The skipped test is the opt-in browser
-  smoke, skipped because `CONTENTOS_OPERATOR_URL` was not provided.
-- `pnpm test:browser`: exits successfully with the same opt-in skip when no
-  operator URL is configured.
+  `DATABASE_URL=postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test`
+  and `CONTENTOS_OPERATOR_URL=http://127.0.0.1:3001`: **13 passed, 0 failed,
+  0 skipped**.
+- `pnpm test:browser` with the operator composition running on port 3001:
+  **1 passed, 0 failed**. Without `CONTENTOS_OPERATOR_URL`, the command
+  intentionally skips because the browser smoke is opt-in.
+- `pnpm format`, `pnpm lint`, `pnpm build`, `pnpm test:migrations` (3/3), and
+  `pnpm doctor`: passed.
+- Acceptance found and fixed a Publisher dev-composition guard that mistakenly
+  launched the production worker from `dev-main.ts`; the regression suite is
+  green (`publisher-web` + Publisher Worker: **12/12 passed**).
 
 ## Known limits before final Stage 2 acceptance
 
-1. The browser harness currently provides an opt-in visible-browser smoke path;
-   it does not yet provision a UUID-isolated PostgreSQL database, launch every
-   worker, or execute the complete upload-to-publish journey automatically.
+1. The browser harness currently provides an opt-in project/stage navigation
+   smoke path; it does not yet provision a UUID-isolated PostgreSQL database,
+   launch every worker, or execute the complete upload-to-publish journey
+   automatically.
 2. Fake Publisher failure-mode selection is still composed in the Worker test
    runtime rather than exposed as a development-only operator control.
 3. The final architecture/documentation gate, independent review and remote
