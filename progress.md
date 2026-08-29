@@ -137,6 +137,17 @@
 | What have I learned? | See `findings.md`. |
 | What have I done? | See this progress log. |
 
+## Session: 2026-08-29 — Video Quick Edit
+
+### Phase 19: Immutable Quick Edit and exact Manifest render
+- **Status:** implementation complete in isolated branch `codex/video-quick-edit`.
+- Added explicit trim/remove/reorder contract, migration 0014, immutable
+  version service with idempotency and project advisory-lock serialization.
+- Added safe Manifest API routes, exact-version render Job planning and worker
+  coverage using real FFmpeg.
+- Added operator UI version history and Quick Edit controls.
+- Acceptance report: `docs/superpowers/reports/2026-08-29-video-quick-edit-report.md`.
+
 ## Session: 2026-08-21 - Engineering initialization
 
 ### Phase 17: Formal engineering initialization and first vertical slice

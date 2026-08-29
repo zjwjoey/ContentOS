@@ -219,7 +219,7 @@
 - Modify: `docs/superpowers/reports/2026-08-29-video-quick-edit-report.md`
 - Modify: `progress.md`
 
-- [ ] **Step 1: Write the failing UI and browser assertions**
+- [x] **Step 1: Write the failing UI and browser assertions**
 
   Add static assertions for current Manifest version, timeline operation
   controls, Quick Edit submission, Manifest preview, exact render Job and
@@ -227,7 +227,7 @@
   verifies the preview, renders it, and confirms the output and new approval
   target are tied to vN+1.
 
-- [ ] **Step 2: Implement the smallest UI flow**
+- [x] **Step 2: Implement the smallest UI flow**
 
   Load Manifest summaries and the current version from the Video API. Render
   timeline rows with controlled trim fields, remove and move controls. Keep
@@ -237,7 +237,7 @@
   show the output preview and create a new exact Render Approval; do not reuse
   the prior version’s approval.
 
-- [ ] **Step 3: Run the complete verification gate**
+- [x] **Step 3: Run the complete verification gate**
 
   ```powershell
   $env:DATABASE_URL='postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test'
@@ -257,7 +257,7 @@
   Expected: every command exits zero; the browser harness must continue using
   its own schema and process tree.
 
-- [ ] **Step 4: Record and commit the acceptance report**
+- [x] **Step 4: Record and commit the acceptance report**
 
   Record exact counts, the immutable-version behavior, the exact Worker
   payload, failed validation cases and the browser journey. State explicitly
