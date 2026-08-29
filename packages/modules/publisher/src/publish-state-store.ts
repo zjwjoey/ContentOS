@@ -50,4 +50,3 @@ export class PostgresPublishStateStore implements PublishStateStore {
     );
   }
 }
-

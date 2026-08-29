@@ -45,6 +45,8 @@ Workers use only module application ports and contracts. They do not import HTTP
 
 The development/first deployment profile is one Windows or Linux host running PostgreSQL, the API process, Director Worker, Video Worker and Publisher Worker as separately supervised processes, plus a local filesystem storage adapter rooted outside temporary directories. Process separation is mandatory even when they share a host. Containers, Kubernetes and horizontal scaling are deferred.
 
+Publisher real-adapter composition is opt-in with safe defaults: `PUBLISHER_REAL_ADAPTERS_ENABLED=false`, `PUBLISHER_WECHAT_ALLOW_SUBMIT=false`, `PUBLISHER_WECHAT_HEADED=true`, `PUBLISHER_PROFILE_ROOT=./storage/publisher-profiles` and `PUBLISHER_EVIDENCE_ROOT=./artifacts/publisher`. Credential resolution and browser profile state stay inside the Publisher Worker and are excluded from Job payloads and ordinary logs.
+
 Each worker receives its own least-privilege configuration and writable staging directory. Publisher browser profiles are isolated per account/environment. The Publisher Worker must not share its browser state with an interactive user session.
 
 ## Health, recovery and limits

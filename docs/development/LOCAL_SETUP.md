@@ -32,3 +32,7 @@ Set `DATABASE_URL` and `STORAGE_ROOT` before starting the API. For the one-comma
 5. Start the Video Worker and Publisher Worker as separate processes when their composition roots are wired for an environment.
 
 The local Operator uses the Fake AI Provider only. It intentionally does not include platform adapters, real AI providers, real credentials or external platform calls.
+
+## Integration Closure verification
+
+Use an existing local PostgreSQL database as the business truth and point `DATABASE_URL` at it before running the gates. The migration matrix creates and removes UUID-scoped schemas, so the test role does not need `CREATEDB` privileges. Run `pnpm test:migrations` and `pnpm test:integration-closure` for the migration, adapter, safety and real-worker composition gates. Real adapters remain disabled unless an explicitly authorized environment enables them.

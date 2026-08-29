@@ -42,4 +42,3 @@ test('Douyin adapter preserves idempotency and never returns credentials', async
   assert.equal(JSON.stringify(first).includes('access-token'), false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
-

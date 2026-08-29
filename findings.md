@@ -96,3 +96,12 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - Asset Import cannot require a Job foreign key at the instant the HTTP upload is first persisted without either crossing the Job boundary or risking an orphan runnable Job. The accepted sequence is Asset-owned `STAGED` record → idempotent `ASSET_IMPORT` Job → Asset-owned `attachJob` transition to `QUEUED`; failure requests cancellation for any created Job and safely terminalizes the import.
 - The current API directly queries Asset private tables for the project asset list. Stage 2 replaces that route implementation with `AssetCatalogService` and adds an Asset-owned delivery boundary so browser JSON never exposes storage keys or local paths.
 - The current Publisher page approves and queues in one UI action. Stage 2 deliberately removes that shortcut so the dedicated Approval page approves an exact immutable Revision before Publisher enables queueing.
+
+## Integration Closure execution findings — 2026-08-29
+
+- The accepted Project Center baseline required an explicit non-fast-forward merge of `main@752e8c4`; no business source conflict was introduced.
+- The integration migration inventory was incomplete without `0006_publisher_state`. The complete linear chain is now `0001`–`0011`, and isolated-schema matrix tests work without `CREATEDB` privileges.
+- Real Douyin/WeChat adapter code can be safely present while the registry remains disabled. Credential resolution, browser profiles and platform transport stay inside Publisher Worker composition.
+- WeChat manual confirmation uses the frozen application state `REQUIRES_VERIFICATION` because the existing database constraint does not define a separate human-confirmation status.
+- The combined Fake E2E proves exact Render and Publish Revision approvals, durable Jobs, Worker execution, ExternalPost creation and Project Center `PUBLISHED` status. Retry, human action and reconciliation paths are covered in the same file.
+- Stage 1 is ready for final repository gates and branch review; Live Smoke and Unified Product Flow remain closed.

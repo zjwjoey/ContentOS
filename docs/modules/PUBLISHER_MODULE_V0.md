@@ -41,3 +41,7 @@ Publisher reads validated rendered Asset metadata through the public Asset contr
 ## Project integration
 
 Publisher exposes `PublisherProjectSummary` as a read-only public contract. The summary contains project-scoped account/request counts, normalized request status counts, confirmed external-post count and unresolved human-action count (based on each request's latest attempt); it never contains attempt diagnostics, credentials or profile references. Project lifecycle updates are coordinated by API/Worker composition roots using this summary and the public Asset Catalog contract. Before an external publish call, the Worker revalidates the project-owned READY Render Asset and frozen checksum, and rejects accounts that are not `READY`. Publisher never writes `content_projects` directly.
+
+## Integration Closure state
+
+Migration `0006_publisher_state` adds durable per-account idempotency state for the real adapters. The registry accepts only the three known platform IDs and is composed behind `PUBLISHER_REAL_ADAPTERS_ENABLED=false`. The Fake adapter remains the default development path. Approval is bound to the exact immutable Publish Revision; a browser or API outcome that is not confirmed becomes `RECONCILING`, never a blind retry.

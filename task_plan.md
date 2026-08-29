@@ -228,3 +228,17 @@ Architecture V0 — formal design documentation and self-review.
 - [ ] 用户选择后续执行方式。
 
 **Status:** written design and both implementation plans complete; awaiting execution-mode selection; no business code changed
+
+## Integration Closure execution — 2026-08-29
+
+- [x] Created `E:\ContentOS\.worktrees\integration-contentos-v1` from the accepted Project Center head and recorded the baseline.
+- [x] Converged `main@752e8c4` with an explicit merge commit.
+- [x] Restored Publisher migration `0006` and added clean/upgrade migration matrix coverage.
+- [x] Extended Publisher contracts, browser-session and credential boundaries.
+- [x] Added durable Douyin and WeChat Channels adapters with idempotency and reconciliation.
+- [x] Composed the real adapters behind a disabled-by-default Publisher Worker registry.
+- [x] Added the integrated Director→Video→Approval→Fake Publisher E2E and retry/auth/reconciliation scenarios.
+- [x] Synchronized architecture, governance, local setup and Publisher documentation; created the acceptance report.
+- [ ] Run the final lint/build/doctor/secret scan, push `integration/contentos-v1`, and wait for user acceptance.
+
+**Status:** implementation and focused/full tests complete; final repository gate and push pending

@@ -53,7 +53,8 @@ Approval tests prove pending, approve, reject, required rejection reason, immuta
 
 Web acceptance requires a production build, correct JSON calls, visible loading/error states, identifiable current revision, clear blocked actions and next action. Before integrating major branches, run one combined Project → Director → Video → Approval → Fake Publisher E2E on the merged branch.
 
+Integration Closure additionally requires the complete `0001`–`0011` migration matrix, real-adapter contract and safety gates, disabled-by-default registry checks, and failure-path E2E for retry, human action and reconciliation. Adapter code is **IMPLEMENTED**, not **LIVE-VERIFIED**, until a separately authorized platform smoke succeeds; Stage 1 does not authorize live calls.
+
 ## Definition of Done
 
 A task is done only when requested behavior exists, important behavior is tested, the relevant gate passes, no high-risk issue remains, docs reflect actual status, no secrets are committed and no architecture rule was silently broken.
-

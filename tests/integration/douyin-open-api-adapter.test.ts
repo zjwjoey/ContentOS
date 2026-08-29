@@ -35,7 +35,6 @@ test('Douyin adapter uploads media and creates an item with the encrypted video 
     assert.equal(bodies.length, 2);
   });
 });
-
 test('Douyin adapter normalizes auth, rate-limit, upload and uncertain network failures', async () => {
   await withMedia(async (mediaPath) => {
     const scenarios: Array<[string, unknown, string, string]> = [
@@ -94,4 +93,3 @@ test('Douyin adapter records an uncertain create and blocks a blind replay', asy
     assert.equal(requests, 2);
   });
 });
-
