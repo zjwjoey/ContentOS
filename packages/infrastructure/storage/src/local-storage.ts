@@ -45,6 +45,7 @@ export class LocalStorageProvider {
   }
   stagedPath(stagedPath: string): string { return this.safeStagedPath(stagedPath); }
   async removeStaged(stagedPath: string): Promise<void> { await rm(this.safeStagedPath(stagedPath), { force: true }); }
+  async removeObject(storageKey: string): Promise<void> { await rm(this.objectPath(storageKey), { force: true }); }
   async stage(sourcePath: string): Promise<StagedBlob> {
     const data = await readFile(sourcePath);
     const checksum = createHash('sha256').update(data).digest('hex');
@@ -54,9 +55,10 @@ export class LocalStorageProvider {
     return { tempPath, checksum, byteSize: data.byteLength, originalName: sourcePath.split(/[\\/]/).pop() || 'asset' };
   }
   async promote(staged: StagedBlob): Promise<{ storageKey: string; deduped: boolean }> {
-    const storageKey = join('objects', staged.checksum.slice(0, 2), staged.checksum);
+    const digest = staged.checksum.startsWith('sha256:') ? staged.checksum.slice('sha256:'.length) : staged.checksum;
+    const storageKey = join('objects', digest.slice(0, 2), digest);
     const destination = this.objectPath(storageKey);
-    await mkdir(join(this.objectsRoot(), staged.checksum.slice(0, 2)), { recursive: true });
+    await mkdir(join(this.objectsRoot(), digest.slice(0, 2)), { recursive: true });
     try { await stat(destination); await rm(staged.tempPath, { force: true }); return { storageKey, deduped: true }; }
     catch { /* destination does not exist */ }
     await rename(staged.tempPath, destination);

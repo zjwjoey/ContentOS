@@ -6,6 +6,7 @@ export interface AssetImportRecord {
   id: string; projectId: string; jobId: string | null; originalName: string; kind: AssetImportKind; byteSize: number; stagedPath: string; state: AssetImportState; outputAssetId: string | null; errorCode: string | null; errorMessage: string | null; correlationId: string; createdAt: string; updatedAt: string;
 }
 export interface CreateStagedAssetImportInput { projectId: string; originalName: string; kind: AssetImportKind; byteSize: number; stagedPath: string; correlationId: string; }
+export interface AssetImportTransaction { query(text: string, values?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }> }
 
 function map(row: Record<string, unknown>): AssetImportRecord {
   return { id: String(row.id), projectId: String(row.project_id), jobId: row.job_id ? String(row.job_id) : null, originalName: String(row.original_name), kind: String(row.kind) as AssetImportKind, byteSize: Number(row.byte_size), stagedPath: String(row.staged_path), state: String(row.state) as AssetImportState, outputAssetId: row.output_asset_id ? String(row.output_asset_id) : null, errorCode: row.error_code ? String(row.error_code) : null, errorMessage: row.error_message ? String(row.error_message) : null, correlationId: String(row.correlation_id), createdAt: new Date(String(row.created_at)).toISOString(), updatedAt: new Date(String(row.updated_at)).toISOString() };
@@ -39,14 +40,15 @@ export class AssetImportService {
 
   async markProcessing(projectId: string, id: string): Promise<AssetImportRecord> { const result = await this.db.query("update asset_imports set state = 'PROCESSING', updated_at = now() where project_id = $1 and id = $2 and state = 'QUEUED' returning *", [projectId, id]); if (!result.rows[0]) throw new Error('Asset import must be QUEUED before PROCESSING'); return map(result.rows[0] as Record<string, unknown>); }
 
-  async complete(projectId: string, id: string, input: { outputAssetId: string; state: 'READY' | 'DEDUPED' }): Promise<AssetImportRecord> {
-    const result = await this.db.query("update asset_imports set state = $3, output_asset_id = $4, updated_at = now() where project_id = $1 and id = $2 and state = 'PROCESSING' returning *", [projectId, id, input.state, input.outputAssetId]);
+  async complete(projectId: string, id: string, input: { outputAssetId: string; state: 'READY' | 'DEDUPED' }, transaction?: AssetImportTransaction): Promise<AssetImportRecord> {
+    const db = transaction || this.db;
+    const result = await db.query("update asset_imports set state = $3, output_asset_id = $4, updated_at = now() where project_id = $1 and id = $2 and state = 'PROCESSING' returning *", [projectId, id, input.state, input.outputAssetId]);
     if (result.rows[0]) return map(result.rows[0] as Record<string, unknown>);
     const current = await this.get(projectId, id); if (current?.state === input.state && current.outputAssetId === input.outputAssetId) return current;
     throw new Error('Asset import must be PROCESSING before terminal completion');
   }
 
-  async fail(projectId: string, id: string, input: { code: string; message: string }): Promise<AssetImportRecord> { return this.terminal(projectId, id, 'FAILED', input.code, input.message); }
-  async cancel(projectId: string, id: string): Promise<AssetImportRecord> { return this.terminal(projectId, id, 'CANCELLED', null, null); }
-  private async terminal(projectId: string, id: string, state: 'FAILED' | 'CANCELLED', errorCode: string | null, errorMessage: string | null): Promise<AssetImportRecord> { const result = await this.db.query("update asset_imports set state = $3, error_code = $4, error_message = $5, updated_at = now() where project_id = $1 and id = $2 and state in ('STAGED', 'QUEUED', 'PROCESSING') returning *", [projectId, id, state, errorCode, errorMessage]); if (result.rows[0]) return map(result.rows[0] as Record<string, unknown>); const current = await this.get(projectId, id); if (current?.state === state) return current; throw new Error('Asset import is already terminal'); }
+  async fail(projectId: string, id: string, input: { code: string; message: string }, transaction?: AssetImportTransaction): Promise<AssetImportRecord> { return this.terminal(projectId, id, 'FAILED', input.code, input.message, transaction); }
+  async cancel(projectId: string, id: string, transaction?: AssetImportTransaction): Promise<AssetImportRecord> { return this.terminal(projectId, id, 'CANCELLED', null, null, transaction); }
+  private async terminal(projectId: string, id: string, state: 'FAILED' | 'CANCELLED', errorCode: string | null, errorMessage: string | null, transaction?: AssetImportTransaction): Promise<AssetImportRecord> { const db = transaction || this.db; const result = await db.query("update asset_imports set state = $3, error_code = $4, error_message = $5, updated_at = now() where project_id = $1 and id = $2 and state in ('STAGED', 'QUEUED', 'PROCESSING') returning *", [projectId, id, state, errorCode, errorMessage]); if (result.rows[0]) return map(result.rows[0] as Record<string, unknown>); const current = await this.get(projectId, id); if (current?.state === state) return current; throw new Error('Asset import is already terminal'); }
 }

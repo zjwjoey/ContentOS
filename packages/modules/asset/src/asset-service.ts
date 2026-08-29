@@ -38,6 +38,10 @@ export class AssetService {
     const row = result.rows[0] as Record<string, unknown>;
     return { id, projectId: input.projectId, checksum: prepared.checksum, storageKey: String(row.storage_key), byteSize: prepared.byteSize, status: 'READY' };
   }
+  async prepareStagedUpload(input: ImportAssetInput & { stagedPath: string; originalName: string; checksum: string; byteSize: number; probe?: AssetProbe }): Promise<PreparedAssetImport> {
+    const promoted = await this.storage.promote({ tempPath: this.storage.stagedPath(input.stagedPath), checksum: input.checksum, byteSize: input.byteSize, originalName: input.originalName });
+    return new ActivePreparedAssetImport(input.checksum, input.byteSize, promoted.storageKey, input.originalName, this.storage, input.probe);
+  }
   async importFile(input: ImportAssetInput, transaction?: AssetTransaction): Promise<AssetResult> {
     return this.commitPrepared(input, await this.prepareFile(input), transaction);
   }
