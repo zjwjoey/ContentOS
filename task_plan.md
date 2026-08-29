@@ -176,7 +176,7 @@ Architecture V0 — formal design documentation and self-review.
 - [x] Upgrade Random Montage Planner V2 and H.264/AAC renderer invariants — **DONE**
 - [x] Implement no-project Standalone Quick Edit session/API — **DONE**
 - [x] Implement Standalone Quick Edit web flow — **DONE**
-- [ ] Add full regression tests, docs and correction report — **IN PROGRESS (final verification pending)**
+- [x] Add full regression tests, docs and correction report — **DONE (206/206 and final build gate passed)**
 
 Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-direction-correction.md`.
 
