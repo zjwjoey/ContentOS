@@ -37,7 +37,7 @@ Executed with the existing local PostgreSQL service and `DATABASE_URL=postgresql
 - `pnpm typecheck` — passed.
 - `pnpm test:integration-closure` — **24 passed, 0 failed**.
 - `tests/e2e/contentos-integration-vertical-slice.test.ts` — **4 passed, 0 failed**.
-- `pnpm test` — **182 passed, 0 failed**.
+- `pnpm test` — **186 passed, 0 failed**.
 - `pnpm format` — passed (170 files).
 - `git diff --check` — passed for the implemented changes so far.
 
@@ -52,4 +52,4 @@ The first baseline attempt against the repository fallback port `55432` failed a
 
 ## Remaining review action
 
-Run the final format/lint/build/doctor/secret-scan gate, push this review branch, and stop for user acceptance. Stage 2 remains closed until this report and branch are approved.
+The final local format/lint/typecheck/build/Web build/migration/test/doctor/diff gate is green. Push this review branch and stop for user acceptance. Stage 2 remains closed until this report and branch are approved.

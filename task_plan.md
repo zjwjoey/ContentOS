@@ -239,6 +239,7 @@ Architecture V0 — formal design documentation and self-review.
 - [x] Composed the real adapters behind a disabled-by-default Publisher Worker registry.
 - [x] Added the integrated Director→Video→Approval→Fake Publisher E2E and retry/auth/reconciliation scenarios.
 - [x] Synchronized architecture, governance, local setup and Publisher documentation; created the acceptance report.
-- [ ] Run the final lint/build/doctor/secret scan, push `integration/contentos-v1`, and wait for user acceptance.
+- [x] Run the final lint/build/doctor/secret scan and full acceptance gate.
+- [ ] Push `integration/contentos-v1` and wait for user acceptance.
 
-**Status:** implementation and focused/full tests complete; final repository gate and push pending
+**Status:** implementation and final repository gate complete; push pending
