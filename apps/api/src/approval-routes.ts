@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { ApprovalService } from '../../../packages/modules/approval/src/index.js';
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
+import type { VideoProjectReadService } from '../../../packages/modules/video/src/index.js';
+import type { PublisherService } from '../../../packages/modules/publisher/src/index.js';
 
 const approvalInput = z.object({
   targetType: z.enum(['SCRIPT', 'STORYBOARD', 'RENDER', 'PUBLISH']),
@@ -14,11 +16,11 @@ const approvalInput = z.object({
 }).superRefine((value, context) => { if (value.status === 'REJECTED' && !value.reason) context.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'], message: 'reason is required for rejected approvals' }); });
 const approvalActionInput = z.object({ approver: z.string().trim().min(1), reason: z.string().trim().optional() });
 
-export interface ApprovalRouteDependencies { projects: ProjectService; approvals: ApprovalService; }
+export interface ApprovalRouteDependencies { projects: ProjectService; approvals: ApprovalService; video?: VideoProjectReadService; publisher?: PublisherService; }
 function paramsOf(request: { params: unknown }): { projectId: string; targetType: string; targetId: string; targetRevisionId: string } { return request.params as { projectId: string; targetType: string; targetId: string; targetRevisionId: string }; }
 
 export function registerApprovalRoutes(app: FastifyInstance, dependencies: ApprovalRouteDependencies): void {
-  const { projects, approvals } = dependencies;
+  const { projects, approvals, publisher } = dependencies;
   app.post('/api/v1/projects/:projectId/approvals', async (request, reply) => {
     const projectId = (request.params as { projectId: string }).projectId;
     if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
@@ -27,6 +29,24 @@ export function registerApprovalRoutes(app: FastifyInstance, dependencies: Appro
     const { reason, evidence, ...base } = parsed.data;
     try { return reply.code(201).send(await approvals.create({ projectId, ...base, ...(reason ? { reason } : {}), ...(evidence ? { evidence } : {}) })); }
     catch (error) { return reply.code(422).send({ error: { code: 'APPROVAL_VALIDATION_ERROR', message: error instanceof Error ? error.message : 'Approval rejected', details: [] } }); }
+  });
+
+  app.get('/api/v1/projects/:projectId/approvals', async (request, reply) => {
+    const projectId = (request.params as { projectId: string }).projectId;
+    if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    const all = await approvals.list(projectId);
+    const current = new Map<string, typeof all[number]>();
+    for (const decision of all) current.set(`${decision.targetType}:${decision.targetId}:${decision.targetRevisionId}`, decision);
+    const items = await Promise.all([...current.values()].map(async (decision) => {
+      let targetLabel = `${decision.targetType} ${decision.targetId}`;
+      if (decision.targetType === 'PUBLISH' && publisher) {
+        const aggregate = await publisher.getRequestAggregate(projectId, decision.targetId);
+        if (aggregate) targetLabel = `发布 Revision ${aggregate.revision.id}`;
+      }
+      if (decision.targetType === 'RENDER') targetLabel = `成片 Render ${decision.targetId}`;
+      return { ...decision, targetLabel };
+    }));
+    return { items };
   });
 
   app.get('/api/v1/projects/:projectId/approvals/:targetType/:targetId/:targetRevisionId/current', async (request, reply) => {

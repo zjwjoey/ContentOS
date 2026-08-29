@@ -55,7 +55,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
   registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, approvals, jobs });
   registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs });
-  registerApprovalRoutes(app, { projects, approvals });
+  registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher });
   app.get('/health', async () => ({ status: 'ok' }));
   app.post('/api/v1/projects', async (request, reply) => {
     const parsed = projectInput.safeParse(request.body);
