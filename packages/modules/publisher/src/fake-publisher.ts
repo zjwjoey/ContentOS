@@ -52,7 +52,7 @@ export class FakePublisherService {
   async publish(accountId: string, snapshot: PublishSnapshot): Promise<PublishResult> {
     const profileDir = this.profileDirectory(accountId);
     await mkdir(profileDir, { recursive: true });
-    const context: PublisherContext = { profileDir, credentialRef: `fake-credential:${accountId}` };
+    const context: PublisherContext = { profileDir, accountId, credentialRef: `fake-credential:${accountId}` };
     const auth = await this.adapter.authenticate(context);
     if (auth.status === 'FAILED') return { status: 'FAILED', ...(auth.failure ? { failure: auth.failure } : {}) };
     return this.adapter.publish(context, snapshot);
@@ -61,7 +61,7 @@ export class FakePublisherService {
   async reconcile(accountId: string, idempotencyKey: string): Promise<ExternalStateResult> {
     const profileDir = this.profileDirectory(accountId);
     await mkdir(profileDir, { recursive: true });
-    const context: PublisherContext = { profileDir, credentialRef: `fake-credential:${accountId}` };
+    const context: PublisherContext = { profileDir, accountId, credentialRef: `fake-credential:${accountId}` };
     return this.adapter.reconcile(context, idempotencyKey);
   }
 }

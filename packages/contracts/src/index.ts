@@ -6,8 +6,8 @@ export { validateContentBriefV1, validateScriptRevisionV1, validateStoryboardRev
 export type { ContentBriefV1, DirectorRevisionOrigin, ScriptRevisionStatus, ScriptRevisionV1, StoryboardRevisionStatus, StoryboardRevisionV1, StoryboardSceneV1 } from './director-v1.js';
 export { validateAIRequest, validateModelProfile, validatePromptVersion } from './ai-provider.js';
 export type { AIProvider, AIProviderCapability, AIRequest, AIResult, AIUsage, ModelProfile, PromptVersion, ProviderErrorCode } from './ai-provider.js';
-export { assertPublisherRequestTransition } from './publisher.js';
-export type { AuthResult, ExternalStateResult, PlatformCapabilityProfile, PublishResult, PublishSnapshot, PublisherAccount, PublisherAccountStatus, PublisherAdapter, PublisherAttempt, PublisherAttemptOperation, PublisherAttemptStatus, PublisherContext, PublisherExternalPost, PublisherFailure, PublisherFailureClassification, PublisherFailureCode, PublisherRequest, PublisherRequestRevision, PublisherRequestStatus } from './publisher.js';
+export { assertPublisherRequestTransition, createPublishSnapshotDigest } from './publisher.js';
+export type { AuthResult, ExternalStateResult, PlatformCapabilityProfile, PublishResult, PublishSnapshot, PublisherAccount, PublisherAccountStatus, PublisherAdapter, PublisherAttempt, PublisherAttemptOperation, PublisherAttemptStatus, PublisherContext, PublisherCredential, PublisherExternalPost, PublisherFailure, PublisherFailureClassification, PublisherFailureCode, PublisherPlatformId, PublisherRequest, PublisherRequestRevision, PublisherRequestStatus } from './publisher.js';
 export { validateReviewDecision } from './review.js';
 export type { ReviewDecisionV0, ReviewStatus, ReviewTargetType } from './review.js';
 export { validateApprovalDecision } from './approval.js';
