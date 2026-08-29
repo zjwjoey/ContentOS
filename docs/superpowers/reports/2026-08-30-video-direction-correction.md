@@ -58,6 +58,8 @@ Baseline: `codex/video-quick-edit` at `1e8b770cfbae09206c20756120d79fd0749914da`
 
 Correction branch: `codex/video-direction-correction`, worktree `E:\ContentOS\.worktrees\video-direction-correction`.
 
+Review repair commits: `c0943ff` (implementation/tests) and `a347838` (verification records).
+
 ## Documentation Updated
 
 Updated `VIDEO_MODULE_V0.md`, `EDIT_MANIFEST_V0.md`; added `VIDEO_PRODUCT_MODEL.md`, `VIDEO_ADJUSTMENT_V1.md` and `VIDEO_QUICK_EDIT_V1.md`. The historical 2026-08-29 report was not rewritten.
