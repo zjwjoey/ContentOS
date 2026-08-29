@@ -252,6 +252,15 @@
 - 最终独立复审未发现 Critical 或 Important，确认 PostgreSQL 自主消费、长首轮消费下的独立 lease recovery 和 shutdown 等待路径均满足验收要求。
 - 诊断时一次 `tsx -e` 命令因 CJS top-level await 及 PowerShell `$1` 展开失败；改用 IIFE 与 PowerShell 单引号后确认 `renewLease` SQL 返回 true。
 
+## Session: 2026-08-29 — Integration Closure and Unified Product Flow planning
+
+- User accepted the written two-stage design and fixed the Stage 1 endpoint at a pushed `integration/contentos-v1` review branch with no automatic merge to `main`.
+- Wrote `docs/superpowers/plans/2026-08-29-contentos-integration-closure.md` with exact inputs, migration matrix, real-adapter reconciliation, disabled defaults, integrated Fake vertical slice, final Gate, push, and stop conditions.
+- Wrote `docs/superpowers/plans/2026-08-29-contentos-unified-product-flow.md` with durable browser upload staging, `ASSET_IMPORT` Job/Worker, Assets/Video/Approval pages, Publisher completion, unified Project Center navigation, and full browser E2E acceptance.
+- Self-review corrected two sequencing hazards: the Publisher state test now lands with its production state store, and Asset Import uses `STAGED` plus `attachJob` so no runnable Job is intentionally created without a durable import record.
+- The first PowerShell plan-verification command parsed `$plan:` as a scoped variable and stopped before checking files; rerunning with `${plan}` completed successfully and confirmed both required headers/invariants, no placeholders, and a clean diff.
+- No business source, migration, dependency, branch integration, remote push, or live external call was performed while writing these plans.
+
 ## Session: 2026-08-29 — Integration and unified product planning
 
 - **Status:** written design awaiting user review

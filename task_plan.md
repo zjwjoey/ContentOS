@@ -223,8 +223,8 @@ Architecture V0 — formal design documentation and self-review.
 - [x] 确认 `0006_publisher_state` 与真实 Adapter 代码在第一步集成，但保持默认关闭且不做 Live Smoke。
 - [x] 冻结第一步 Integration Closure 与第二步 Unified Product Flow 的设计边界、数据流和 Gate。
 - [x] 写入设计文档 `docs/superpowers/specs/2026-08-29-contentos-integration-and-unified-flow-design.md`。
-- [ ] 用户审阅并确认书面设计。
-- [ ] 分别编写第一步和第二步实施计划并完成自检。
+- [x] 用户审阅并确认书面设计。
+- [x] 分别编写第一步和第二步实施计划并完成自检。
 - [ ] 用户选择后续执行方式。
 
-**Status:** written design awaiting user review; no business code changed
+**Status:** written design and both implementation plans complete; awaiting execution-mode selection; no business code changed
