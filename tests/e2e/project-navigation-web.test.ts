@@ -14,3 +14,9 @@ test('Director page exposes Assets and conditional Video handoff routes', async 
   assert.match(page, /projects\/\$\{projectId\}\/assets/);
   assert.match(page, /projects\/\$\{projectId\}\/video/);
 });
+
+test('Video workspace route is part of the product flow', async () => {
+  const page = await readFile(new URL('../../apps/web/app/projects/[id]/video/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /Video 工作台/);
+  assert.match(page, /Approval Gate/);
+});
