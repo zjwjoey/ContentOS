@@ -369,4 +369,4 @@
 - Added lazy project workspace creation and workspace propagation for Project Video Jobs, manifests and renders; removed the redundant cross-pool workspace query in Standalone creation.
 - Added `tests/e2e/video-standalone-quick-edit-vertical-slice.test.ts` covering real Asset Worker import followed by Video Worker render and FFprobe assertions.
 - Fresh verification: `pnpm test` **211/211 passed** using PostgreSQL `contentos_test` on port 5432 and the installed FFmpeg 8.1.2 libx264 build; focused codec/worker tests also passed.
-- Remaining final gate: format, lint, typecheck, root/Web builds, doctor and diff-check, then commit. No push or merge.
+- Final gate after commit: full suite **211/211**, format, lint, typecheck, root/Web builds, migration matrix, doctor and diff-check all passed. Repair commit: `c0943ff`. No push or merge.

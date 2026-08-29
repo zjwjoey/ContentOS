@@ -264,6 +264,6 @@ Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-directio
 - [x] Fix renderer codec contract and workspace output role.
 - [x] Remove storage-key leakage and complete Project workspace propagation.
 - [x] Add standalone upload/import/render worker E2E coverage.
-- [ ] Run final format/lint/typecheck/build/doctor/diff-check gate and commit; do not push or merge.
+- [x] Run final format/lint/typecheck/build/doctor/diff-check gate and commit; do not push or merge.
 
-**Status:** in progress
+**Status:** complete; review repairs implemented, verified and committed as `c0943ff`; no push or merge
