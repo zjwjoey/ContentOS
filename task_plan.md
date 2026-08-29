@@ -167,6 +167,19 @@ Architecture V0 — formal design documentation and self-review.
 | MoneyPrinterTurbo shallow clone exceeded the command execution window | 3 | Verify its immutable SHA and selected source tree through read-only GitHub API/raw endpoints; do not use incomplete clone remnants as evidence. |
 | PowerShell interpolation treated a colon after a variable name as a drive qualifier | 2 | Use string concatenation or `${variable}` in validation scripts. |
 
+## Phase 20: Video Direction Correction + Standalone Quick Edit V1
+
+- [ ] Record baseline and ownership decision — **DONE (audit and plan recorded 2026-08-30)**
+- [ ] Add workspace ownership schema and scope-aware contracts — TODO
+- [ ] Reclassify Project Quick Edit as Video Adjustment with compatibility alias — TODO
+- [ ] Add REPLACE and REROLL — TODO
+- [ ] Upgrade Random Montage Planner V2 and H.264/AAC renderer invariants — TODO
+- [ ] Implement no-project Standalone Quick Edit session/API — TODO
+- [ ] Implement Standalone Quick Edit web flow — TODO
+- [ ] Add full regression tests, docs and correction report — TODO
+
+Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-direction-correction.md`.
+
 
 ## Slice ③ Project Center — 2026-08-22
 

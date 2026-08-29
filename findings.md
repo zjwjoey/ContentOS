@@ -46,6 +46,18 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 | The pasted requirement opened with mojibake in PowerShell | Recovered the UTF-8 content semantically; repository and report paths are explicit in the request. |
 | MoneyPrinterTurbo clone is incomplete | Reports cite the immutable remote SHA and exact verified source paths; no conclusions use incomplete local clone contents. |
 
+## Video Direction Correction Audit (2026-08-30)
+
+1. The accepted `codex/video-quick-edit` branch is clean at `1e8b770`; its “Quick Edit” implementation is actually project-scoped Manifest Adjustment.
+2. Existing `TRIM`, `REMOVE`, `REORDER`, append-only revisions, manifest digest fencing, exact Manifest render and the shared Video Worker are valuable and will be preserved.
+3. `CreateQuickEditVersionInput.projectId`, project-scoped manifest queries and Asset Catalog ownership checks make the current adjustment path project-only.
+4. `edit_manifests.project_id` and `renders.project_id` are NOT NULL; `jobs.project_id` and `assets.project_id` are nullable in the base schema but current services/contract paths still require project context.
+5. The compatibility-safe ownership correction is a `video_workspaces` boundary with PROJECT and STANDALONE scopes, nullable `workspace_id` additions, and workspace asset links. Existing project rows stay query-compatible.
+6. `EDIT_MANIFEST_V0` currently requires `projectId`; standalone requires an ownership-neutral extension accepting `workspaceId` when `projectId` is absent.
+7. Renderer output is currently MP4/AAC but uses `mpeg4` video codec; correction must use H.264/libx264, AAC, yuv420p and prove it with FFprobe.
+8. The current planner shuffles with `sort(() => random() - 0.5)`, does not enforce 2–5 second clip bounds, does not use real voice duration, and only avoids immediate repeats. Random Montage Planner V2 must replace these behaviors deterministically.
+9. No standalone session, standalone API, standalone UI, REPLACE or REROLL exists on the baseline branch.
+
 ## Director V1 implementation findings — 2026-08-22
 
 - The Director worktree is based on `main` and has a clean 41/41 baseline when using the isolated `contentos_director_dev` database.

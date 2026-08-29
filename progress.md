@@ -186,6 +186,19 @@
 - Final gate: format, lint, typecheck, full **41-test** suite, build and doctor all passed.
 - Pushed as commit `3f89304` to `origin/main`.
 
+## Session: 2026-08-30 - Video Direction Correction
+
+### Read / Verify / Audit gate
+- **Baseline branch:** `codex/video-quick-edit`
+- **Baseline SHA:** `1e8b770cfbae09206c20756120d79fd0749914da`
+- **Correction branch:** `codex/video-direction-correction`
+- **Worktree:** `E:\ContentOS\.worktrees\video-direction-correction`
+- Baseline full suite: **191 passed, 0 failed** after installing the locked workspace dependencies.
+- Audit confirms the old Quick Edit is project-scoped Manifest Adjustment with `TRIM`, `REMOVE`, `REORDER`; immutable Manifest Revision/Digest and Exact Render are reusable and must remain.
+- Audit confirms `edit_manifests` and `renders` currently require `project_id`; `jobs` and `assets` are partially nullable but public services require project ownership. Renderer currently emits `mpeg4` and must be corrected to H.264/libx264.
+- Correction plan saved at `docs/superpowers/plans/2026-08-30-video-direction-correction.md`.
+- **Current phase:** correction plan approved internally; implementation not started before this gate.
+
 ## Session: 2026-08-22 — Director V1 preparation
 
 ### Phase 22: Worktree, baseline and implementation plan
