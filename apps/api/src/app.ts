@@ -20,11 +20,11 @@ import { ApprovalService } from '../../../packages/modules/approval/src/index.js
 import { ProjectCenterService } from './project-center.js';
 import { registerProjectCenterRoutes } from './project-center-routes.js';
 import { registerAssetRoutes } from './asset-routes.js';
+import { registerVideoRoutes } from './video-routes.js';
 import { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 
 const projectInput = z.object({ name: z.string().trim().min(1).max(200), metadata: z.record(z.string(), z.unknown()).optional() });
 const directorInput = z.object({ seed: z.number().int(), brief: z.object({ topic: z.string().trim().min(1), audience: z.string().trim().min(1), objective: z.string().trim().min(1), tone: z.string().trim().min(1) }), storyboard: z.array(z.object({ id: z.string().trim().min(1), title: z.string().trim().min(1), narration: z.string().trim().min(1), visualIntent: z.string().trim().min(1), durationMs: z.number().int().positive(), sourceAssetIds: z.array(z.string()) })).min(1), provenance: z.object({ author: z.string().trim().min(1), source: z.enum(['manual', 'ai-draft']), promptVersion: z.string().optional(), modelProfile: z.string().optional() }) });
-const videoJobInput = z.object({ targetDurationMs: z.number().int().positive().optional(), voiceAssetId: z.string().optional(), subtitleText: z.string().optional(), seed: z.number().int().optional(), videoAssetIds: z.array(z.string().trim().min(1)).min(1).max(64).optional() });
 const reviewInput = z.object({ targetType: z.enum(['RENDER', 'PUBLISH']), targetId: z.string().trim().min(1), status: z.enum(['PENDING', 'APPROVED', 'REJECTED']), reviewer: z.string().trim().min(1), reason: z.string().trim().optional(), evidence: z.record(z.string(), z.unknown()).optional() }).superRefine((value, context) => { if (value.status === 'REJECTED' && !value.reason) context.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'], message: 'reason is required for rejected decisions' }); });
 const reviewActionInput = z.object({ reviewer: z.string().trim().min(1), reason: z.string().trim().optional() });
 function directorPlan(projectId: string, input: z.infer<typeof directorInput>): DirectorPlanV0 {
@@ -53,6 +53,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const publisher = new PublisherService(db);
   registerProjectCenterRoutes(app, { center: new ProjectCenterService({ projects, director: directorRead, assets, video: new VideoProjectReadService(db), jobs, approvals, publisher }) });
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
+  registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, approvals, jobs });
   registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs });
   registerApprovalRoutes(app, { projects, approvals });
   app.get('/health', async () => ({ status: 'ok' }));
@@ -100,14 +101,6 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
     const params = request.params as { id: string; revision: string };
     try { return await director.approveStoryboard(params.id, Number(params.revision)); }
     catch (error) { return reply.code(409).send({ error: { code: 'DIRECTOR_REVISION_CONFLICT', message: error instanceof Error ? error.message : 'Revision conflict', details: [] } }); }
-  });
-  app.post('/api/v1/projects/:id/video-jobs/from-director', async (request, reply) => {
-    const projectId = (request.params as { id: string }).id;
-    const parsed = videoJobInput.safeParse(request.body || {});
-    if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Video Job input', details: parsed.error.issues } });
-    const options = { ...(parsed.data.targetDurationMs ? { targetDurationMs: parsed.data.targetDurationMs } : {}), ...(parsed.data.voiceAssetId ? { voiceAssetId: parsed.data.voiceAssetId } : {}), ...(parsed.data.subtitleText ? { subtitleText: parsed.data.subtitleText } : {}), ...(parsed.data.seed !== undefined ? { seed: parsed.data.seed } : {}), ...(parsed.data.videoAssetIds ? { videoAssetIds: parsed.data.videoAssetIds } : {}) };
-    try { return reply.code(201).send(await videoFromDirector.createVideoJob(projectId, options)); }
-    catch (error) { return reply.code(409).send({ error: { code: 'DIRECTOR_VIDEO_CONFLICT', message: error instanceof Error ? error.message : 'Director to Video conflict', details: [] } }); }
   });
   app.post('/api/v1/projects/:id/reviews', async (request, reply) => {
     const projectId = (request.params as { id: string }).id;
