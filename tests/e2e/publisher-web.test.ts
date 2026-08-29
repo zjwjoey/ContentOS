@@ -19,6 +19,9 @@ test('Publisher Operator is project scoped and exposes the Fake publish lifecycl
   assert.match(page, /targetRevisionId/);
   assert.match(page, /fake-outcome/);
   assert.match(page, /开发模拟结果/);
+  assert.match(page, /setInterval\(\(\) => void refresh\(\), 500\)/);
+  assert.match(page, /\['QUEUED', 'PUBLISHING', 'RECONCILING'\]/);
+  assert.match(page, /failureClassification === 'RETRYABLE'/);
   assert.doesNotMatch(page, /批准并入队/);
   assert.doesNotMatch(page, /人工审核/);
   assert.doesNotMatch(page, /credential|cookie|accessToken|refreshToken|authorization|browserProfile/i);

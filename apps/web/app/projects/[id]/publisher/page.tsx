@@ -73,6 +73,16 @@ export default function PublisherPage({ params }: { params: { id: string } }) {
   }, [projectId]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+  const hasActivePublisherWork = requests.some(({ request, attempts, nextAction }) => {
+    if (['QUEUED', 'PUBLISHING', 'RECONCILING'].includes(request.status)) return true;
+    const latestAttempt = attempts[attempts.length - 1];
+    return request.status === 'FAILED' && nextAction !== 'NEEDS_HUMAN_ACTION' && latestAttempt?.failureClassification === 'RETRYABLE';
+  });
+  useEffect(() => {
+    if (!hasActivePublisherWork) return;
+    const interval = window.setInterval(() => void refresh(), 500);
+    return () => window.clearInterval(interval);
+  }, [hasActivePublisherWork, refresh]);
 
   const createFakeAccount = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setMessage('');

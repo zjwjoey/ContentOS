@@ -161,13 +161,29 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     try {
       const items = [];
       for (const accountId of parsed.data.accountIds) {
-        items.push(await publisher.createRequest({
+        const created = await publisher.createRequest({
           projectId,
           accountId,
           idempotencyKey: `publisher:handoff:${parsed.data.idempotencyKey}:${accountId}`,
           correlationId: parsed.data.correlationId,
           revision: { assetId: asset.id, assetChecksum: asset.checksum, title: parsed.data.title, description: parsed.data.description, desiredPublishAt: parsed.data.desiredPublishAt, createdBy: parsed.data.createdBy },
-        }));
+        });
+        // A handoff is the entry point to the Publish Approval Gate.  Keep the
+        // gate tied to the immutable revision and do not overwrite an existing
+        // decision when the handoff is repeated with the same idempotency key.
+        const approval = await approvals.getCurrent(projectId, 'PUBLISH', created.request.id, created.revision.id);
+        if (!approval) {
+          await approvals.create({
+            projectId,
+            targetType: 'PUBLISH',
+            targetId: created.request.id,
+            targetRevisionId: created.revision.id,
+            status: 'PENDING',
+            approver: parsed.data.createdBy,
+            evidence: { source: 'PUBLISHER_HANDOFF_V0', correlationId: parsed.data.correlationId },
+          });
+        }
+        items.push(created);
       }
       await refreshProjectPublishingStatus(projectId, projects, publisher, assets);
       return reply.code(201).send({ projectId, assetId: asset.id, items });
