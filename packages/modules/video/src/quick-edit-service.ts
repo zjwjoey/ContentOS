@@ -82,6 +82,8 @@ export class VideoAdjustmentService {
       await client.query('begin');
       const ownerColumn = input.workspaceId ? 'workspace_id' : 'project_id';
       const ownerId = input.workspaceId || input.projectId!;
+      const persistedWorkspaceId = input.workspaceId || `workspace-project-${input.projectId}`;
+      if (input.projectId) await client.query("insert into video_workspaces (id, type, project_id) values ($1, 'PROJECT', $2) on conflict (project_id) do nothing", [persistedWorkspaceId, input.projectId]);
       await client.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:video-manifest:${ownerId}`]);
       if (input.idempotencyKey) {
         const existing = await client.query(`select * from edit_manifests where ${ownerColumn} = $1 and idempotency_key = $2`, [ownerId, input.idempotencyKey]);
@@ -121,7 +123,7 @@ export class VideoAdjustmentService {
       const revision = Number(revisionResult.rows[0]?.revision || 1);
       await client.query("update edit_manifests set status = 'SUPERSEDED' where id = $1 and status = 'PERSISTED'", [input.parentManifestId]);
       const id = `manifest-${randomUUID()}`;
-      const inserted = await client.query('insert into edit_manifests (id, project_id, workspace_id, revision, schema_version, manifest, manifest_digest, status, parent_manifest_id, edit_operations, created_by, idempotency_key, input_digest) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning *', [id, input.projectId || null, input.workspaceId || null, revision, 'EDIT_MANIFEST_V0', next, digestEditManifest(next), 'PERSISTED', input.parentManifestId, JSON.stringify(operations), input.createdBy.trim(), input.idempotencyKey || null, inputDigest]);
+      const inserted = await client.query('insert into edit_manifests (id, project_id, workspace_id, revision, schema_version, manifest, manifest_digest, status, parent_manifest_id, edit_operations, created_by, idempotency_key, input_digest) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning *', [id, input.projectId || null, persistedWorkspaceId, revision, 'EDIT_MANIFEST_V0', next, digestEditManifest(next), 'PERSISTED', input.parentManifestId, JSON.stringify(operations), input.createdBy.trim(), input.idempotencyKey || null, inputDigest]);
       await client.query('commit');
       return mapRecord(inserted.rows[0] as Record<string, unknown>);
     } catch (error) {

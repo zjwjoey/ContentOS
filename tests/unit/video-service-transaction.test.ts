@@ -37,9 +37,8 @@ test('Video planning serializes manifest replacement inside a project transactio
   await video.planJob(job);
 
   assert.equal(connectCalls, 1);
-  assert.equal(poolQueries.length, 1);
-  assert.match(poolQueries[0] || '', /r\.status = 'SUCCEEDED'/);
-  assert.ok(poolQueries.every((statement) => !/insert|update|delete/i.test(statement)));
+  assert.equal(poolQueries.filter((statement) => !/insert|update|delete/i.test(statement)).length, 1);
+  assert.match(poolQueries.find((statement) => /r\.status = 'SUCCEEDED'/.test(statement)) || '', /r\.status = 'SUCCEEDED'/);
   assert.equal(clientQueries[0], 'begin');
   assert.ok(clientQueries.some((statement) => statement.includes('pg_advisory_xact_lock')));
   assert.equal(clientQueries.at(-1), 'commit');
@@ -61,4 +60,22 @@ test('Video planning rejects a Job whose payload names another project', async (
 
   await assert.rejects(() => video.planJob(job), /Job project scope/i);
   assert.equal(connectCalls, 0);
+});
+
+test('Project Video jobs and renders carry the deterministic project workspace scope', async () => {
+  const createInputs: Array<{ workspaceId?: string | null }> = [];
+  const statements: string[] = [];
+  const db = {
+    query: async (statement: string) => {
+      statements.push(statement);
+      if (statement.includes('select revision, project_id')) return { rows: [{ revision: 2, project_id: 'project-scope', manifest: { projectId: 'project-scope' }, manifest_digest: null }] };
+      if (statement.includes('select r.id as render_id')) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+  const jobs = { create: async (input: { workspaceId?: string | null }) => { createInputs.push(input); return { id: 'job-1', workspaceId: input.workspaceId } as never; } };
+  const service = new VideoService(db as never, { create: jobs.create } as never);
+  await service.createManifestRenderJob('project-scope', 'manifest-scope');
+  assert.ok(statements.some((statement) => statement.includes('insert into video_workspaces')));
+  assert.deepEqual(createInputs.map((input) => input.workspaceId), ['workspace-project-project-scope']);
 });

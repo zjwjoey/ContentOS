@@ -116,9 +116,8 @@ export function applyQuickEditOperations(parent: EditManifestV0, operations: Qui
       const previous = next.timeline[operation.clipIndex - 1]?.assetId;
       const following = next.timeline[operation.clipIndex + 1]?.assetId;
       const candidates = assets.filter((asset) => asset.id !== current.assetId && asset.id !== previous && asset.id !== following && asset.durationMs >= current.durationMs);
-      const fallback = assets.filter((asset) => asset.id !== current.assetId && asset.durationMs >= current.durationMs);
-      const pool = candidates.length > 0 ? candidates : fallback.length > 0 ? fallback : assets.filter((asset) => asset.id !== current.assetId);
-      if (pool.length === 0) throw new Error('Quick Edit REROLL has no replacement asset');
+      const pool = candidates.length > 0 ? candidates : assets.filter((asset) => asset.id !== current.assetId && asset.durationMs >= current.durationMs);
+      if (pool.length === 0) throw new Error('Quick Edit REROLL has no replacement asset with sufficient duration');
       const replacement = pool[Math.floor(random() * pool.length)]!;
       const maxIn = Math.max(0, replacement.durationMs - current.durationMs);
       const sourceInMs = maxIn === 0 ? 0 : Math.floor(random() * (maxIn + 1));

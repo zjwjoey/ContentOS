@@ -42,11 +42,11 @@ TRIM, REMOVE, REORDER, REPLACE and REROLL are shared operations. REPLACE validat
 
 ## Exact Render Reuse
 
-Standalone render creates the same manifest-identity render Job consumed by the existing Video Worker. Renderer input is the persisted manifest revision and digest; it does not invoke a planner. Default output is MP4/H.264/yuv420p with AAC when voice is present, verified through FFprobe (with a legacy mpeg4 fallback only for an old encoder lacking libx264).
+Standalone render creates the same manifest-identity render Job consumed by the existing Video Worker. Renderer input is the persisted manifest revision and digest; it does not invoke a planner. H.264 manifests use libx264 and AAC when voice is present, and the result is verified through FFprobe against the manifest-declared codecs; legacy MPEG-4 manifests remain explicit compatibility inputs and are validated as MPEG-4.
 
 ## Tests
 
-The correction branch adds contract coverage for standalone ownership and REPLACE/REROLL, planner determinism/rotation/exact duration, standalone service/API flows, workspace upload queueing and migration coverage.
+The correction branch adds contract coverage for standalone ownership and REPLACE/REROLL, planner determinism/rotation/exact duration and short-source bounds, workspace asset redaction, Project workspace propagation, standalone service/API flows, workspace upload queueing, and a real Asset Worker → Video Worker H.264/AAC vertical slice.
 
 ## Regression
 
@@ -74,6 +74,6 @@ PROJECT VIDEO ADJUSTMENT: APPROVED
 
 STANDALONE QUICK EDIT V1: APPROVED
 
-Final gate evidence: full test suite 206/206, format, typecheck, lint, root build, Web build, migration matrix and diff-check all passed; working tree is clean. A modern FFmpeg/FFprobe run produced MP4 with `videoCodec=h264` and `audioCodec=aac`.
+Final gate evidence: full test suite 211/211, format, typecheck, lint, root build, Web build, migration matrix and diff-check all passed; working tree is clean. A modern FFmpeg/FFprobe run produced MP4 with `videoCodec=h264` and `audioCodec=aac`; the standalone worker E2E also verified the workspace `OUTPUT` relation.
 
 Pushed To Remote: NO (no push authorization was given).

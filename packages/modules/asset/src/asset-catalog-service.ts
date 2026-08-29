@@ -96,12 +96,12 @@ export class AssetCatalogService {
     return result.rows[0] ? mapSourceAsset(result.rows[0] as Record<string, unknown>) : null;
   }
 
-  async listWorkspaceAssets(workspaceId: string): Promise<ReadyAssetContent[]> {
+  async listWorkspaceAssets(workspaceId: string): Promise<AssetSummaryV0[]> {
     const result = await this.db.query('select a.* from assets a join video_workspace_assets wa on wa.asset_id = a.id and wa.workspace_id = $1 order by a.created_at, a.id', [workspaceId]);
     return result.rows.map((row) => {
       const record = row as Record<string, unknown>;
       const metadata = record.metadata && typeof record.metadata === 'object' && !Array.isArray(record.metadata) ? record.metadata as Record<string, unknown> : {};
-      return { id: String(record.id), kind: String(record.kind) as AssetSummaryV0['kind'], lifecycle: String(record.lifecycle) as AssetSummaryV0['lifecycle'], byteSize: Number(record.byte_size), checksum: String(record.checksum), originalName: typeof metadata.originalName === 'string' ? metadata.originalName : String(record.storage_key).split('/').pop() || 'asset', metadata: safeMetadata(record), storageKey: String(record.storage_key) };
+      return { id: String(record.id), kind: String(record.kind) as AssetSummaryV0['kind'], lifecycle: String(record.lifecycle) as AssetSummaryV0['lifecycle'], byteSize: Number(record.byte_size), checksum: String(record.checksum), originalName: typeof metadata.originalName === 'string' ? metadata.originalName : String(record.storage_key).split('/').pop() || 'asset', metadata: safeMetadata(record) };
     });
   }
 

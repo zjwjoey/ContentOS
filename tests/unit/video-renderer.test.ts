@@ -27,6 +27,7 @@ test('FFmpeg renderer creates a playable vertical MP4 and probe validates it', a
     assert.equal(probed.width, 1080);
     assert.equal(probed.height, 1920);
     assert.equal(probed.format, 'mp4');
+    assert.equal(probed.videoCodec, 'h264');
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

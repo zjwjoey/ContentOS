@@ -65,6 +65,7 @@ export function buildRandomMontageManifest(input: RandomMontageInput): EditManif
   const maxClipDurationMs = input.maxClipDurationMs ?? 5_000;
   if (!Number.isInteger(minClipDurationMs) || minClipDurationMs <= 0 || !Number.isInteger(maxClipDurationMs) || maxClipDurationMs < minClipDurationMs) throw new Error('Random Montage clip bounds are invalid');
   if (input.assets.length === 0) throw new Error('Random Montage requires at least one video asset');
+  if (input.assets.some((asset) => !Number.isFinite(asset.durationMs) || asset.durationMs <= 0)) throw new Error('Random Montage requires every video asset to have a positive duration');
   if (!Number.isInteger(input.targetDurationMs) || input.targetDurationMs <= 0) throw new Error('targetDurationMs must be positive');
   const owner = ownerOf(input);
   const random = seededRandom(input.seed);
@@ -78,7 +79,12 @@ export function buildRandomMontageManifest(input: RandomMontageInput): EditManif
     const rotation = assets.filter((asset) => (usage.get(asset.id) || 0) === lowestUsage && asset.id !== previous);
     const candidates = rotation.length > 0 ? rotation : assets.filter((asset) => asset.id !== previous);
     const asset = candidates[Math.floor(random() * candidates.length)] || assets[0]!;
-    const durationMs = remaining <= maxClipDurationMs ? remaining : Math.min(remaining, minClipDurationMs + Math.floor(random() * (maxClipDurationMs - minClipDurationMs + 1)));
+    const availableMs = Math.max(1, Math.floor(asset.durationMs));
+    const maxDurationMs = Math.min(remaining, maxClipDurationMs, availableMs);
+    const minDurationMs = Math.min(minClipDurationMs, maxDurationMs);
+    const durationMs = remaining <= maxClipDurationMs && remaining <= availableMs
+      ? remaining
+      : minDurationMs + Math.floor(random() * (maxDurationMs - minDurationMs + 1));
     if (durationMs <= 0) throw new Error('Random Montage generated an invalid clip duration');
     const maxIn = Math.max(0, asset.durationMs - durationMs);
     const sourceInMs = maxIn === 0 ? 0 : Math.floor(random() * (maxIn + 1));

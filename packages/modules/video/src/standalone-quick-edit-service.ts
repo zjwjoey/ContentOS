@@ -48,8 +48,6 @@ export class StandaloneQuickEditService {
     try {
       await client.query('begin');
       await client.query('insert into video_workspaces (id, type, project_id) values ($1, $2, null)', [workspaceId, 'STANDALONE']);
-      const ready = await this.assets.listReadyWorkspaceAssets(workspaceId, 'VIDEO');
-      if (ready.length > 0) throw new Error('STANDALONE_WORKSPACE_NOT_EMPTY');
       const assetCheck = await client.query('select id from assets where id = any($1::text[]) and lifecycle = $2 and kind = $3 and project_id is null', [sourceAssetIds, 'READY', 'VIDEO']);
       if (assetCheck.rows.length !== sourceAssetIds.length) throw new Error('STANDALONE_SOURCE_ASSET_INVALID');
       for (const assetId of sourceAssetIds) await client.query('insert into video_workspace_assets (workspace_id, asset_id, role) values ($1, $2, $3)', [workspaceId, assetId, 'SOURCE']);

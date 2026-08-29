@@ -126,3 +126,13 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - WeChat manual confirmation uses the frozen application state `REQUIRES_VERIFICATION` because the existing database constraint does not define a separate human-confirmation status.
 - The combined Fake E2E proves exact Render and Publish Revision approvals, durable Jobs, Worker execution, ExternalPost creation and Project Center `PUBLISHED` status. Retry, human action and reconciliation paths are covered in the same file.
 - Stage 1 is ready for final repository gates and branch review; Live Smoke and Unified Product Flow remain closed.
+
+## Video Direction Correction Review Repairs (2026-08-30)
+
+- Random Montage now caps each clip by the actual source duration and still fills the requested target exactly; a source shorter than the 2-second preference is used only for its available duration.
+- REROLL no longer falls back to an insufficiently long asset; it fails with a bounded domain error instead of creating an invalid or adjacent-duplicate Manifest.
+- Renderer selects the encoder declared by the Manifest (`libx264` for H.264, `mpeg4` only for explicit legacy manifests) and rejects FFprobe codec mismatches. The old silent H.264→MPEG-4 fallback was removed.
+- Workspace render output is linked with role `OUTPUT`; project output imports also honor the supplied role.
+- Workspace asset listing returns only `AssetSummaryV0` fields and never exposes `storageKey`.
+- Project Video jobs/manifests/renders now carry `workspace-project-{projectId}`; Video and Video Adjustment lazily create the project workspace so newly-created projects satisfy the FK.
+- Standalone Asset Worker→Video Worker E2E passes with real FFmpeg/FFprobe and proves READY imports, exact render, H.264/AAC output and `OUTPUT` ownership.

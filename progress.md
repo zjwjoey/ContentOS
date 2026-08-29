@@ -359,3 +359,14 @@
 - Added deterministic Random Montage Planner V2, voice-duration planning, source rotation, exact-duration final clip fill and FFprobe codec reporting. Default renderer is H.264/AAC with a legacy mpeg4 fallback only for old local encoders.
 - Added standalone API/UI, including batch workspace uploads through the existing Asset Import/Asset Worker path.
 - Verification so far: full suite **203/204** before correcting the migration inventory assertion; focused standalone API **2/2**, typecheck and lint pass. Final full suite/build/clean-tree gate remains pending.
+
+### Review repair execution — 2026-08-30
+
+- Added RED tests for short-source planner bounds, unsafe REROLL fallback, workspace asset redaction and Project workspace propagation; all focused tests are now GREEN.
+- Removed the planner out-of-bounds path and REROLL insufficient-duration fallback.
+- Enforced Manifest-declared video/audio codecs at render time; explicit legacy MPEG-4 manifests remain supported without silently changing H.264 output.
+- Added `OUTPUT` role propagation for render assets and removed storage keys from standalone asset summaries.
+- Added lazy project workspace creation and workspace propagation for Project Video Jobs, manifests and renders; removed the redundant cross-pool workspace query in Standalone creation.
+- Added `tests/e2e/video-standalone-quick-edit-vertical-slice.test.ts` covering real Asset Worker import followed by Video Worker render and FFprobe assertions.
+- Fresh verification: `pnpm test` **211/211 passed** using PostgreSQL `contentos_test` on port 5432 and the installed FFmpeg 8.1.2 libx264 build; focused codec/worker tests also passed.
+- Remaining final gate: format, lint, typecheck, root/Web builds, doctor and diff-check, then commit. No push or merge.

@@ -81,3 +81,13 @@ test('supports replace and reroll while preserving non-target timeline slots', (
   assert.notEqual(next.timeline[2]?.assetId, 'asset-c');
   assert.equal(next.timeline[2]?.durationMs, 1_000);
 });
+
+test('rejects reroll when every replacement source is shorter than the selected clip', () => {
+  assert.throws(
+    () => applyQuickEditOperations(fixture(), [{ type: 'REROLL', clipIndex: 0, seed: 3 }], [
+      { id: 'asset-a', durationMs: 900 },
+      { id: 'asset-b', durationMs: 900 },
+    ]),
+    /no replacement asset/i,
+  );
+});

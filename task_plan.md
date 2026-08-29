@@ -256,3 +256,14 @@ Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-directio
 - [ ] Push `integration/contentos-v1` and wait for user acceptance.
 
 **Status:** implementation and final repository gate complete; push pending
+
+## Phase 23: Video Direction Correction Review Repairs — 2026-08-30
+
+- [x] Add regression tests for planner bounds, REROLL safety, codec enforcement, output ownership, asset API redaction, project workspace propagation and standalone worker coverage.
+- [x] Fix planner and adjustment invariants without changing the frozen product scope.
+- [x] Fix renderer codec contract and workspace output role.
+- [x] Remove storage-key leakage and complete Project workspace propagation.
+- [x] Add standalone upload/import/render worker E2E coverage.
+- [ ] Run final format/lint/typecheck/build/doctor/diff-check gate and commit; do not push or merge.
+
+**Status:** in progress

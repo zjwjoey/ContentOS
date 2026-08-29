@@ -35,3 +35,17 @@ test('Random Montage Planner V2 uses deterministic 2-5 second clips and exact vo
   assert.equal(first.timeline.slice(0, -1).every((clip) => clip.durationMs >= 2_000 && clip.durationMs <= 5_000), true);
   assert.equal(first.timeline.every((clip) => clip.sourceInMs + clip.durationMs <= 8_000), true);
 });
+
+test('Random Montage Planner V2 never schedules beyond a short source asset', () => {
+  const manifest = buildRandomMontageManifest({
+    workspaceId: 'workspace-short-source',
+    seed: 11,
+    assets: [
+      { id: 'short', storageKey: 'objects/short', sourcePath: 'short.mp4', durationMs: 700 },
+      { id: 'long', storageKey: 'objects/long', sourcePath: 'long.mp4', durationMs: 2_500 },
+    ],
+    targetDurationMs: 4_000,
+  });
+  assert.equal(manifest.timeline.reduce((sum, clip) => sum + clip.durationMs, 0), 4_000);
+  assert.equal(manifest.timeline.every((clip) => clip.sourceInMs >= 0 && clip.sourceInMs + clip.durationMs <= (clip.assetId === 'short' ? 700 : 2_500)), true);
+});

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 
-export interface ImportAssetInput { projectId?: string; workspaceId?: string; sourcePath: string; kind: string; role?: 'SOURCE' | 'VOICE'; }
+export interface ImportAssetInput { projectId?: string; workspaceId?: string; sourcePath: string; kind: string; role?: 'SOURCE' | 'VOICE' | 'OUTPUT'; }
 export interface AssetResult { id: string; projectId: string; workspaceId?: string; checksum: string; storageKey: string; byteSize: number; status: 'READY' | 'DEDUPED'; }
 export interface AssetProbe { durationMs?: number; width?: number; height?: number; format?: string; }
 export interface AssetTransaction { query(text: string, values?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }> }
@@ -30,13 +30,13 @@ export class AssetService {
     const existing = await db.query('select * from assets where checksum = $1 limit 1', [prepared.checksum]);
     if (existing.rows[0]) {
       const row = existing.rows[0] as Record<string, unknown>;
-      if (input.projectId) await db.query('insert into project_assets (project_id, asset_id, role) values ($1, $2, $3) on conflict do nothing', [input.projectId, String(row.id), 'SOURCE']);
+      if (input.projectId) await db.query('insert into project_assets (project_id, asset_id, role) values ($1, $2, $3) on conflict do nothing', [input.projectId, String(row.id), input.role || 'SOURCE']);
       else await db.query('insert into video_workspace_assets (workspace_id, asset_id, role) values ($1, $2, $3) on conflict do nothing', [input.workspaceId, String(row.id), input.role || 'SOURCE']);
       return { id: String(row.id), projectId: input.projectId || '', ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}), checksum: prepared.checksum, storageKey: String(row.storage_key), byteSize: Number(row.byte_size), status: 'DEDUPED' };
     }
     const id = `asset-${randomUUID()}`;
     const result = await db.query('insert into assets (id, project_id, kind, checksum, byte_size, storage_key, lifecycle, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8) returning *', [id, input.projectId || null, input.kind, prepared.checksum, prepared.byteSize, prepared.storageKey, 'READY', { originalName: prepared.originalName, ...(prepared.probe || {}) }]);
-    if (input.projectId) await db.query('insert into project_assets (project_id, asset_id, role) values ($1, $2, $3) on conflict do nothing', [input.projectId, id, 'SOURCE']);
+    if (input.projectId) await db.query('insert into project_assets (project_id, asset_id, role) values ($1, $2, $3) on conflict do nothing', [input.projectId, id, input.role || 'SOURCE']);
     else await db.query('insert into video_workspace_assets (workspace_id, asset_id, role) values ($1, $2, $3) on conflict do nothing', [input.workspaceId, id, input.role || 'SOURCE']);
     const row = result.rows[0] as Record<string, unknown>;
     return { id, projectId: input.projectId || '', ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}), checksum: prepared.checksum, storageKey: String(row.storage_key), byteSize: prepared.byteSize, status: 'READY' };

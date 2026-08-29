@@ -11,6 +11,8 @@ export interface CreateVideoJobInput { projectId: string; videoAssetIds: string[
 export interface VideoJobPayload extends Omit<CreateVideoJobInput, 'projectId'> { projectId?: string; workspaceId?: string; manifestId?: string; manifestRevision?: number; manifestDigest?: string; }
 export interface VideoPlanResult { manifestId: string; renderId: string; manifest: ReturnType<typeof buildVideoManifest>; renderStatus: string; outputAssetId: string | null; }
 
+function projectWorkspaceId(projectId: string): string { return `workspace-project-${projectId}`; }
+
 export class VideoService {
   private readonly db: Pool;
   private readonly storage: LocalStorageProvider | null;
@@ -25,15 +27,21 @@ export class VideoService {
     this.assets = (maybeJobs && !('create' in maybeJobs) ? maybeJobs : maybeAssets) || null;
   }
 
+  private async ensureProjectWorkspace(projectId: string): Promise<void> {
+    await this.db.query("insert into video_workspaces (id, type, project_id) values ($1, 'PROJECT', $2) on conflict (project_id) do nothing", [projectWorkspaceId(projectId), projectId]);
+  }
+
   async createJob(input: CreateVideoJobInput): Promise<JobRecord> {
     if (input.videoAssetIds.length === 0) throw new Error('At least one video asset is required');
+    await this.ensureProjectWorkspace(input.projectId);
     const idempotencyKey = input.idempotencyKey || `video-render:${input.projectId}:${input.seed}:${input.targetDurationMs}:${input.videoAssetIds.join(',')}`;
     const id = `job-${randomUUID()}`;
-    try { return await this.jobs.create({ id, projectId: input.projectId, type: 'VIDEO_RENDER', payload: input, idempotencyKey, maxAttempts: 3 }); }
+    try { return await this.jobs.create({ id, projectId: input.projectId, workspaceId: projectWorkspaceId(input.projectId), type: 'VIDEO_RENDER', payload: input, idempotencyKey, maxAttempts: 3 }); }
     catch (error) { if ((error as { code?: string }).code === '23505') { const existing = await this.jobs.getByIdempotencyKey(idempotencyKey); if (existing) return existing; } throw error; }
   }
 
   async createManifestRenderJob(projectId: string, manifestId: string): Promise<JobRecord> {
+    await this.ensureProjectWorkspace(projectId);
     const manifest = await this.db.query<{ revision: number; project_id: string; manifest: EditManifestV0; manifest_digest: string | null }>('select revision, project_id, manifest, manifest_digest from edit_manifests where id = $1 and project_id = $2', [manifestId, projectId]);
     const row = manifest.rows[0];
     if (!row) throw new Error('VIDEO_MANIFEST_NOT_FOUND');
@@ -44,7 +52,7 @@ export class VideoService {
     const idempotencyKey = `video-render:manifest:${projectId}:${manifestId}:v${manifestRevision}`;
     const id = `job-${randomUUID()}`;
     const payload = { projectId, manifestId, manifestRevision, manifestDigest } as unknown as VideoJobPayload;
-    try { return await this.jobs.create({ id, projectId, type: 'VIDEO_RENDER', payload, idempotencyKey, maxAttempts: 3 }); }
+    try { return await this.jobs.create({ id, projectId, workspaceId: projectWorkspaceId(projectId), type: 'VIDEO_RENDER', payload, idempotencyKey, maxAttempts: 3 }); }
     catch (error) { if ((error as { code?: string }).code === '23505') { const existing = await this.jobs.getByIdempotencyKey(idempotencyKey); if (existing) return existing; } throw error; }
   }
 
@@ -65,6 +73,7 @@ export class VideoService {
     const projectId = job.projectId;
     if (!projectId && (job.workspaceId || payload.workspaceId)) return this.planWorkspaceManifestJob(job, { ...payload, workspaceId: payload.workspaceId || job.workspaceId! });
     if (!projectId || payload.projectId !== projectId) throw new Error('Job project scope does not match its Video payload');
+    await this.ensureProjectWorkspace(projectId);
     const completed = await this.db.query<{ render_id: string; manifest_id: string; manifest: ReturnType<typeof buildVideoManifest>; render_status: string; output_asset_id: string }>("select r.id as render_id, m.id as manifest_id, m.manifest, r.status as render_status, r.output_asset_id from renders r join edit_manifests m on m.id = r.manifest_id and m.project_id = r.project_id where r.job_id = $1 and r.project_id = $2 and r.status = 'SUCCEEDED' and r.output_asset_id is not null order by r.created_at desc, r.id desc limit 1", [job.id, projectId]);
     const completedRender = completed.rows[0];
     if (completedRender) return { manifestId: completedRender.manifest_id, renderId: completedRender.render_id, manifest: completedRender.manifest, renderStatus: completedRender.render_status, outputAssetId: completedRender.output_asset_id };
@@ -100,9 +109,9 @@ export class VideoService {
       const revisionResult = await client.query<{ revision: number }>('select coalesce(max(revision), 0) + 1 as revision from edit_manifests where project_id = $1', [projectId]);
       const revision = Number(revisionResult.rows[0]?.revision || 1);
       const manifestId = `manifest-${randomUUID()}`;
-      await client.query('insert into edit_manifests (id, project_id, revision, schema_version, manifest, manifest_digest, status) values ($1, $2, $3, $4, $5, $6, $7)', [manifestId, projectId, revision, 'EDIT_MANIFEST_V0', manifest, digestEditManifest(manifest), 'PERSISTED']);
+      await client.query('insert into edit_manifests (id, project_id, workspace_id, revision, schema_version, manifest, manifest_digest, status) values ($1, $2, $3, $4, $5, $6, $7, $8)', [manifestId, projectId, projectWorkspaceId(projectId), revision, 'EDIT_MANIFEST_V0', manifest, digestEditManifest(manifest), 'PERSISTED']);
       const renderId = `render-${randomUUID()}`;
-      await client.query('insert into renders (id, project_id, manifest_id, job_id, status, diagnostics) values ($1, $2, $3, $4, $5, $6)', [renderId, projectId, manifestId, job.id, 'QUEUED', { seed: payload.seed, ...(payload.metadata ? { metadata: payload.metadata } : {}) }]);
+      await client.query('insert into renders (id, project_id, workspace_id, manifest_id, job_id, status, diagnostics) values ($1, $2, $3, $4, $5, $6, $7)', [renderId, projectId, projectWorkspaceId(projectId), manifestId, job.id, 'QUEUED', { seed: payload.seed, ...(payload.metadata ? { metadata: payload.metadata } : {}) }]);
       await client.query('commit');
       return { manifestId, renderId, manifest, renderStatus: 'QUEUED', outputAssetId: null };
     } catch (error) {
@@ -150,7 +159,7 @@ export class VideoService {
       const prior = existing.rows[0];
       if (prior) { await client.query('commit'); return { manifestId: prior.manifest_id, renderId: prior.render_id, manifest: prior.manifest, renderStatus: prior.render_status, outputAssetId: prior.output_asset_id }; }
       const renderId = `render-${randomUUID()}`;
-      await client.query('insert into renders (id, project_id, manifest_id, job_id, status, diagnostics) values ($1, $2, $3, $4, $5, $6)', [renderId, job.projectId, payload.manifestId, job.id, 'QUEUED', { manifestRevision: payload.manifestRevision }]);
+      await client.query('insert into renders (id, project_id, workspace_id, manifest_id, job_id, status, diagnostics) values ($1, $2, $3, $4, $5, $6, $7)', [renderId, job.projectId, projectWorkspaceId(job.projectId!), payload.manifestId, job.id, 'QUEUED', { manifestRevision: payload.manifestRevision }]);
       await client.query('commit');
       return { manifestId: payload.manifestId, renderId, manifest, renderStatus: 'QUEUED', outputAssetId: null };
     } catch (error) { await client.query('rollback'); throw error; }

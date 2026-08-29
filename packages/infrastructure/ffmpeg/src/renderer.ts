@@ -64,20 +64,15 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   else filters.push(`${manifest.timeline.map((_, i) => `[v${i}]`).join('')}concat=n=${manifest.timeline.length}:v=1:a=0[vout]`);
   args.push('-filter_complex', filters.join(';'), '-map', '[vout]');
   if (voiceIndex >= 0) args.push('-map', `${voiceIndex}:a?`, '-c:a', 'aac', '-strict', '-2', '-shortest'); else args.push('-an');
-  args.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '23', '-movflags', '+faststart', tempOutput);
+  const videoEncoder = manifest.output.videoCodec === 'h264' ? 'libx264' : 'mpeg4';
+  args.push('-c:v', videoEncoder, '-pix_fmt', 'yuv420p');
+  if (videoEncoder === 'libx264') args.push('-crf', '23');
+  args.push('-movflags', '+faststart', tempOutput);
   try {
-    try {
-      await run(ffmpegPath, args, options.signal);
-    } catch (error) {
-      // The historical bundled FFmpeg used by existing fixtures may not ship libx264.
-      // Prefer H.264, but keep legacy development fixtures runnable with its mpeg4 encoder.
-      if (error instanceof Error && /unknown encoder|unrecognized option/i.test(error.message)) {
-        const fallbackArgs = args.map((arg) => arg === 'libx264' ? 'mpeg4' : arg).filter((arg) => arg !== '-crf' && arg !== '23');
-        await run(ffmpegPath, fallbackArgs, options.signal);
-      } else throw error;
-    }
+    await run(ffmpegPath, args, options.signal);
     const probe = await probeMedia(tempOutput, ffprobePath, options.signal);
-    if (probe.format !== 'mp4' || probe.width !== 1080 || probe.height !== 1920 || probe.durationMs <= 0 || (manifest.audio.voicePath && !probe.audio)) throw new Error(`Rendered output failed MP4/1080x1920 validation: ${JSON.stringify(probe)}`);
+    const codecValid = probe.videoCodec === manifest.output.videoCodec && (!manifest.audio.voicePath || probe.audioCodec === manifest.output.audioCodec);
+    if (probe.format !== 'mp4' || probe.width !== 1080 || probe.height !== 1920 || probe.durationMs <= 0 || (manifest.audio.voicePath && !probe.audio) || !codecValid) throw new Error(`Rendered output failed MP4/1080x1920/codec validation: ${JSON.stringify(probe)}`);
     await rename(tempOutput, outputPath);
     return { outputPath, ...probe };
   } catch (error) { await rm(tempOutput, { force: true }); throw error; }
