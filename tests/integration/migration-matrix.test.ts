@@ -9,7 +9,7 @@ import { createDatabase, migrateUp, resolveMigrationsDirectory } from '../../pac
 
 const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test';
 const migrationDirectory = resolveMigrationsDirectory();
-const migrationNames = Array.from({ length: 11 }, (_, index) => String(index + 1).padStart(4, '0'));
+const migrationNames = Array.from({ length: 12 }, (_, index) => String(index + 1).padStart(4, '0'));
 
 function schemaUrl(name: string): string {
   const url = new URL(adminUrl);
@@ -47,7 +47,7 @@ for (const [label, subset] of [['clean', 0], ['0001-0005', 5], ['0001-0006', 6]]
       const db = await createDatabase(database.url);
       try {
         const result = await migrateUp(db);
-        assert.equal(result.applied, 11 - subset);
+        assert.equal(result.applied, 12 - subset);
         const rows = await db.query<{ name: string }>('select name from schema_migrations order by name');
         assert.deepEqual(rows.rows.map((row) => row.name.slice(0, 4)), migrationNames);
       } finally { await db.end(); }
