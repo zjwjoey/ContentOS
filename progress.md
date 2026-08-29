@@ -293,3 +293,16 @@
 - Created `E:\ContentOS\.worktrees\unified-product-flow` on `codex/unified-product-flow` from accepted `integration/contentos-v1@0fbafee` (local and remote heads matched).
 - `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test` (**186/186**) and `pnpm --dir apps/web build` all passed before Stage 2 code changes.
 - Stage 2 scope is limited to browser-operated Fake flow: durable Asset Import, Assets/Video/Approval workspaces, Publisher completion and unified project navigation. Real adapters, live calls and Review Analytics remain disabled/out of scope.
+
+### Stage 2 implementation progress — 2026-08-29
+
+- Tasks 1–6 complete: isolated baseline, browser contracts, durable Asset Import, bounded upload API, Asset Worker and Assets workspace.
+- Task 7 complete: Director now exposes Assets navigation and a gated `进入 Video` handoff only for an accepted Script plus matching approved Storyboard.
+- Task 8 complete: safe Video workspace reads/actions, explicit source ownership checks, idempotent Video Jobs and project-scoped cancellation.
+- Task 9 complete: Video workspace supports source selection, render polling/cancel, output preview and exact Render Approval handoff.
+- Task 10 complete: dedicated Approval Gate list/page with current exact decisions and mandatory rejection reasons.
+- Task 11 complete: Publisher queue requires pre-existing exact Publish Approval and safely displays attempts, human action and ExternalPost state.
+- Task 12 complete: shared five-stage navigation shell is used by Project Center and Assets/Director pages; Video/Approval/Publisher routes are part of the frozen product model.
+- Task 13 partial: opt-in Playwright smoke harness added; full isolated-process browser journey remains outstanding.
+- Verification: root `pnpm test` **188/188 passed**; Stage2 product suite **12 passed, 1 skipped**; typecheck and Web build passed.
+- Current branch remains local `codex/unified-product-flow`; no remote push or merge to `main` has been performed.
