@@ -13,3 +13,7 @@ export type { ReviewDecisionV0, ReviewStatus, ReviewTargetType } from './review.
 export { validateApprovalDecision } from './approval.js';
 export type { ApprovalDecisionV0, ApprovalStatus, ApprovalTargetType } from './approval.js';
 export type { ProjectCenterAction, ProjectCenterActionKind, ProjectCenterHealthLevel, ProjectCenterJobSummary, ProjectCenterSeverity, ProjectCenterSnapshot, ProjectCenterStage, ProjectCenterStageKey, ProjectCenterStageStatus } from './project-center.js';
+export { validateAssetImportV0, validateAssetSummaryV0 } from './asset.js';
+export type { AssetImportKind, AssetImportState, AssetImportV0, AssetSummaryV0 } from './asset.js';
+export { validateVideoWorkspaceSnapshotV0 } from './video.js';
+export type { VideoWorkspaceSnapshotV0 } from './video.js';
