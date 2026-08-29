@@ -1,8 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
+import { createWriteStream } from 'node:fs';
+import { Transform, type Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 export interface StagedBlob { tempPath: string; checksum: string; byteSize: number; originalName: string; }
+export interface StagedUpload { tempPath: string; stagedPath: string; byteSize: number; originalName: string; }
 
 async function walk(directory: string): Promise<string[]> {
   try { await stat(directory); } catch { return []; }
@@ -21,6 +25,26 @@ export class LocalStorageProvider {
   private stagingRoot(): string { return join(this.root, 'staging'); }
   private objectsRoot(): string { return join(this.root, 'objects'); }
   objectPath(storageKey: string): string { return join(this.root, storageKey); }
+  private safeStagedPath(stagedPath: string): string {
+    if (!stagedPath.startsWith('staging/') || stagedPath.includes('..') || stagedPath.includes('\\')) throw new Error('Invalid staged storage path');
+    return this.objectPath(stagedPath);
+  }
+  async stageUpload(originalName: string, input: Readable, maxBytes: number): Promise<StagedUpload> {
+    const name = originalName.trim();
+    if (!name || name.length > 255 || name.includes('/') || name.includes('\\') || name.includes('..')) throw new Error('Invalid upload filename');
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('Invalid upload limit');
+    await mkdir(this.stagingRoot(), { recursive: true });
+    const stagedPath = `staging/${randomUUID()}.part`;
+    const tempPath = this.safeStagedPath(stagedPath);
+    let byteSize = 0;
+    const limiter = new Transform({ transform(chunk: Buffer, _encoding, callback) { byteSize += chunk.byteLength; if (byteSize > maxBytes) callback(new Error('UPLOAD_TOO_LARGE')); else callback(null, chunk); } });
+    try { await pipeline(input, limiter, createWriteStream(tempPath, { flags: 'wx' })); }
+    catch (error) { await rm(tempPath, { force: true }); throw error; }
+    if (byteSize === 0) { await rm(tempPath, { force: true }); throw new Error('EMPTY_UPLOAD'); }
+    return { tempPath, stagedPath, byteSize, originalName: name };
+  }
+  stagedPath(stagedPath: string): string { return this.safeStagedPath(stagedPath); }
+  async removeStaged(stagedPath: string): Promise<void> { await rm(this.safeStagedPath(stagedPath), { force: true }); }
   async stage(sourcePath: string): Promise<StagedBlob> {
     const data = await readFile(sourcePath);
     const checksum = createHash('sha256').update(data).digest('hex');

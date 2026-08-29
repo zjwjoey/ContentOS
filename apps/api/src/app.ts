@@ -1,8 +1,9 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import multipart from '@fastify/multipart';
 import type { Pool } from 'pg';
 import { ProjectService } from '../../../packages/modules/project/src/index.js';
-import { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
+import { AssetCatalogService, AssetImportService } from '../../../packages/modules/asset/src/index.js';
 import { DirectorService, DirectorProjectReadService } from '../../../packages/modules/director/src/index.js';
 import { DirectorVideoService, VideoProjectReadService, VideoService } from '../../../packages/modules/video/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
@@ -18,6 +19,8 @@ import { registerApprovalRoutes } from './approval-routes.js';
 import { ApprovalService } from '../../../packages/modules/approval/src/index.js';
 import { ProjectCenterService } from './project-center.js';
 import { registerProjectCenterRoutes } from './project-center-routes.js';
+import { registerAssetRoutes } from './asset-routes.js';
+import { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 
 const projectInput = z.object({ name: z.string().trim().min(1).max(200), metadata: z.record(z.string(), z.unknown()).optional() });
 const directorInput = z.object({ seed: z.number().int(), brief: z.object({ topic: z.string().trim().min(1), audience: z.string().trim().min(1), objective: z.string().trim().min(1), tone: z.string().trim().min(1) }), storyboard: z.array(z.object({ id: z.string().trim().min(1), title: z.string().trim().min(1), narration: z.string().trim().min(1), visualIntent: z.string().trim().min(1), durationMs: z.number().int().positive(), sourceAssetIds: z.array(z.string()) })).min(1), provenance: z.object({ author: z.string().trim().min(1), source: z.enum(['manual', 'ai-draft']), promptVersion: z.string().optional(), modelProfile: z.string().optional() }) });
@@ -28,8 +31,15 @@ function directorPlan(projectId: string, input: z.infer<typeof directorInput>): 
   return { schemaVersion: 'DIRECTOR_PLAN_V0', projectId, seed: input.seed, brief: input.brief, storyboard: input.storyboard, provenance: { author: input.provenance.author, source: input.provenance.source, ...(input.provenance.promptVersion ? { promptVersion: input.provenance.promptVersion } : {}), ...(input.provenance.modelProfile ? { modelProfile: input.provenance.modelProfile } : {}) } };
 }
 
-export async function buildApi(db: Pool): Promise<FastifyInstance> {
+export interface ApiRuntimeDependencies { db: Pool; storage?: LocalStorageProvider; uploadMaxBytes?: number; }
+
+export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<FastifyInstance> {
+  const db = 'query' in input ? input : input.db;
+  const runtime: ApiRuntimeDependencies = 'query' in input ? { db } : input;
   const app = Fastify({ logger: false });
+  const storage = runtime.storage || new LocalStorageProvider(process.env.STORAGE_ROOT || 'storage');
+  const uploadMaxBytes = runtime.uploadMaxBytes || 500 * 1024 * 1024;
+  await app.register(multipart, { limits: { files: 1, fileSize: uploadMaxBytes } });
   const projects = new ProjectService(db);
   const director = new DirectorService(db, projects);
   const reviews = new ReviewService(db, projects);
@@ -39,6 +49,7 @@ export async function buildApi(db: Pool): Promise<FastifyInstance> {
   const directorRead = new DirectorProjectReadService(directorV1, director);
   const jobs = new JobService(db);
   const assets = new AssetCatalogService(db);
+  registerAssetRoutes(app, { projects, imports: new AssetImportService(db), assets, jobs, storage, maxUploadBytes: uploadMaxBytes });
   const publisher = new PublisherService(db);
   registerProjectCenterRoutes(app, { center: new ProjectCenterService({ projects, director: directorRead, assets, video: new VideoProjectReadService(db), jobs, approvals, publisher }) });
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
@@ -58,13 +69,6 @@ export async function buildApi(db: Pool): Promise<FastifyInstance> {
     return result;
   });
   app.get('/api/v1/projects', async () => ({ items: await projects.list() }));
-  app.get('/api/v1/projects/:id/assets', async (request, reply) => {
-    const id = (request.params as { id: string }).id;
-    const project = await projects.get(id);
-    if (!project) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
-    const assets = await db.query('select a.* from assets a join project_assets pa on pa.asset_id = a.id where pa.project_id = $1 order by a.created_at', [id]);
-    return { items: assets.rows };
-  });
   app.post('/api/v1/projects/:id/director-plans', async (request, reply) => {
     const projectId = (request.params as { id: string }).id;
     const parsed = directorInput.safeParse(request.body);

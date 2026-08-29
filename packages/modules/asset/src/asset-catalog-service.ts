@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import type { AssetSummaryV0 } from '../../../contracts/src/index.js';
 
 export interface PublishableAsset {
   id: string;
@@ -21,6 +22,8 @@ export interface ReadySourceAsset {
   metadata: Record<string, unknown>;
 }
 
+export interface ReadyAssetContent extends AssetSummaryV0 { storageKey: string; }
+
 function mapAsset(row: Record<string, unknown>): PublishableAsset {
   return {
     id: String(row.id),
@@ -41,6 +44,16 @@ function mapSourceAsset(row: Record<string, unknown>): ReadySourceAsset {
     kind: String(row.kind) as SourceAssetKind,
     storageKey: String(row.storage_key),
     metadata: row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {},
+  };
+}
+
+function safeMetadata(row: Record<string, unknown>): AssetSummaryV0['metadata'] {
+  const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {};
+  return {
+    ...(typeof metadata.durationMs === 'number' ? { durationMs: metadata.durationMs } : {}),
+    ...(typeof metadata.width === 'number' ? { width: metadata.width } : {}),
+    ...(typeof metadata.height === 'number' ? { height: metadata.height } : {}),
+    ...(typeof metadata.format === 'string' ? { format: metadata.format } : {}),
   };
 }
 
@@ -66,5 +79,21 @@ export class AssetCatalogService {
   async getReadySourceAsset(projectId: string, assetId: string, kind: SourceAssetKind): Promise<ReadySourceAsset | null> {
     const result = await this.db.query('select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and pa.role = $5 where a.id = $2 and a.kind = $3 and a.lifecycle = $4', [projectId, assetId, kind, 'READY', 'SOURCE']);
     return result.rows[0] ? mapSourceAsset(result.rows[0] as Record<string, unknown>) : null;
+  }
+
+  async listProjectAssets(projectId: string): Promise<AssetSummaryV0[]> {
+    const result = await this.db.query('select a.* from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 order by a.created_at', [projectId]);
+    return result.rows.map((row) => {
+      const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {};
+      return { id: String(row.id), kind: String(row.kind) as AssetSummaryV0['kind'], lifecycle: String(row.lifecycle) as AssetSummaryV0['lifecycle'], byteSize: Number(row.byte_size), checksum: String(row.checksum), originalName: typeof metadata.originalName === 'string' ? metadata.originalName : String(row.storage_key).split('/').pop() || 'asset', metadata: safeMetadata(row) };
+    });
+  }
+
+  async getReadyAssetContent(projectId: string, assetId: string): Promise<ReadyAssetContent | null> {
+    const result = await this.db.query('select * from assets where project_id = $1 and id = $2 and lifecycle = $3', [projectId, assetId, 'READY']);
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {};
+    return { id: String(row.id), kind: String(row.kind) as AssetSummaryV0['kind'], lifecycle: 'READY', byteSize: Number(row.byte_size), checksum: String(row.checksum), originalName: typeof metadata.originalName === 'string' ? metadata.originalName : String(row.storage_key).split('/').pop() || 'asset', metadata: safeMetadata(row), storageKey: String(row.storage_key) };
   }
 }

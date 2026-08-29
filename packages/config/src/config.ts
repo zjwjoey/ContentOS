@@ -10,6 +10,9 @@ export interface AppConfig {
   ffmpegFontFile: string;
   logLevel: string;
   videoWorkerConcurrency: number;
+  assetWorkerConcurrency: number;
+  assetUploadMaxBytes: number;
+  assetUploadStagingRoot: string;
   publisherWorkerConcurrency: number;
   publisherRealAdaptersEnabled: boolean;
   publisherWechatAllowSubmit: boolean;
@@ -54,6 +57,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ffmpegFontFile: env.FFMPEG_FONT_FILE || 'C:\\Windows\\Fonts\\msyh.ttc',
     logLevel: env.LOG_LEVEL || 'info',
     videoWorkerConcurrency: integer(env, 'VIDEO_WORKER_CONCURRENCY', 1),
+    assetWorkerConcurrency: integer(env, 'ASSET_WORKER_CONCURRENCY', 1),
+    assetUploadMaxBytes: integer(env, 'ASSET_UPLOAD_MAX_BYTES', 500 * 1024 * 1024),
+    assetUploadStagingRoot: env.ASSET_UPLOAD_STAGING_ROOT || 'storage/staging',
     publisherWorkerConcurrency: integer(env, 'PUBLISHER_WORKER_CONCURRENCY', 1),
     publisherRealAdaptersEnabled,
     publisherWechatAllowSubmit,
