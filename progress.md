@@ -308,3 +308,19 @@
 - Acceptance fix: narrowed the Publisher Worker production-entry guard so `dev-main.ts` no longer starts the production worker; focused Publisher regression **12/12 passed**.
 - Acceptance diagnosis: a first full-suite rerun overlapped the browser-test operator on the same PostgreSQL test database, so its Publisher Worker consumed test Jobs and produced three false failures. The owned operator was stopped, its two exact residues were removed, and the clean single-executor rerun passed 189/189.
 - Current branch remains local `codex/unified-product-flow`; no remote push or merge to `main` has been performed.
+
+### Stage 2 browser acceptance repair — 2026-08-29
+
+- **Status:** implementation and automated final gate complete; awaiting human acceptance.
+- Browser acceptance now owns a UUID-named PostgreSQL schema, temporary storage
+  and dynamic loopback ports, so its API and four workers cannot consume jobs
+  from the standard test suite.
+- Publisher handoff creates one PENDING Approval for each exact Publish
+  Revision; retrying the same handoff preserves an existing APPROVED decision.
+- Development-only Fake controls cover retry, human action and reconciliation;
+  the browser runs visible success, NETWORK→SUCCESS, AUTH_EXPIRED and
+  BROWSER_CRASH paths and verifies exactly one ExternalPost where appropriate.
+- Final fresh checks: format, lint, typecheck, root/Web builds, migration matrix
+  **3/3**, full suite **191/191**, browser **1/1**, doctor and diff check passed.
+- Branch: `codex/unified-product-flow`, commits `715155a` and `20b676a`; no
+  freeze, push or merge was performed.

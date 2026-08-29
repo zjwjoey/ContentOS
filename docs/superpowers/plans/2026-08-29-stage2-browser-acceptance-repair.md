@@ -8,6 +8,14 @@
 
 **Tech Stack:** Node.js, TypeScript, PostgreSQL schemas, Fastify, Next.js, Playwright, FFmpeg, Node test runner.
 
+## Completion record — 2026-08-29
+
+Tasks 1–4 are complete. The final gate passed with the owned browser operator
+isolated in a UUID-named PostgreSQL schema: format, lint, typecheck, root and
+Web builds, migration matrix (3/3), full test suite (191/191), browser journey
+(1/1), doctor and diff check. Human acceptance is still required before any
+freeze, remote push, merge, or Video V2 work.
+
 ---
 
 ### Task 1: Create the isolated operator lifecycle harness

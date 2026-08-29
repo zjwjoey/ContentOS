@@ -27,42 +27,40 @@ Real AI providers, live Douyin/WeChat calls, Review analytics and merge to
   queueing; it exposes safe attempts, human-action state and confirmed
   ExternalPost records.
 - Shared five-stage product navigation vocabulary and Project Center shell.
+- The Publisher handoff now creates one `PENDING` Approval for each immutable
+  Publish Revision. An idempotent repeat preserves the current decision rather
+  than replacing an approved revision with a new pending one.
+- The development-only Fake Publisher selector stores safe Publisher-owned
+  simulation state. It drives `SUCCESS`, retryable failure, human-action and
+  reconciliation cases without changing the disabled-by-default real-adapter
+  composition.
+- The Publisher page polls only in-flight work and retryable failed attempts;
+  it stops polling a `NEEDS_HUMAN_ACTION` result.
 
 ## Verification evidence
 
-- `pnpm typecheck`: passed.
-- `pnpm --dir apps/web build`: passed with routes for Assets, Director, Video,
-  Approval Gate and Publisher.
-- `pnpm test` with the local PostgreSQL service on port 5432: **189 passed, 0
+- `pnpm format`, `pnpm lint`, `pnpm typecheck`, `pnpm build`, and
+  `pnpm --dir apps/web build`: passed.
+- `pnpm test:migrations`: **3 passed, 0 failed**.
+- `pnpm test` with the local PostgreSQL service on port 5432: **191 passed, 0
   failed**.
-- `pnpm test:stage2-product` with
-  `DATABASE_URL=postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test`
-  and `CONTENTOS_OPERATOR_URL=http://127.0.0.1:3001`: **13 passed, 0 failed,
-  0 skipped**.
-- `pnpm test:browser` with the operator composition running on port 3001:
-  **1 passed, 0 failed**. Without `CONTENTOS_OPERATOR_URL`, the command
-  intentionally skips because the browser smoke is opt-in.
-- `pnpm format`, `pnpm lint`, `pnpm build`, `pnpm test:migrations` (3/3), and
-  `pnpm doctor`: passed.
-- Acceptance found and fixed a Publisher dev-composition guard that mistakenly
-  launched the production worker from `dev-main.ts`; the regression suite is
-  green (`publisher-web` + Publisher Worker: **12/12 passed**).
-- One acceptance rerun was invalidated because the browser-test operator was
-  still consuming Jobs from the same test database. After stopping that owned
-  composition and removing its two exact test residues, the focused 12/12 and
-  full 189/189 suites passed with a single test executor.
+- `pnpm test:browser`: **1 passed, 0 failed**. The harness creates a UUID-named
+  schema inside the configured test database, migrates it before startup,
+  gives every owned process a schema-scoped URL, temporary storage root and
+  dynamically allocated loopback ports, then terminates only that process tree
+  and drops only that schema.
+- The browser journey uses visible UI actions to cover the full successful
+  flow plus `NETWORK → retry → SUCCESS`, `AUTH_EXPIRED → NEEDS_HUMAN_ACTION →
+  no automatic retry`, and `BROWSER_CRASH → reconciliation → one ExternalPost`.
+  It also double-clicks queueing and verifies one external post.
+- `pnpm doctor` and `git diff --check integration/contentos-v1...HEAD`:
+  passed.
 
-## Known limits before final Stage 2 acceptance
+## Remaining product limits
 
-1. The browser harness currently provides an opt-in project/stage navigation
-   smoke path; it does not yet provision a UUID-isolated PostgreSQL database,
-   launch every worker, or execute the complete upload-to-publish journey
-   automatically.
-2. Fake Publisher failure-mode selection is still composed in the Worker test
-   runtime rather than exposed as a development-only operator control.
-3. The final architecture/documentation gate, independent review and remote
-   push are intentionally not performed until the remaining browser/composition
-   work is implemented and accepted.
+Real Douyin/WeChat execution, real AI providers and post-publication Review
+analytics remain deliberately disabled and outside Stage 2. This report does
+not freeze, merge or push the branch; those are held for human acceptance.
 
 ## Branch policy
 
