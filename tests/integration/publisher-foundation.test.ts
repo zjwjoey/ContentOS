@@ -41,7 +41,7 @@ test('Publisher foundation migration creates bounded tables and constraints', as
     await migrateUp(db);
     const tables = await db.query<{ table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name like 'publisher_%' order by table_name");
     assert.deepEqual(tables.rows.map((row) => row.table_name), [
-      'publisher_accounts', 'publisher_attempts', 'publisher_external_posts', 'publisher_publication_states', 'publisher_request_revisions', 'publisher_requests',
+      'publisher_accounts', 'publisher_attempts', 'publisher_external_posts', 'publisher_fake_simulations', 'publisher_publication_states', 'publisher_request_revisions', 'publisher_requests',
     ]);
     const constraints = await db.query<{ constraint_name: string }>("select constraint_name from information_schema.table_constraints where table_schema = 'public' and constraint_name in ('publisher_accounts_project_platform_name_key', 'publisher_requests_idempotency_key', 'publisher_request_revisions_request_revision_key', 'publisher_external_posts_account_external_key') order by constraint_name");
     assert.deepEqual(constraints.rows.map((row) => row.constraint_name), [
