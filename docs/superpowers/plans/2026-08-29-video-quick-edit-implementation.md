@@ -8,6 +8,10 @@
 
 **Tech Stack:** TypeScript, Fastify, PostgreSQL migrations, Node test runner, Next.js, Playwright, FFmpeg.
 
+**Review follow-up:** Migration `0015_video_manifest_digest` adds a canonical
+Manifest content digest used to fence exact render Jobs against post-queue
+mutation.
+
 ---
 
 ### Task 1: Define the Quick Edit contract and migration

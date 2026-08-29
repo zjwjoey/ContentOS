@@ -74,6 +74,15 @@ test('Quick Edit idempotency returns the original version and rejects a digest c
   } finally { await cleanup(context); }
 });
 
+test('Quick Edit service enforces the operation count limit', async () => {
+  const context = await setup();
+  try {
+    const service = new VideoQuickEditService(context.db, new AssetCatalogService(context.db));
+    const operations = Array.from({ length: 129 }, () => ({ type: 'TRIM' as const, clipIndex: 0, sourceInMs: 0, durationMs: 100 }));
+    await assert.rejects(() => service.createVersion({ projectId: context.project.id, parentManifestId: context.parentId, operations, createdBy: 'operator-1' }), /at most 128/i);
+  } finally { await cleanup(context); }
+});
+
 test('Quick Edit rejects foreign or non-current parents and unavailable source assets', async () => {
   const context = await setup();
   const other = await new ProjectService(context.db).create(`Foreign ${randomUUID()}`);

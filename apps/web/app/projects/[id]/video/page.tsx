@@ -28,6 +28,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   const [trimClipIndex, setTrimClipIndex] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
   const [trimDuration, setTrimDuration] = useState(1000);
+  const [editIdempotencyKey, setEditIdempotencyKey] = useState('');
 
   const refreshManifests = useCallback(async () => {
     const response = await fetch(`/api/v1/projects/${projectId}/video/manifests`);
@@ -95,11 +96,13 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   const createQuickEdit = async () => {
     if (!activeManifest || pendingOperations.length === 0) return;
     setBusy(true); setMessage('');
-    const response = await fetch(`/api/v1/projects/${projectId}/video/quick-edits`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parentManifestId: activeManifest.id, operations: pendingOperations, createdBy: 'operator' }) });
+    const idempotencyKey = editIdempotencyKey || `ui-${globalThis.crypto.randomUUID()}`;
+    setEditIdempotencyKey(idempotencyKey);
+    const response = await fetch(`/api/v1/projects/${projectId}/video/quick-edits`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parentManifestId: activeManifest.id, operations: pendingOperations, createdBy: 'operator', idempotencyKey }) });
     setBusy(false);
     if (!response.ok) { setMessage(await responseMessage(response, 'Quick Edit 版本创建失败。')); return; }
     const next = await response.json() as ManifestRecord;
-    setActiveManifest(next); setPendingOperations([]); setMessage(`Manifest v${next.revision} 已创建，可创建精确渲染 Job。`); await refreshManifests();
+    setActiveManifest(next); setPendingOperations([]); setEditIdempotencyKey(''); setMessage(`Manifest v${next.revision} 已创建，可创建精确渲染 Job。`); await refreshManifests();
   };
   const renderManifest = async () => {
     if (!activeManifest) return;

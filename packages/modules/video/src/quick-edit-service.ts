@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool } from 'pg';
 import type { AssetCatalogService } from '../../asset/src/index.js';
-import { applyQuickEditOperations, parseQuickEditOperations, type QuickEditOperation } from './quick-edit.js';
+import { applyQuickEditOperations, digestEditManifest, parseQuickEditOperations, type QuickEditOperation } from './quick-edit.js';
 import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
 
 export interface CreateQuickEditVersionInput {
@@ -111,7 +111,7 @@ export class VideoQuickEditService {
       const revision = Number(revisionResult.rows[0]?.revision || 1);
       await client.query("update edit_manifests set status = 'SUPERSEDED' where id = $1 and status = 'PERSISTED'", [input.parentManifestId]);
       const id = `manifest-${randomUUID()}`;
-      const inserted = await client.query('insert into edit_manifests (id, project_id, revision, schema_version, manifest, status, parent_manifest_id, edit_operations, created_by, idempotency_key, input_digest) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning *', [id, input.projectId, revision, 'EDIT_MANIFEST_V0', next, 'PERSISTED', input.parentManifestId, JSON.stringify(operations), input.createdBy.trim(), input.idempotencyKey || null, inputDigest]);
+      const inserted = await client.query('insert into edit_manifests (id, project_id, revision, schema_version, manifest, manifest_digest, status, parent_manifest_id, edit_operations, created_by, idempotency_key, input_digest) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning *', [id, input.projectId, revision, 'EDIT_MANIFEST_V0', next, digestEditManifest(next), 'PERSISTED', input.parentManifestId, JSON.stringify(operations), input.createdBy.trim(), input.idempotencyKey || null, inputDigest]);
       await client.query('commit');
       return mapRecord(inserted.rows[0] as Record<string, unknown>);
     } catch (error) {

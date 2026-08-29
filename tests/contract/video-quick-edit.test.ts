@@ -53,6 +53,10 @@ test('rejects operations that leave an empty timeline', () => {
   assert.throws(() => applyQuickEditOperations(fixture(), removeAll), /timeline/);
 });
 
+test('rejects an empty Quick Edit operation list', () => {
+  assert.throws(() => parseQuickEditOperations([]), /at least one/i);
+});
+
 test('does not mutate the parent manifest', () => {
   const parent = fixture();
   const next = applyQuickEditOperations(parent, [{ type: 'TRIM', clipIndex: 0, sourceInMs: 20, durationMs: 200 }]);

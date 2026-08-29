@@ -38,6 +38,7 @@ test('Quick Edit v2 renders the selected immutable timeline through the Video Wo
   let worker: ReturnType<typeof createVideoWorker> | undefined;
   let renderJobId: string | undefined;
   let invalidJobId: string | undefined;
+  let digestJobId: string | undefined;
   try {
     const sources = [];
     for (const [index, color] of colors.entries()) {
@@ -55,9 +56,16 @@ test('Quick Edit v2 renders the selected immutable timeline through the Video Wo
     const renderJob = await video.createManifestRenderJob(project.id, version.id);
     renderJobId = renderJob.id;
     assert.equal((renderJob.payload as { manifestRevision: number }).manifestRevision, 2);
-    const invalidJob = await jobs.create({ id: `job-invalid-${randomUUID()}`, projectId: project.id, type: 'VIDEO_RENDER', payload: { projectId: project.id, manifestId: version.id, manifestRevision: 999 }, idempotencyKey: `invalid-${randomUUID()}`, maxAttempts: 1 });
+    const digest = (renderJob.payload as { manifestDigest: string }).manifestDigest;
+    const invalidJob = await jobs.create({ id: `job-invalid-${randomUUID()}`, projectId: project.id, type: 'VIDEO_RENDER', payload: { projectId: project.id, manifestId: version.id, manifestRevision: 999, manifestDigest: digest }, idempotencyKey: `invalid-${randomUUID()}`, maxAttempts: 1 });
     invalidJobId = invalidJob.id;
     await assert.rejects(() => video.planJob(invalidJob), /REVISION_CONFLICT/);
+    const digestJob = await jobs.create({ id: `job-digest-${randomUUID()}`, projectId: project.id, type: 'VIDEO_RENDER', payload: { projectId: project.id, manifestId: version.id, manifestRevision: 2, manifestDigest: digest }, idempotencyKey: `digest-${randomUUID()}`, maxAttempts: 1 });
+    digestJobId = digestJob.id;
+    const currentManifest = await db.query<{ manifest: Record<string, unknown> }>('select manifest from edit_manifests where id = $1', [version.id]);
+    await db.query('update edit_manifests set manifest = $2 where id = $1', [version.id, { ...currentManifest.rows[0]!.manifest, seed: 10 }]);
+    await assert.rejects(() => video.planJob(digestJob), /DIGEST_CONFLICT/);
+    await db.query('update edit_manifests set manifest = $2 where id = $1', [version.id, currentManifest.rows[0]!.manifest]);
     worker = createVideoWorker({ db, storage, assets: assetService, jobs, video, ffmpegPath, ffprobePath, workerId: `video-quick-edit-${randomUUID()}`, pollIntervalMs: 25 });
     await worker.start();
     const result = await waitForJob(jobs, renderJob.id);
@@ -71,7 +79,7 @@ test('Quick Edit v2 renders the selected immutable timeline through the Video Wo
     assert.equal(probe.width, 1080); assert.equal(probe.height, 1920); assert.equal(probe.format, 'mp4');
   } finally {
     if (worker) await worker.shutdown('test');
-    for (const jobId of [renderJobId, invalidJobId].filter((id): id is string => Boolean(id))) { await db.query('delete from job_events where job_id = $1', [jobId]); await db.query('delete from job_attempts where job_id = $1', [jobId]); }
+    for (const jobId of [renderJobId, invalidJobId, digestJobId].filter((id): id is string => Boolean(id))) { await db.query('delete from job_events where job_id = $1', [jobId]); await db.query('delete from job_attempts where job_id = $1', [jobId]); }
     await db.query('delete from renders where project_id = $1', [project.id]);
     await db.query('delete from edit_manifests where project_id = $1', [project.id]);
     await db.query('delete from jobs where project_id = $1', [project.id]);

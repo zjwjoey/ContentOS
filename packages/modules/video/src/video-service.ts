@@ -5,9 +5,10 @@ import type { AssetCatalogService } from '../../asset/src/index.js';
 import { JobService, type JobAttemptScope, type JobRecord } from '../../job/src/index.js';
 import { buildVideoManifest, type PlannerAsset } from './planner.js';
 import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
+import { digestEditManifest } from './quick-edit.js';
 
 export interface CreateVideoJobInput { projectId: string; videoAssetIds: string[]; voiceAssetId?: string; targetDurationMs: number; seed: number; subtitleText?: string; idempotencyKey?: string; directorRevisionId?: string; directorRevision?: number; directorBrief?: unknown; directorStoryboard?: unknown; metadata?: { briefId?: string; scriptRevisionId?: string; storyboardRevisionId?: string }; }
-export interface VideoJobPayload extends CreateVideoJobInput { manifestId?: string; manifestRevision?: number; }
+export interface VideoJobPayload extends CreateVideoJobInput { manifestId?: string; manifestRevision?: number; manifestDigest?: string; }
 export interface VideoPlanResult { manifestId: string; renderId: string; manifest: ReturnType<typeof buildVideoManifest>; renderStatus: string; outputAssetId: string | null; }
 
 export class VideoService {
@@ -33,13 +34,16 @@ export class VideoService {
   }
 
   async createManifestRenderJob(projectId: string, manifestId: string): Promise<JobRecord> {
-    const manifest = await this.db.query<{ revision: number; project_id: string }>('select revision, project_id from edit_manifests where id = $1 and project_id = $2', [manifestId, projectId]);
+    const manifest = await this.db.query<{ revision: number; project_id: string; manifest: EditManifestV0; manifest_digest: string | null }>('select revision, project_id, manifest, manifest_digest from edit_manifests where id = $1 and project_id = $2', [manifestId, projectId]);
     const row = manifest.rows[0];
     if (!row) throw new Error('VIDEO_MANIFEST_NOT_FOUND');
     const manifestRevision = Number(row.revision);
+    const manifestDigest = digestEditManifest(row.manifest);
+    if (row.manifest_digest && row.manifest_digest !== manifestDigest) throw new Error('VIDEO_MANIFEST_DIGEST_CONFLICT');
+    if (!row.manifest_digest) await this.db.query('update edit_manifests set manifest_digest = $2 where id = $1 and manifest_digest is null', [manifestId, manifestDigest]);
     const idempotencyKey = `video-render:manifest:${projectId}:${manifestId}:v${manifestRevision}`;
     const id = `job-${randomUUID()}`;
-    const payload = { projectId, manifestId, manifestRevision } as unknown as VideoJobPayload;
+    const payload = { projectId, manifestId, manifestRevision, manifestDigest } as unknown as VideoJobPayload;
     try { return await this.jobs.create({ id, projectId, type: 'VIDEO_RENDER', payload, idempotencyKey, maxAttempts: 3 }); }
     catch (error) { if ((error as { code?: string }).code === '23505') { const existing = await this.jobs.getByIdempotencyKey(idempotencyKey); if (existing) return existing; } throw error; }
   }
@@ -83,7 +87,7 @@ export class VideoService {
       const revisionResult = await client.query<{ revision: number }>('select coalesce(max(revision), 0) + 1 as revision from edit_manifests where project_id = $1', [projectId]);
       const revision = Number(revisionResult.rows[0]?.revision || 1);
       const manifestId = `manifest-${randomUUID()}`;
-      await client.query('insert into edit_manifests (id, project_id, revision, schema_version, manifest, status) values ($1, $2, $3, $4, $5, $6)', [manifestId, projectId, revision, 'EDIT_MANIFEST_V0', manifest, 'PERSISTED']);
+      await client.query('insert into edit_manifests (id, project_id, revision, schema_version, manifest, manifest_digest, status) values ($1, $2, $3, $4, $5, $6, $7)', [manifestId, projectId, revision, 'EDIT_MANIFEST_V0', manifest, digestEditManifest(manifest), 'PERSISTED']);
       const renderId = `render-${randomUUID()}`;
       await client.query('insert into renders (id, project_id, manifest_id, job_id, status, diagnostics) values ($1, $2, $3, $4, $5, $6)', [renderId, projectId, manifestId, job.id, 'QUEUED', { seed: payload.seed, ...(payload.metadata ? { metadata: payload.metadata } : {}) }]);
       await client.query('commit');
@@ -98,11 +102,14 @@ export class VideoService {
 
   private async planManifestJob(job: JobRecord, payload: VideoJobPayload): Promise<VideoPlanResult> {
     if (!payload.manifestId || !Number.isInteger(payload.manifestRevision)) throw new Error('VIDEO_MANIFEST_REVISION_REQUIRED');
+    if (!payload.manifestDigest) throw new Error('VIDEO_MANIFEST_DIGEST_REQUIRED');
     if (!this.storage || !this.assets) throw new Error('Video storage and asset catalog are required for exact Manifest rendering');
-    const selected = await this.db.query<{ id: string; project_id: string; revision: number; manifest: EditManifestV0 }>('select id, project_id, revision, manifest from edit_manifests where id = $1 and project_id = $2', [payload.manifestId, job.projectId]);
+    const selected = await this.db.query<{ id: string; project_id: string; revision: number; manifest: EditManifestV0; manifest_digest: string | null }>('select id, project_id, revision, manifest, manifest_digest from edit_manifests where id = $1 and project_id = $2', [payload.manifestId, job.projectId]);
     const row = selected.rows[0];
     if (!row) throw new Error('VIDEO_MANIFEST_NOT_FOUND');
     if (Number(row.revision) !== payload.manifestRevision) throw new Error('VIDEO_MANIFEST_REVISION_CONFLICT');
+    const currentDigest = digestEditManifest(row.manifest);
+    if (payload.manifestDigest !== currentDigest || (row.manifest_digest && row.manifest_digest !== currentDigest)) throw new Error('VIDEO_MANIFEST_DIGEST_CONFLICT');
     const persisted = row.manifest;
     validateEditManifest(persisted);
     const ids = [...new Set(persisted.timeline.map((clip) => clip.assetId))];

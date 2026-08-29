@@ -45,8 +45,9 @@ test('Video Quick Edit API lists versions, creates an edit and queues exact Mani
     const exact = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/video/manifests/${created.json().id}/render`, payload: {} });
     assert.equal(exact.statusCode, 201, exact.body);
     assert.equal(exact.json().type, 'VIDEO_RENDER');
-    assert.equal(exact.json().payload.manifestId, created.json().id);
-    assert.equal(exact.json().payload.manifestRevision, 2);
+    assert.equal('payload' in exact.json(), false);
+    assert.equal('leaseOwner' in exact.json(), false);
+    assert.equal('error' in exact.json(), false);
 
     const foreignRender = await app.inject({ method: 'POST', url: `/api/v1/projects/${foreign.id}/video/manifests/${created.json().id}/render`, payload: {} });
     assert.equal(foreignRender.statusCode, 404);

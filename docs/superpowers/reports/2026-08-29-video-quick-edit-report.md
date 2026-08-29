@@ -17,7 +17,8 @@ single-clip replacement or a generic workflow engine.
 - Safe API routes for Manifest list/detail, Quick Edit creation and exact
   Manifest render Job creation.
 - Exact render Job planning that loads the requested Manifest revision and
-  resolves source assets without invoking the creative planner.
+  resolves source assets without invoking the creative planner, with a
+  canonical Manifest digest fence.
 - Operator UI controls for version selection, trim/remove/reorder operations,
   immutable version creation and exact render submission.
 
@@ -35,5 +36,7 @@ single-clip replacement or a generic workflow engine.
 
 Manifest source paths remain internal to the persisted/worker boundary and are
 removed from API responses. Exact rendering validates project ownership,
-READY lifecycle, revision identity and source timing before FFmpeg. Approval
-remains bound to the exact Render output in the existing Video workspace flow.
+READY lifecycle, revision identity, Manifest digest and source timing before
+FFmpeg. Exact-render API responses expose only an allowlisted Job summary.
+Approval remains bound to the exact Render output in the existing Video
+workspace flow.

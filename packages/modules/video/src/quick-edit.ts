@@ -1,9 +1,20 @@
+import { createHash } from 'node:crypto';
 import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
 
 export type QuickEditOperation =
   | { type: 'TRIM'; clipIndex: number; sourceInMs: number; durationMs: number }
   | { type: 'REMOVE'; clipIndex: number }
   | { type: 'REORDER'; clipIndexes: number[] };
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+
+export function digestEditManifest(manifest: EditManifestV0): string {
+  return createHash('sha256').update(stableJson(manifest)).digest('hex');
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -40,6 +51,8 @@ function parseOperation(value: unknown): QuickEditOperation {
 
 export function parseQuickEditOperations(value: unknown): QuickEditOperation[] {
   if (!Array.isArray(value)) throw new Error('Quick Edit operations must be an array');
+  if (value.length === 0) throw new Error('Quick Edit requires at least one operation');
+  if (value.length > 128) throw new Error('Quick Edit supports at most 128 operations');
   return value.map(parseOperation);
 }
 

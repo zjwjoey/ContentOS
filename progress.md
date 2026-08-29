@@ -146,6 +146,8 @@
 - Added safe Manifest API routes, exact-version render Job planning and worker
   coverage using real FFmpeg.
 - Added operator UI version history and Quick Edit controls.
+- Review fixes added Manifest digest fencing (migration 0015), safe exact-render
+  Job responses, empty-operation rejection and service-level operation limits.
 - Acceptance report: `docs/superpowers/reports/2026-08-29-video-quick-edit-report.md`.
 
 ## Session: 2026-08-21 - Engineering initialization

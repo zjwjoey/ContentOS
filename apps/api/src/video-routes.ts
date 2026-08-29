@@ -4,7 +4,7 @@ import type { AssetCatalogService } from '../../../packages/modules/asset/src/in
 import type { ApprovalService } from '../../../packages/modules/approval/src/index.js';
 import type { DirectorV1Service } from '../../../packages/modules/director/src/index.js';
 import type { DirectorVideoService, VideoProjectReadService, VideoQuickEditService, VideoService, QuickEditOperation } from '../../../packages/modules/video/src/index.js';
-import type { JobService } from '../../../packages/modules/job/src/index.js';
+import type { JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
 import type { AssetSummaryV0 } from '../../../packages/contracts/src/index.js';
 
@@ -62,6 +62,9 @@ function safeManifest(manifest: Record<string, unknown>): Record<string, unknown
 function safeManifestRecord(record: Awaited<ReturnType<VideoQuickEditService['getManifest']>>): unknown {
   if (!record) return null;
   return { ...record, manifest: safeManifest(record.manifest as unknown as Record<string, unknown>) };
+}
+function safeJob(job: JobRecord): Record<string, unknown> {
+  return { id: job.id, projectId: job.projectId, type: job.type, state: job.state, attemptCount: job.attemptCount, maxAttempts: job.maxAttempts };
 }
 
 export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRouteDependencies): void {
@@ -124,7 +127,7 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
     const manifest = await quickEdit.getManifest(projectId, manifestId);
     if (!manifest) return reply.code(404).send({ error: { code: 'VIDEO_MANIFEST_NOT_FOUND', message: 'Video Manifest not found', details: [] } });
-    try { return reply.code(201).send(await video.createManifestRenderJob(projectId, manifestId)); }
+    try { return reply.code(201).send(safeJob(await video.createManifestRenderJob(projectId, manifestId))); }
     catch (error) { return reply.code(409).send({ error: { code: 'VIDEO_MANIFEST_RENDER_CONFLICT', message: error instanceof Error ? error.message : 'Manifest render conflict', details: [] } }); }
   });
 
