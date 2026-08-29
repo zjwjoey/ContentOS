@@ -76,7 +76,9 @@
 - Modify: `workers/publisher-worker/src/dev-main.ts`
 - Modify: `apps/api/src/publisher-routes.ts`
 - Modify: `apps/api/src/app.ts`
+- Modify: `apps/api/src/main.ts`
 - Modify: `apps/web/app/projects/[id]/publisher/page.tsx`
+- Modify: `tests/integration/migration-matrix.test.ts`
 - Modify: `tests/integration/publisher-product-api.test.ts`
 - Modify: `tests/worker/publisher-product-worker.test.ts`
 
@@ -104,7 +106,7 @@
 
   Extend `PublisherWorkerOptions` with an optional simulation resolver. Only `dev-main.ts`, gated by `CONTENTOS_FAKE_PUBLISHER_CONTROLS === '1'`, injects it. Real adapters never receive or consult simulation data.
 
-  Register safe `GET`/`PUT /api/v1/projects/:projectId/publisher/accounts/:accountId/fake-outcome` routes only when `allowFakePublisherControls` is true. The Web page shows the selector only after the safe GET endpoint succeeds; it never displays credentials, profile keys or diagnostics.
+  Add `allowFakePublisherControls` to `ApiRuntimeDependencies`, defaulting to `false`; `apps/api/src/main.ts` passes `true` only when `CONTENTOS_FAKE_PUBLISHER_CONTROLS === '1'`. Register safe `GET`/`PUT /api/v1/projects/:projectId/publisher/accounts/:accountId/fake-outcome` routes only when that dependency is true. The Web page shows the selector only after the safe GET endpoint succeeds; it never displays credentials, profile keys or diagnostics. Update the migration matrix from `0001`–`0012` to `0001`–`0013`.
 
 - [ ] **Step 4: Run focused tests and typecheck**
 
