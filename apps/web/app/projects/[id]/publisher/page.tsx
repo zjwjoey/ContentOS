@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 type Account = { id: string; platformId: string; displayName: string; status: string };
 type PublishRequest = { id: string; accountId: string; status: string; failureMessage: string | null; createdAt: string };
 type Asset = { id: string; checksum: string; kind: 'VIDEO_RENDER'; lifecycle: 'READY'; byteSize: number };
-type RequestAggregate = { request: PublishRequest; revision: { id: string; title: string; description: string; assetId: string }; nextAction: 'NEEDS_HUMAN_ACTION' | null };
+type RequestAggregate = { request: PublishRequest; revision: { id: string; title: string; description: string; assetId: string }; attempts: Array<{ id: string; attemptNumber: number; status: string; failureCode?: string | null; failureClassification?: string | null; finishedAt?: string | null }>; externalPosts: Array<{ id: string; externalPostId: string; externalUrl: string | null }>; nextAction: 'NEEDS_HUMAN_ACTION' | null; approval?: { status: 'PENDING' | 'APPROVED' | 'REJECTED'; targetRevisionId: string } };
 type ProjectPublishSummary = { accountCount: number; requestCount: number; confirmedExternalPostCount: number; needsHumanActionCount: number; statusCounts: Record<string, number> };
 type ApiError = { error?: { message?: string } };
 
@@ -30,11 +30,12 @@ export default function PublisherPage({ params }: { params: { id: string } }) {
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [accountResponse, assetResponse, requestResponse, summaryResponse] = await Promise.all([
+    const [accountResponse, assetResponse, requestResponse, summaryResponse, approvalResponse] = await Promise.all([
       fetch(`/api/v1/projects/${projectId}/publisher/accounts`),
       fetch(`/api/v1/projects/${projectId}/publisher/assets`),
       fetch(`/api/v1/projects/${projectId}/publisher/requests`),
       fetch(`/api/v1/projects/${projectId}/publisher/summary`),
+      fetch(`/api/v1/projects/${projectId}/approvals`),
     ]);
     if (accountResponse.ok) {
       const nextAccounts = ((await accountResponse.json()) as { items: Account[] }).items;
@@ -48,9 +49,13 @@ export default function PublisherPage({ params }: { params: { id: string } }) {
     }
     if (requestResponse.ok) {
       const items = ((await requestResponse.json()) as { items: PublishRequest[] }).items;
+      const approvalItems = approvalResponse.ok ? ((await approvalResponse.json()) as { items: Array<{ targetType: string; targetId: string; targetRevisionId: string; status: 'PENDING' | 'APPROVED' | 'REJECTED' }> }).items : [];
       const aggregates = await Promise.all(items.map(async (item) => {
         const response = await fetch(`/api/v1/projects/${projectId}/publisher/requests/${item.id}`);
-        return response.ok ? await response.json() as RequestAggregate : { request: item, revision: { id: '', title: item.id, description: '', assetId: '' }, nextAction: null };
+        if (!response.ok) return { request: item, revision: { id: '', title: item.id, description: '', assetId: '' }, attempts: [], externalPosts: [], nextAction: null };
+        const aggregate = await response.json() as RequestAggregate;
+        const approval = approvalItems.find((candidate) => candidate.targetType === 'PUBLISH' && candidate.targetId === item.id && candidate.targetRevisionId === aggregate.revision.id);
+        return approval ? { ...aggregate, approval: { status: approval.status, targetRevisionId: approval.targetRevisionId } } : aggregate;
       }));
       setRequests(aggregates);
     }
@@ -78,28 +83,24 @@ export default function PublisherPage({ params }: { params: { id: string } }) {
     setBusy(false);
   };
 
-  const approveAndQueue = async (requestId: string) => {
+  const queueRequest = async (requestId: string) => {
     setBusy(true); setMessage('');
     const current = requests.find((item) => item.request.id === requestId);
     if (!current?.revision.id) { setMessage('发布 Revision 信息缺失。'); setBusy(false); return; }
-    const revisionId = current.revision.id;
-    const pending = await fetch(`/api/v1/projects/${projectId}/approvals`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ targetType: 'PUBLISH', targetId: requestId, targetRevisionId: revisionId, status: 'PENDING', approver: 'operator' }) });
-    if (!pending.ok) { setMessage(await responseMessage(pending, 'Approval Gate 创建失败。')); setBusy(false); return; }
-    const approved = await fetch(`/api/v1/projects/${projectId}/approvals/PUBLISH/${requestId}/${revisionId}/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approver: 'operator' }) });
-    if (!approved.ok) { setMessage(await responseMessage(approved, 'Approval Gate 批准失败。')); setBusy(false); return; }
+    if (current.approval?.status !== 'APPROVED' || current.approval.targetRevisionId !== current.revision.id) { setMessage('必须先在 Approval Gate 批准当前发布 Revision。'); setBusy(false); return; }
     const queued = await fetch(`/api/v1/projects/${projectId}/publisher/requests/${requestId}/queue`, { method: 'POST' });
-    setMessage(queued.ok ? 'Approval Gate 已批准，发布请求已进入 PUBLISH Job 队列。' : await responseMessage(queued, '发布入队失败。'));
+    setMessage(queued.ok ? '已批准的发布 Revision 已进入 PUBLISH Job 队列。' : await responseMessage(queued, '发布入队失败。'));
     if (queued.ok) await refresh();
     setBusy(false);
   };
 
   return <main className="shell">
-    <header><p className="eyebrow">Project / {projectId}</p><h1>Publisher 工作台</h1><p className="muted">当前只连接 Fake Platform，用于验证项目交接、Approval Gate、入队、Worker 执行和发布记录。</p><nav className="module-nav"><Link href={`/projects/${projectId}/director`}>返回 Director</Link></nav></header>
+    <header><p className="eyebrow">Project / {projectId}</p><h1>Publisher 工作台</h1><p className="muted">当前只连接 Fake Platform，用于验证项目交接、Approval Gate、入队、Worker 执行和发布记录。</p><nav className="module-nav"><Link href={`/projects/${projectId}/director`}>Director</Link><Link href={`/projects/${projectId}/approvals`}>Approval Gate</Link></nav></header>
     {summary && <section className="card"><div className="section-title"><h2>项目发布摘要</h2><span>{summary.requestCount} 条请求</span></div><p className="muted">账号 {summary.accountCount} 个 · 已确认外部内容 {summary.confirmedExternalPostCount} 条 · 待人工处理 {summary.needsHumanActionCount} 条 · 已发布 {summary.statusCounts.PUBLISHED || 0} 条</p></section>}
     <section className="grid">
       <form className="card" onSubmit={createFakeAccount}><div className="section-title"><h2>Fake Platform 账号</h2><span>{accounts.length} 个</span></div><label>显示名称<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></label><button disabled={busy}>创建测试账号</button><ul className="revision-list">{accounts.map((account) => <li key={account.id}><strong>{account.displayName}</strong><span>{account.platformId} · {account.status}</span></li>)}</ul></form>
       <form className="card" onSubmit={createRequest}><div className="section-title"><h2>项目发布交接</h2><span>{selectedAccountIds.length} 个账号</span></div><fieldset><legend>目标账号</legend>{accounts.map((account) => <label key={account.id}><input type="checkbox" checked={selectedAccountIds.includes(account.id)} onChange={(event) => setSelectedAccountIds((current) => event.target.checked ? [...current, account.id] : current.filter((id) => id !== account.id))} />{account.displayName} · {account.platformId} · {account.status}</label>)}</fieldset><label>成片 Render Asset<select value={assetId} onChange={(event) => setAssetId(event.target.value)} required><option value="">请选择可发布成片</option>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.id} · {asset.byteSize} bytes</option>)}</select></label><label>标题<input value={title} onChange={(event) => setTitle(event.target.value)} required maxLength={200} /></label><label>描述<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><button disabled={busy || !selectedAccountIds.length || !assetId}>创建项目发布草稿</button></form>
     </section>
-    <section className="card"><div className="section-title"><h2>发布请求</h2><span>{requests.length} 条</span></div>{message && <p className="status">{message}</p>}<ul className="revision-list">{requests.map(({ request, revision, nextAction }) => <li key={request.id}><strong>{revision.title}</strong><span>{request.status} · Asset {revision.assetId}</span>{request.failureMessage && <small>{request.failureMessage}</small>}{nextAction === 'NEEDS_HUMAN_ACTION' && <small>NEEDS_HUMAN_ACTION · 需要人工处理后再继续</small>}{request.status === 'DRAFT' && <button type="button" disabled={busy} onClick={() => void approveAndQueue(request.id)}>Approval Gate 批准并入队</button>}{request.status === 'PUBLISHED' && <small>PUBLISHED · 已生成 Fake Platform 发布记录</small>}</li>)}</ul></section>
+    <section className="card"><div className="section-title"><h2>发布请求</h2><span>{requests.length} 条</span></div>{message && <p className="status">{message}</p>}<ul className="revision-list">{requests.map(({ request, revision, attempts, externalPosts, nextAction, approval }) => <li key={request.id}><strong>{revision.title}</strong><span>{request.status} · Asset {revision.assetId} · Revision {revision.id}</span><small>Approval：{approval?.status || '未创建'}{approval && ` · ${approval.targetRevisionId}`}</small>{attempts.map((attempt) => <small key={attempt.id}>PublishAttempt #{attempt.attemptNumber} · {attempt.status}{attempt.failureCode ? ` · ${attempt.failureCode}` : ''}</small>)}{externalPosts.map((post) => <small key={post.id}>ExternalPost {post.externalPostId}{post.externalUrl ? ` · ${post.externalUrl}` : ''}</small>)}{request.failureMessage && <small>{request.failureMessage}</small>}{nextAction === 'NEEDS_HUMAN_ACTION' && <small>NEEDS_HUMAN_ACTION · 需要人工处理后再继续</small>}{request.status === 'DRAFT' && <p><Link className="module-nav-link" href={`/projects/${projectId}/approvals`}>前往 Approval Gate</Link>{approval?.status === 'APPROVED' && approval.targetRevisionId === revision.id && <button type="button" disabled={busy} onClick={() => void queueRequest(request.id)}>进入发布队列</button>}</p>}{request.status === 'PUBLISHED' && <small>PUBLISHED · 已生成 Fake Platform 发布记录</small>}</li>)}</ul></section>
   </main>;
 }

@@ -52,7 +52,7 @@ export interface PublisherProjectSummary {
   confirmedExternalPostCount: number;
   needsHumanActionCount: number;
 }
-export interface PublisherRequestAggregate { request: PublisherRequest; revision: PublisherRequestRevision; attempts: PublisherAttempt[]; nextAction: PublisherNextAction | null; }
+export interface PublisherRequestAggregate { request: PublisherRequest; revision: PublisherRequestRevision; attempts: PublisherAttempt[]; externalPosts: PublisherExternalPost[]; nextAction: PublisherNextAction | null; }
 
 export interface PublisherPublishJobPayload {
   projectId: string;
@@ -193,13 +193,13 @@ export class PublisherService {
           && String(revisionRow.created_by) === input.revision.createdBy;
         if (!matches) throw new Error('Idempotency key conflict: input does not match existing Publisher request');
         await client.query('commit');
-        return { request, revision: mapRevision(revisionRow), attempts: [], nextAction: null };
+        return { request, revision: mapRevision(revisionRow), attempts: [], externalPosts: [], nextAction: null };
       }
       const revisionId = `publisher-revision-${randomUUID()}`;
       const revision = await client.query('insert into publisher_request_revisions (id, request_id, revision, asset_id, asset_checksum, title, description, desired_publish_at, created_by) values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning *', [revisionId, id, 1, input.revision.assetId, input.revision.assetChecksum, input.revision.title, input.revision.description, input.revision.desiredPublishAt, input.revision.createdBy]);
       const updated = await client.query('update publisher_requests set current_revision_id = $2, desired_publish_at = $3, updated_at = now() where id = $1 returning *', [id, revisionId, input.revision.desiredPublishAt]);
       await client.query('commit');
-      return { request: mapRequest(updated.rows[0] as Record<string, unknown>), revision: mapRevision(revision.rows[0] as Record<string, unknown>), attempts: [], nextAction: null };
+      return { request: mapRequest(updated.rows[0] as Record<string, unknown>), revision: mapRevision(revision.rows[0] as Record<string, unknown>), attempts: [], externalPosts: [], nextAction: null };
     } catch (error) { await rollback(client); throw error; }
     finally { client.release(); }
   }
@@ -239,6 +239,7 @@ export class PublisherService {
     const row = result.rows[0] as Record<string, unknown> | undefined;
     if (!row || !row.revision_id) return null;
     const attempts = await this.listAttempts(requestId);
+    const externalPosts = await this.listExternalPosts(requestId);
     return {
       request: mapRequest(row),
       revision: mapRevision({
@@ -254,6 +255,7 @@ export class PublisherService {
         created_at: row.revision_created_at,
       }),
       attempts,
+      externalPosts,
       nextAction: attempts.at(-1)?.failureClassification === 'HUMAN_ACTION_REQUIRED' ? 'NEEDS_HUMAN_ACTION' : null,
     };
   }
@@ -341,6 +343,11 @@ export class PublisherService {
   async listAttempts(requestId: string): Promise<PublisherAttempt[]> {
     const result = await this.db.query('select * from publisher_attempts where request_id = $1 order by attempt_number', [requestId]);
     return result.rows.map((row) => mapAttempt(row as Record<string, unknown>));
+  }
+
+  async listExternalPosts(requestId: string): Promise<PublisherExternalPost[]> {
+    const result = await this.db.query('select * from publisher_external_posts where request_id = $1 order by first_observed_at', [requestId]);
+    return result.rows.map((row) => mapExternalPost(row as Record<string, unknown>));
   }
 
   async recordExternalPost(input: RecordPublisherExternalPostInput): Promise<PublisherExternalPost> {
