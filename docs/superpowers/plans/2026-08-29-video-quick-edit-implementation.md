@@ -95,7 +95,7 @@
 - Modify: `packages/modules/video/src/index.ts`
 - Create: `tests/integration/video-quick-edit.test.ts`
 
-- [ ] **Step 1: Write failing service tests**
+- [x] **Step 1: Write failing service tests**
 
   Cover:
 
@@ -108,7 +108,7 @@
   - two concurrent edits serialize on the project lock and cannot produce the
     same revision number.
 
-- [ ] **Step 2: Run the service tests and confirm RED**
+- [x] **Step 2: Run the service tests and confirm RED**
 
   Run:
 
@@ -119,7 +119,7 @@
 
   Expected: FAIL because `VideoQuickEditService` is not implemented.
 
-- [ ] **Step 3: Implement `VideoQuickEditService`**
+- [x] **Step 3: Implement `VideoQuickEditService`**
 
   Use the public `AssetCatalogService` to resolve every clip’s current READY
   source and duration. Apply operations to a deep copy of the parent Manifest,
@@ -139,7 +139,7 @@
   manifest, creator and timestamps. No storage credentials or diagnostics may
   cross this boundary.
 
-- [ ] **Step 4: Run focused tests and commit**
+- [x] **Step 4: Run focused tests and commit**
 
   Run the service integration test, `tests/contract/edit-manifest.test.ts`,
   `pnpm typecheck` and `pnpm format`.

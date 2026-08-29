@@ -10,3 +10,5 @@ export type { BuildManifestInput, PlannerAsset } from './planner.js';
 export type { EditManifestV0, ManifestClip } from '../../../contracts/src/index.js';
 export { applyQuickEditOperations, parseQuickEditOperations } from './quick-edit.js';
 export type { QuickEditOperation } from './quick-edit.js';
+export { VideoQuickEditService } from './quick-edit-service.js';
+export type { CreateQuickEditVersionInput, QuickEditManifestRecord } from './quick-edit-service.js';
