@@ -6,6 +6,16 @@ export { withBrowserSession } from './browser-session.js';
 export type { BrowserPage, BrowserSession, BrowserSessionFactory } from './browser-session.js';
 export { EnvironmentCredentialProvider } from './credential-provider.js';
 export type { CredentialProvider } from './credential-provider.js';
+export { DouyinOpenApiAdapter, InMemoryPublishStateStore } from './douyin-open-api-adapter.js';
+export type { DouyinEndpointProfile, PublishStateStore } from './douyin-open-api-adapter.js';
+export { PostgresPublishStateStore } from './publish-state-store.js';
+export type { PublicationState, PublishStateKey } from './publish-state-store.js';
+export { FetchDouyinHttpTransport } from './douyin-http.js';
+export type { DouyinHttpRequest, DouyinHttpTransport } from './douyin-http.js';
+export { WeChatChannelsPlaywrightAdapter } from './wechat-channels-playwright-adapter.js';
+export { defaultWeChatChannelsSelectors } from './wechat-channels-selectors.js';
+export type { WeChatChannelsAdapterOptions } from './wechat-channels-playwright-adapter.js';
+export type { WeChatChannelsSelectorProfile } from './wechat-channels-selectors.js';
 export { assertPublisherRequestTransition } from '../../../contracts/src/index.js';
 export type {
   PublisherAccount,
