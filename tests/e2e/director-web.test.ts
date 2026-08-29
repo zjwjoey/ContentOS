@@ -40,3 +40,13 @@ test('Director Operator exposes project creation, complete Brief inputs and Job 
   assert.match(director, /scripts\/\$\{scriptId\}\/accept.*body: '\{\}'/);
   assert.match(director, /storyboards\/\$\{storyboardId\}\/approve.*body: '\{\}'/);
 });
+
+test('Director handoff requires an accepted Script and matching approved Storyboard', async () => {
+  const director = await readFile('apps/web/app/projects/[id]/director/page.tsx', 'utf8');
+  assert.match(director, /status === 'ACCEPTED'/);
+  assert.match(director, /status === 'APPROVED' && storyboard\.scriptRevisionId === acceptedScript\.id/);
+  assert.match(director, /返回 Assets/);
+  assert.match(director, /进入 Video/);
+  assert.match(director, /等待前置条件/);
+  assert.match(director, /Video handoff/);
+});

@@ -8,3 +8,9 @@ test('project product model freezes the five-stage browser vocabulary and Approv
   assert.match(model, /Approval Gate/);
   assert.doesNotMatch(model, /Review/);
 });
+
+test('Director page exposes Assets and conditional Video handoff routes', async () => {
+  const page = await readFile(new URL('../../apps/web/app/projects/[id]/director/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /projects\/\$\{projectId\}\/assets/);
+  assert.match(page, /projects\/\$\{projectId\}\/video/);
+});
