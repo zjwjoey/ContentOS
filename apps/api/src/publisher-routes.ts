@@ -5,7 +5,7 @@ import type { JobService } from '../../../packages/modules/job/src/index.js';
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
 import type { ApprovalService } from '../../../packages/modules/approval/src/index.js';
 import type { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
-import type { PublisherRequestAggregate, PublisherService } from '../../../packages/modules/publisher/src/index.js';
+import { fakeOutcomes, type FakeOutcome, type PublisherRequestAggregate, type PublisherService, type FakePublisherSimulationService } from '../../../packages/modules/publisher/src/index.js';
 
 const capabilityProfile = z.object({
   platformId: z.string().trim().min(1).max(80),
@@ -56,6 +56,8 @@ export interface PublisherRouteDependencies {
   approvals: ApprovalService;
   assets: AssetCatalogService;
   jobs: JobService;
+  fakeSimulations?: FakePublisherSimulationService;
+  allowFakePublisherControls?: boolean;
 }
 
 function projectIdOf(request: { params: unknown }): string { return (request.params as { projectId: string }).projectId; }
@@ -74,7 +76,7 @@ async function refreshProjectPublishingStatus(projectId: string, projects: Proje
 }
 
 export function registerPublisherRoutes(app: FastifyInstance, dependencies: PublisherRouteDependencies): void {
-  const { projects, publisher, approvals, assets, jobs } = dependencies;
+  const { projects, publisher, approvals, assets, jobs, fakeSimulations, allowFakePublisherControls } = dependencies;
 
   app.get('/api/v1/projects/:projectId/publisher/accounts', async (request, reply) => {
     const projectId = projectIdOf(request);
@@ -111,6 +113,26 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
     return { items: await publisher.listRequests(projectId) };
   });
+
+  if (allowFakePublisherControls && fakeSimulations) {
+    app.get('/api/v1/projects/:projectId/publisher/accounts/:accountId/fake-outcome', async (request, reply) => {
+      const projectId = projectIdOf(request);
+      const accountId = (request.params as { accountId: string }).accountId;
+      if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+      try { return { outcome: await fakeSimulations.get(projectId, accountId) }; }
+      catch { return reply.code(404).send({ error: { code: 'FAKE_ACCOUNT_NOT_FOUND', message: 'Fake Publisher account not found', details: [] } }); }
+    });
+
+    app.put('/api/v1/projects/:projectId/publisher/accounts/:accountId/fake-outcome', async (request, reply) => {
+      const projectId = projectIdOf(request);
+      const accountId = (request.params as { accountId: string }).accountId;
+      if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+      const parsed = z.object({ outcome: z.enum(fakeOutcomes) }).safeParse(request.body);
+      if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Fake Publisher outcome', details: parsed.error.issues } });
+      try { return { outcome: await fakeSimulations.set(projectId, accountId, parsed.data.outcome as FakeOutcome) }; }
+      catch { return reply.code(404).send({ error: { code: 'FAKE_ACCOUNT_NOT_FOUND', message: 'Fake Publisher account not found', details: [] } }); }
+    });
+  }
 
   app.post('/api/v1/projects/:projectId/publisher/requests', async (request, reply) => {
     const projectId = projectIdOf(request);

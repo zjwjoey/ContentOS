@@ -3,7 +3,8 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AuthResult, ExternalStateResult, PlatformCapabilityProfile, PublishResult, PublishSnapshot, PublisherAdapter, PublisherContext, PublisherFailure, PublisherFailureCode } from '../../../contracts/src/index.js';
 
-export type FakeOutcome = 'SUCCESS' | 'AUTH_EXPIRED' | 'VERIFICATION' | 'DOM_DRIFT' | 'BROWSER_CRASH' | 'UNKNOWN_SIDE_EFFECT' | 'UNKNOWN_NO_SIDE_EFFECT' | 'RATE_LIMIT' | 'NETWORK';
+export const fakeOutcomes = ['SUCCESS', 'AUTH_EXPIRED', 'VERIFICATION', 'DOM_DRIFT', 'BROWSER_CRASH', 'UNKNOWN_SIDE_EFFECT', 'UNKNOWN_NO_SIDE_EFFECT', 'RATE_LIMIT', 'NETWORK'] as const;
+export type FakeOutcome = typeof fakeOutcomes[number];
 const failureMap: Record<Exclude<FakeOutcome, 'SUCCESS'>, PublisherFailure> = {
   AUTH_EXPIRED: { code: 'AUTH_EXPIRED', classification: 'HUMAN_ACTION_REQUIRED', message: 'Fake account requires re-authentication' },
   VERIFICATION: { code: 'REQUIRES_VERIFICATION', classification: 'HUMAN_ACTION_REQUIRED', message: 'Fake platform requested human verification' },
@@ -16,9 +17,10 @@ const failureMap: Record<Exclude<FakeOutcome, 'SUCCESS'>, PublisherFailure> = {
 };
 
 export class FakePublisherAdapter implements PublisherAdapter {
-  public readonly outcome: FakeOutcome;
+  public outcome: FakeOutcome;
   private readonly published = new Map<string, string>();
   constructor(outcome: FakeOutcome = 'SUCCESS') { this.outcome = outcome; }
+  setOutcome(outcome: FakeOutcome): void { this.outcome = outcome; }
   capabilities(): PlatformCapabilityProfile { return { platformId: 'fake-platform', mediaTypes: ['video/mp4'], scheduling: false, requiresHumanConfirmation: false }; }
   async authenticate(_context: PublisherContext): Promise<AuthResult> {
     if (this.outcome === 'AUTH_EXPIRED') return { status: 'FAILED', failure: failureMap.AUTH_EXPIRED };
@@ -44,7 +46,8 @@ export class FakePublisherAdapter implements PublisherAdapter {
 }
 
 export class FakePublisherService {
-  constructor(private readonly profileRoot: string, private readonly adapter: PublisherAdapter = new FakePublisherAdapter()) {}
+  private readonly adapters = new Map<string, PublisherAdapter>();
+  constructor(private readonly profileRoot: string, private readonly defaultAdapter: PublisherAdapter = new FakePublisherAdapter()) {}
   profileDirectory(accountId: string): string {
     if (!/^[a-zA-Z0-9_-]+$/.test(accountId)) throw new Error('Invalid publisher account id');
     return join(this.profileRoot, accountId);
@@ -53,15 +56,30 @@ export class FakePublisherService {
     const profileDir = this.profileDirectory(accountId);
     await mkdir(profileDir, { recursive: true });
     const context: PublisherContext = { profileDir, accountId, credentialRef: `fake-credential:${accountId}` };
-    const auth = await this.adapter.authenticate(context);
+    const adapter = this.adapterFor(accountId);
+    const auth = await adapter.authenticate(context);
     if (auth.status === 'FAILED') return { status: 'FAILED', ...(auth.failure ? { failure: auth.failure } : {}) };
-    return this.adapter.publish(context, snapshot);
+    return adapter.publish(context, snapshot);
+  }
+
+  setOutcome(accountId: string, outcome: FakeOutcome): void {
+    const adapter = this.adapterFor(accountId);
+    if (!(adapter instanceof FakePublisherAdapter)) throw new Error('Fake Publisher outcome control requires a FakePublisherAdapter');
+    adapter.setOutcome(outcome);
   }
 
   async reconcile(accountId: string, idempotencyKey: string): Promise<ExternalStateResult> {
     const profileDir = this.profileDirectory(accountId);
     await mkdir(profileDir, { recursive: true });
     const context: PublisherContext = { profileDir, accountId, credentialRef: `fake-credential:${accountId}` };
-    return this.adapter.reconcile(context, idempotencyKey);
+    return this.adapterFor(accountId).reconcile(context, idempotencyKey);
+  }
+
+  private adapterFor(accountId: string): PublisherAdapter {
+    const existing = this.adapters.get(accountId);
+    if (existing) return existing;
+    const adapter = this.adapters.size === 0 || !(this.defaultAdapter instanceof FakePublisherAdapter) ? this.defaultAdapter : new FakePublisherAdapter(this.defaultAdapter.outcome);
+    this.adapters.set(accountId, adapter);
+    return adapter;
   }
 }

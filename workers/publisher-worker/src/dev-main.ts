@@ -4,7 +4,7 @@ import { loadConfig } from '../../../packages/config/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
 import { ProjectService } from '../../../packages/modules/project/src/index.js';
 import { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
-import { DouyinOpenApiAdapter, EnvironmentCredentialProvider, FakePublisherService, PublisherAdapterRegistry, PublisherService, PostgresPublishStateStore, WeChatChannelsPlaywrightAdapter } from '../../../packages/modules/publisher/src/index.js';
+import { DouyinOpenApiAdapter, EnvironmentCredentialProvider, FakePublisherService, FakePublisherSimulationService, PublisherAdapterRegistry, PublisherService, PostgresPublishStateStore, WeChatChannelsPlaywrightAdapter } from '../../../packages/modules/publisher/src/index.js';
 import { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import { PlaywrightBrowserSessionFactory } from '../../../packages/infrastructure/playwright/src/index.js';
 import { createPublisherWorker, PUBLISH_RECONCILE_JOB_TYPE, type PublisherWorkerOptions } from './main.js';
@@ -61,12 +61,14 @@ async function startLocalWorker(): Promise<void> {
     registry.register(new DouyinOpenApiAdapter(undefined, state));
     registry.register(new WeChatChannelsPlaywrightAdapter(new PlaywrightBrowserSessionFactory(), { headed: config.publisherWechatHeaded, allowSubmit: config.publisherWechatAllowSubmit, evidenceDir: config.publisherEvidenceRoot }, state));
   }
+  const fakeSimulations = process.env.CONTENTOS_FAKE_PUBLISHER_CONTROLS === '1' ? new FakePublisherSimulationService(db) : undefined;
   const runner = createPublisherDevRunner({
     jobs,
     service: new PublisherService(db),
     projects: new ProjectService(db),
     assets: new AssetCatalogService(db),
     fakePublisher: new FakePublisherService(join(config.storageRoot, 'publisher-profiles')),
+    ...(fakeSimulations ? { fakeSimulations } : {}),
     adapterRegistry: registry,
     credentials: new EnvironmentCredentialProvider(),
     storage,

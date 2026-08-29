@@ -1,7 +1,8 @@
-export { FakePublisherAdapter, FakePublisherService } from './fake-publisher.js';
+export { FakePublisherAdapter, FakePublisherService, fakeOutcomes } from './fake-publisher.js';
 export { PublisherService } from './publisher-service.js';
 export type { CreatePublisherAccountInput, CreatePublisherRequestInput, FinishPublisherAttemptInput, PublisherNextAction, PublisherProjectSummary, PublisherPublishJobPayload, PublisherRequestAggregate, PublisherRevisionInput, RecordPublisherExternalPostInput, StartPublisherAttemptInput } from './publisher-service.js';
 export type { FakeOutcome } from './fake-publisher.js';
+export { FakePublisherSimulationService } from './fake-simulation-service.js';
 export { withBrowserSession } from './browser-session.js';
 export type { BrowserPage, BrowserSession, BrowserSessionFactory } from './browser-session.js';
 export { EnvironmentCredentialProvider } from './credential-provider.js';

@@ -200,3 +200,29 @@ test('Publisher request API projects safe attempt fields without diagnostics', a
     await db.end();
   }
 });
+
+test('development Fake Publisher controls are opt-in and project scoped', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  let disabledApp: Awaited<ReturnType<typeof buildApi>> | undefined;
+  let enabledApp: Awaited<ReturnType<typeof buildApi>> | undefined;
+  try {
+    const data = await fixture(db);
+    projectId = data.projectId;
+    disabledApp = await buildApi(db);
+    const disabled = await disabledApp.inject({ method: 'PUT', url: `/api/v1/projects/${projectId}/publisher/accounts/${data.accountId}/fake-outcome`, payload: { outcome: 'NETWORK' } });
+    assert.equal(disabled.statusCode, 404);
+    enabledApp = await buildApi({ db, allowFakePublisherControls: true } as never);
+    const initial = await enabledApp.inject({ method: 'GET', url: `/api/v1/projects/${projectId}/publisher/accounts/${data.accountId}/fake-outcome` });
+    assert.equal(initial.statusCode, 200, initial.body);
+    assert.equal((initial.json() as { outcome: string }).outcome, 'SUCCESS');
+    const updated = await enabledApp.inject({ method: 'PUT', url: `/api/v1/projects/${projectId}/publisher/accounts/${data.accountId}/fake-outcome`, payload: { outcome: 'NETWORK' } });
+    assert.equal(updated.statusCode, 200, updated.body);
+    assert.equal((updated.json() as { outcome: string }).outcome, 'NETWORK');
+  } finally {
+    await enabledApp?.close();
+    await disabledApp?.close();
+    if (projectId) await cleanup(db, projectId);
+    await db.end();
+  }
+});

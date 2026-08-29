@@ -12,7 +12,7 @@ import type { DirectorPlanV0 } from '../../../packages/contracts/src/index.js';
 import { serializeError } from '../../../packages/shared/src/errors.js';
 import { DirectorV1Service } from '../../../packages/modules/director/src/index.js';
 import { DirectorJobService } from '../../../packages/modules/director/src/index.js';
-import { PublisherService } from '../../../packages/modules/publisher/src/index.js';
+import { FakePublisherSimulationService, PublisherService } from '../../../packages/modules/publisher/src/index.js';
 import { registerDirectorV1Routes } from './director-routes.js';
 import { registerPublisherRoutes } from './publisher-routes.js';
 import { registerApprovalRoutes } from './approval-routes.js';
@@ -31,7 +31,7 @@ function directorPlan(projectId: string, input: z.infer<typeof directorInput>): 
   return { schemaVersion: 'DIRECTOR_PLAN_V0', projectId, seed: input.seed, brief: input.brief, storyboard: input.storyboard, provenance: { author: input.provenance.author, source: input.provenance.source, ...(input.provenance.promptVersion ? { promptVersion: input.provenance.promptVersion } : {}), ...(input.provenance.modelProfile ? { modelProfile: input.provenance.modelProfile } : {}) } };
 }
 
-export interface ApiRuntimeDependencies { db: Pool; storage?: LocalStorageProvider; uploadMaxBytes?: number; }
+export interface ApiRuntimeDependencies { db: Pool; storage?: LocalStorageProvider; uploadMaxBytes?: number; allowFakePublisherControls?: boolean; }
 
 export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<FastifyInstance> {
   const db = 'query' in input ? input : input.db;
@@ -54,7 +54,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerProjectCenterRoutes(app, { center: new ProjectCenterService({ projects, director: directorRead, assets, video: new VideoProjectReadService(db), jobs, approvals, publisher }) });
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
   registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, approvals, jobs });
-  registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs });
+  registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs, allowFakePublisherControls: runtime.allowFakePublisherControls === true, ...(runtime.allowFakePublisherControls ? { fakeSimulations: new FakePublisherSimulationService(db) } : {}) });
   registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher });
   app.get('/health', async () => ({ status: 'ok' }));
   app.post('/api/v1/projects', async (request, reply) => {

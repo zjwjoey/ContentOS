@@ -1,7 +1,7 @@
 import { basename, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { JobRunner, type JobService, type JobRecord } from '../../../packages/modules/job/src/index.js';
-import { PublisherService, FakePublisherService, PublisherAdapterRegistry, type CredentialProvider, type PublisherPublishJobPayload } from '../../../packages/modules/publisher/src/index.js';
+import { PublisherService, FakePublisherService, FakePublisherSimulationService, PublisherAdapterRegistry, type CredentialProvider, type PublisherPublishJobPayload } from '../../../packages/modules/publisher/src/index.js';
 import { ProjectService } from '../../../packages/modules/project/src/index.js';
 import { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
@@ -16,6 +16,7 @@ export interface PublisherWorkerOptions {
   projects: ProjectService;
   assets: AssetCatalogService;
   fakePublisher: FakePublisherService;
+  fakeSimulations?: FakePublisherSimulationService;
   adapterRegistry?: PublisherAdapterRegistry;
   credentials?: CredentialProvider;
   storage?: LocalStorageProvider;
@@ -47,7 +48,10 @@ function isRetryable(classification: PublisherFailureClassification | undefined)
 
 async function executeAdapterPublish(options: PublisherWorkerOptions, account: Awaited<ReturnType<PublisherService['getAccount']>>, asset: Awaited<ReturnType<AssetCatalogService['getPublishableAsset']>>, snapshot: Parameters<FakePublisherService['publish']>[1]): Promise<PublishResult> {
   if (!account || !asset) return { status: 'FAILED', failure: { code: 'UNKNOWN', classification: 'TERMINAL', message: 'Publisher account or asset is unavailable' } };
-  if (account.platformId === 'fake-platform') return options.fakePublisher.publish(account.id, snapshot);
+  if (account.platformId === 'fake-platform') {
+    if (options.fakeSimulations) options.fakePublisher.setOutcome(account.id, await options.fakeSimulations.getForAccount(account.id));
+    return options.fakePublisher.publish(account.id, snapshot);
+  }
   if (!options.realAdaptersEnabled) return { status: 'FAILED', failure: { code: 'UNKNOWN', classification: 'TERMINAL', message: 'Real publisher adapter is disabled' } };
   if (!options.adapterRegistry || !options.credentials || !options.storage) return { status: 'FAILED', failure: { code: 'UNKNOWN', classification: 'TERMINAL', message: 'Real publisher adapter composition is unavailable' } };
   if (!['douyin', 'wechat-channels'].includes(account.platformId)) return { status: 'FAILED', failure: { code: 'UNKNOWN', classification: 'TERMINAL', message: 'Publisher platform is unsupported' } };

@@ -8,7 +8,7 @@ import { createDatabase, migrateUp } from '../../packages/database/src/index.js'
 import { JobService } from '../../packages/modules/job/src/index.js';
 import { ProjectService } from '../../packages/modules/project/src/index.js';
 import { AssetCatalogService } from '../../packages/modules/asset/src/index.js';
-import { FakePublisherAdapter, FakePublisherService, PublisherService } from '../../packages/modules/publisher/src/index.js';
+import { FakePublisherAdapter, FakePublisherService, FakePublisherSimulationService, PublisherService } from '../../packages/modules/publisher/src/index.js';
 import { createPublisherWorker } from '../../workers/publisher-worker/src/main.js';
 import { createPublisherDevRunner } from '../../workers/publisher-worker/src/dev-main.js';
 
@@ -245,6 +245,31 @@ test('Publisher Worker repairs Project state when reconciliation succeeds before
     const secondReconcile = await worker.execute('PUBLISH_RECONCILE', { jobId: reconcileJob.id }) as { state: string };
     assert.equal(secondReconcile.state, 'SUCCEEDED');
     assert.equal((await projects.get(data.projectId))?.status, 'PUBLISHED');
+    await worker.shutdown('test');
+  } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
+});
+
+test('Publisher Worker applies a changed development Fake outcome on the next attempt', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  let root = '';
+  try {
+    const data = await fixture(db, 'SUCCESS');
+    projectId = data.projectId; root = data.root;
+    const simulations = new FakePublisherSimulationService(db);
+    const accountId = (await data.publisher.getRequestAggregate(projectId, data.requestId))?.request.accountId;
+    assert.ok(accountId);
+    await simulations.set(projectId, accountId, 'NETWORK');
+    const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, projects: data.projects, assets: data.assets, fakePublisher: data.fake, fakeSimulations: simulations, workerId: 'publisher-worker-development-outcome' });
+    await worker.start();
+    const first = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
+    assert.equal(first.state, 'RETRY_WAIT');
+    await simulations.set(projectId, accountId, 'SUCCESS');
+    const second = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
+    assert.equal(second.state, 'SUCCEEDED');
+    assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'PUBLISHED');
+    assert.equal((await data.publisher.listExternalPosts(data.requestId)).length, 1);
+    assert.deepEqual((await data.publisher.listAttempts(data.requestId)).map((attempt) => attempt.status), ['FAILED', 'SUCCEEDED']);
     await worker.shutdown('test');
   } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
 });
