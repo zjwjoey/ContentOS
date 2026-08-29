@@ -270,3 +270,11 @@
 - Reserved Stage 1 for branch/migration/runtime convergence and a public API/Worker combined E2E; Stage 2 remains closed until that Gate passes.
 - Defined Stage 2 as a Web-operated Fake product flow with durable asset ingestion and minimal Assets/Video/Approval stages; real AI, live platform verification and Review Analytics remain out of scope.
 - Added `docs/superpowers/specs/2026-08-29-contentos-integration-and-unified-flow-design.md`; no business code changed.
+
+## Session: 2026-08-29 — Integration Closure execution
+
+- Created `E:\ContentOS\.worktrees\integration-contentos-v1` on branch `integration/contentos-v1` from the accepted Project Center planning head `6571323` (business baseline `d257229`).
+- `pnpm install --frozen-lockfile` and `pnpm typecheck` passed in the integration worktree.
+- Initial `pnpm test` attempt used the test files' fallback `127.0.0.1:55432` and returned 92 connection-refused failures; no test reached product assertions. The local PostgreSQL service was verified on port 5432 with existing `contentos_test`.
+- Re-run with `DATABASE_URL=postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test`: **180/180 tests passed**, 0 failed, duration 27.1s.
+- No source or migration changes have been made yet on the integration branch; next task is the explicit `main@752e8c4` convergence.
