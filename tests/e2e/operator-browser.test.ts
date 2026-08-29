@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 
 const baseUrl = process.env.CONTENTOS_OPERATOR_URL;
+const fixtureVideo = process.env.CONTENTOS_BROWSER_FIXTURE_VIDEO;
 
-test('operator browser smoke walks the unified project stages', { skip: !baseUrl }, async () => {
+test('operator browser smoke walks the unified project stages', async () => {
+  assert.ok(baseUrl, 'test:browser must start an isolated operator');
+  assert.ok(fixtureVideo, 'test:browser must provide a playable upload fixture');
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
