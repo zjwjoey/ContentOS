@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState, type ChangeEvent } from 'react';
+import { ProjectNav } from '../project-nav';
 
 type Asset = { id: string; kind: 'VIDEO' | 'AUDIO' | 'VIDEO_RENDER'; lifecycle: string; byteSize: number; checksum: string; originalName: string; metadata: { durationMs?: number; width?: number; height?: number; format?: string } };
 type AssetImport = { id: string; originalName: string; kind: string; byteSize: number; state: string; outputAssetId?: string | null; errorMessage?: string | null };
@@ -32,7 +33,7 @@ export default function AssetsPage({ params }: { params: { id: string } }) {
     if (response.ok) await refresh(); setBusy(false); event.target.value = '';
   };
 
-  return <main className="shell"><header><p className="eyebrow">Project / {projectId}</p><h1>Assets 工作台</h1><p className="muted">上传只负责安全落盘和入队，校验、探测、去重与入库由 Asset Worker 完成。</p><nav className="module-nav"><Link href={`/projects/${projectId}`}>项目总控</Link><Link href={`/projects/${projectId}/director`}>进入 Director</Link></nav></header>
+  return <main className="shell"><ProjectNav projectId={projectId} currentStage="ASSETS" /><header><p className="eyebrow">Project / {projectId}</p><h1>Assets 工作台</h1><p className="muted">上传只负责安全落盘和入队，校验、探测、去重与入库由 Asset Worker 完成。</p><nav className="module-nav"><Link href={`/projects/${projectId}`}>项目总控</Link><Link href={`/projects/${projectId}/director`}>进入 Director</Link></nav></header>
     <section className="card"><div className="section-title"><h2>上传素材</h2><span>视频 / 音频</span></div><label className="upload-box">选择文件<input type="file" accept="video/*,audio/*" onChange={(event) => void upload(event)} disabled={busy} /></label>{notice && <p className="status">{notice}</p>}</section>
     <section className="grid"><section className="card"><div className="section-title"><h2>Import 队列</h2><span>{imports.length} 条</span></div><ul className="revision-list">{imports.map((item) => <li key={item.id}><strong>{item.originalName}</strong><span>{stateLabel[item.state] || item.state} · {item.kind} · {item.byteSize} bytes</span>{item.errorMessage && <small>{item.errorMessage}</small>}</li>)}</ul>{imports.length === 0 && <p className="muted">还没有上传素材。</p>}</section><section className="card"><div className="section-title"><h2>可用素材</h2><span>{assets.length} 个</span></div><ul className="revision-list">{assets.map((asset) => <li key={asset.id}><strong>{asset.originalName}</strong><span>{asset.kind} · {asset.lifecycle} · {asset.byteSize} bytes</span><small>{asset.metadata.width ? `${asset.metadata.width}×${asset.metadata.height}` : ''} {asset.metadata.durationMs ? `${Math.round(asset.metadata.durationMs / 1000)} 秒` : ''}</small>{asset.kind === 'VIDEO' || asset.kind === 'VIDEO_RENDER' ? <video controls preload="metadata" src={`/api/v1/projects/${projectId}/assets/${asset.id}/content`} /> : <audio controls preload="metadata" src={`/api/v1/projects/${projectId}/assets/${asset.id}/content`} />}</li>)}</ul>{assets.length === 0 && <p className="muted">Asset Worker 完成后，素材会出现在这里。</p>}</section></section>
   </main>;

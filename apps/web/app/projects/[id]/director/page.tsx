@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { ProjectNav } from '../project-nav';
 
 type Brief = { id: string; revision: number; topic: string; targetPlatform: string; channelPositioning: string; targetDurationSeconds: number; contentType: string; audience: string; coreThesis: string; tone: string; ctaGoal?: string; referenceMaterial: string; mustInclude: string[]; mustAvoid: string[] };
 type Script = { id: string; revision: number; status: string; origin: string; title: string; titleCandidates: string[]; coverText: string; topicKeywords: string[]; hook: string; body: string; cta?: string };
@@ -95,7 +96,7 @@ export default function DirectorPage({ params }: { params: { id: string } }) {
     await refresh(); setMessage('Storyboard 已批准。');
   };
 
-  return <main className="shell"><header><p className="eyebrow">Project / {projectId}</p><h1>Director 工作台</h1><p className="muted">Brief 是输入事实，Script 和 Storyboard 以追加版本保存；生成工作通过 Durable Job 执行。</p><nav className="module-nav"><Link href={`/projects/${projectId}/assets`}>返回 Assets</Link>{videoPrerequisiteReady && <Link href={`/projects/${projectId}/video`}>进入 Video</Link>}<Link href={`/projects/${projectId}/publisher`}>进入 Publisher</Link></nav></header>
+  return <main className="shell"><ProjectNav projectId={projectId} currentStage="DIRECTOR" /><header><p className="eyebrow">Project / {projectId}</p><h1>Director 工作台</h1><p className="muted">Brief 是输入事实，Script 和 Storyboard 以追加版本保存；生成工作通过 Durable Job 执行。</p><nav className="module-nav"><Link href={`/projects/${projectId}/assets`}>返回 Assets</Link>{videoPrerequisiteReady && <Link href={`/projects/${projectId}/video`}>进入 Video</Link>}<Link href={`/projects/${projectId}/publisher`}>进入 Publisher</Link></nav></header>
     <section className="grid"><form className="card" onSubmit={createBrief}><div className="section-title"><h2>ContentBrief</h2><span>{brief ? `当前 V${brief.revision}` : '未创建'}</span></div>
       <label>选题<input value={form.topic} onChange={(event) => setForm({ ...form, topic: event.target.value })} required /></label>
       <label>目标平台<input list="platform-options" value={form.targetPlatform} onChange={(event) => setForm({ ...form, targetPlatform: event.target.value })} required /><datalist id="platform-options"><option value="douyin" /><option value="wechat_channels" /></datalist></label>
