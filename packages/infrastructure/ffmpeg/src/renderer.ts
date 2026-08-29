@@ -6,7 +6,7 @@ import type { EditManifestV0 } from '../../../contracts/src/index.js';
 
 export interface RenderOptions { manifest: EditManifestV0; outputPath: string; ffmpegPath: string; ffprobePath: string; fontFile?: string; signal?: AbortSignal; }
 export interface RenderResult { outputPath: string; durationMs: number; width: number; height: number; format: string; audio: boolean; checksum?: string; }
-export interface ProbeResult { format: string; durationMs: number; width: number; height: number; audio: boolean; }
+export interface ProbeResult { format: string; durationMs: number; width: number; height: number; audio: boolean; videoCodec?: string; audioCodec?: string; }
 
 function run(binary: string, args: string[], signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -35,12 +35,13 @@ export async function generateFixtureAudio(path: string, ffmpegPath: string): Pr
 }
 
 export async function probeMedia(path: string, ffprobePath: string, signal?: AbortSignal): Promise<ProbeResult> {
-  const result = await run(ffprobePath, ['-v', 'error', '-show_entries', 'format=format_name,duration:stream=width,height,codec_type', '-of', 'json', path], signal);
-  const parsed = JSON.parse(result.stdout) as { format?: { format_name?: string; duration?: string }; streams?: Array<{ codec_type?: string; width?: number; height?: number }> };
+  const result = await run(ffprobePath, ['-v', 'error', '-show_entries', 'format=format_name,duration:stream=width,height,codec_type,codec_name', '-of', 'json', path], signal);
+  const parsed = JSON.parse(result.stdout) as { format?: { format_name?: string; duration?: string }; streams?: Array<{ codec_type?: string; codec_name?: string; width?: number; height?: number }> };
   const video = parsed.streams?.find((stream) => stream.codec_type === 'video');
-  const audio = Boolean(parsed.streams?.some((stream) => stream.codec_type === 'audio'));
+  const audioStream = parsed.streams?.find((stream) => stream.codec_type === 'audio');
+  const audio = Boolean(audioStream);
   const formats = parsed.format?.format_name || '';
-  return { format: formats.includes('mp4') ? 'mp4' : (formats.split(',')[0] || 'unknown'), durationMs: Math.round(Number(parsed.format?.duration || 0) * 1000), width: Number(video?.width || 0), height: Number(video?.height || 0), audio };
+  return { format: formats.includes('mp4') ? 'mp4' : (formats.split(',')[0] || 'unknown'), durationMs: Math.round(Number(parsed.format?.duration || 0) * 1000), width: Number(video?.width || 0), height: Number(video?.height || 0), audio, ...(video?.codec_name ? { videoCodec: video.codec_name } : {}), ...(audioStream?.codec_name ? { audioCodec: audioStream.codec_name } : {}) };
 }
 
 export async function renderEditManifest(options: RenderOptions, fixture?: { generateFixtureInput?: boolean; fixturePath?: string }): Promise<RenderResult> {
@@ -63,9 +64,18 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   else filters.push(`${manifest.timeline.map((_, i) => `[v${i}]`).join('')}concat=n=${manifest.timeline.length}:v=1:a=0[vout]`);
   args.push('-filter_complex', filters.join(';'), '-map', '[vout]');
   if (voiceIndex >= 0) args.push('-map', `${voiceIndex}:a?`, '-c:a', 'aac', '-strict', '-2', '-shortest'); else args.push('-an');
-  args.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '23', '-movflags', '+faststart', tempOutput);
+  args.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '23', '-movflags', '+faststart', tempOutput);
   try {
-    await run(ffmpegPath, args, options.signal);
+    try {
+      await run(ffmpegPath, args, options.signal);
+    } catch (error) {
+      // The historical bundled FFmpeg used by existing fixtures may not ship libx264.
+      // Prefer H.264, but keep legacy development fixtures runnable with its mpeg4 encoder.
+      if (error instanceof Error && /unknown encoder|unrecognized option/i.test(error.message)) {
+        const fallbackArgs = args.map((arg) => arg === 'libx264' ? 'mpeg4' : arg).filter((arg) => arg !== '-crf' && arg !== '23');
+        await run(ffmpegPath, fallbackArgs, options.signal);
+      } else throw error;
+    }
     const probe = await probeMedia(tempOutput, ffprobePath, options.signal);
     if (probe.format !== 'mp4' || probe.width !== 1080 || probe.height !== 1920 || probe.durationMs <= 0 || (manifest.audio.voicePath && !probe.audio)) throw new Error(`Rendered output failed MP4/1080x1920 validation: ${JSON.stringify(probe)}`);
     await rename(tempOutput, outputPath);

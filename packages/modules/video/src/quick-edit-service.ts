@@ -5,7 +5,8 @@ import { applyQuickEditOperations, digestEditManifest, parseQuickEditOperations,
 import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
 
 export interface CreateQuickEditVersionInput {
-  projectId: string;
+  projectId?: string;
+  workspaceId?: string;
   parentManifestId: string;
   operations: QuickEditOperation[];
   createdBy: string;
@@ -15,6 +16,7 @@ export interface CreateQuickEditVersionInput {
 export interface QuickEditManifestRecord {
   id: string;
   projectId: string;
+  workspaceId: string;
   revision: number;
   status: 'PERSISTED' | 'SUPERSEDED';
   parentManifestId: string | null;
@@ -38,7 +40,7 @@ function digest(input: Pick<CreateQuickEditVersionInput, 'projectId' | 'parentMa
 
 function mapRecord(row: Record<string, unknown>): QuickEditManifestRecord {
   return {
-    id: String(row.id), projectId: String(row.project_id), revision: Number(row.revision), status: row.status as QuickEditManifestRecord['status'],
+    id: String(row.id), projectId: row.project_id ? String(row.project_id) : '', workspaceId: row.workspace_id ? String(row.workspace_id) : '', revision: Number(row.revision), status: row.status as QuickEditManifestRecord['status'],
     parentManifestId: row.parent_manifest_id ? String(row.parent_manifest_id) : null,
     editOperations: Array.isArray(row.edit_operations) ? row.edit_operations as QuickEditOperation[] : [],
     createdBy: row.created_by ? String(row.created_by) : null,
@@ -56,26 +58,33 @@ function sourceDuration(asset: { metadata: Record<string, unknown> }, assetId: s
 export class VideoAdjustmentService {
   constructor(private readonly db: Pool, private readonly assets: AssetCatalogService) {}
 
-  async listManifests(projectId: string): Promise<QuickEditManifestRecord[]> {
-    const result = await this.db.query('select * from edit_manifests where project_id = $1 order by revision desc', [projectId]);
+  async listManifests(projectId: string, workspaceId?: string): Promise<QuickEditManifestRecord[]> {
+    const result = workspaceId
+      ? await this.db.query('select * from edit_manifests where workspace_id = $1 order by revision desc', [workspaceId])
+      : await this.db.query('select * from edit_manifests where project_id = $1 order by revision desc', [projectId]);
     return result.rows.map((row) => mapRecord(row as Record<string, unknown>));
   }
 
-  async getManifest(projectId: string, manifestId: string): Promise<QuickEditManifestRecord | null> {
-    const result = await this.db.query('select * from edit_manifests where project_id = $1 and id = $2', [projectId, manifestId]);
+  async getManifest(projectId: string, manifestId: string, workspaceId?: string): Promise<QuickEditManifestRecord | null> {
+    const result = workspaceId
+      ? await this.db.query('select * from edit_manifests where workspace_id = $1 and id = $2', [workspaceId, manifestId])
+      : await this.db.query('select * from edit_manifests where project_id = $1 and id = $2', [projectId, manifestId]);
     return result.rows[0] ? mapRecord(result.rows[0] as Record<string, unknown>) : null;
   }
 
   async createVersion(input: CreateQuickEditVersionInput): Promise<QuickEditManifestRecord> {
+    if ((input.projectId === undefined) === (input.workspaceId === undefined)) throw new Error('VIDEO_ADJUSTMENT_OWNER_REQUIRED');
     const operations = parseQuickEditOperations(input.operations);
     if (!input.createdBy.trim()) throw new Error('createdBy is required');
-    const inputDigest = digest({ projectId: input.projectId, parentManifestId: input.parentManifestId, operations, createdBy: input.createdBy.trim() });
+    const inputDigest = digest({ projectId: input.projectId || input.workspaceId || '', parentManifestId: input.parentManifestId, operations, createdBy: input.createdBy.trim() });
     const client = await this.db.connect();
     try {
       await client.query('begin');
-      await client.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:video-manifest:${input.projectId}`]);
+      const ownerColumn = input.workspaceId ? 'workspace_id' : 'project_id';
+      const ownerId = input.workspaceId || input.projectId!;
+      await client.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:video-manifest:${ownerId}`]);
       if (input.idempotencyKey) {
-        const existing = await client.query('select * from edit_manifests where project_id = $1 and idempotency_key = $2', [input.projectId, input.idempotencyKey]);
+        const existing = await client.query(`select * from edit_manifests where ${ownerColumn} = $1 and idempotency_key = $2`, [ownerId, input.idempotencyKey]);
         if (existing.rows[0]) {
           const row = existing.rows[0] as Record<string, unknown>;
           if (String(row.input_digest) !== inputDigest) throw new Error('VIDEO_MANIFEST_IDEMPOTENCY_CONFLICT');
@@ -83,16 +92,16 @@ export class VideoAdjustmentService {
           return mapRecord(row);
         }
       }
-      const parentResult = await client.query('select * from edit_manifests where id = $1 and project_id = $2 for update', [input.parentManifestId, input.projectId]);
+      const parentResult = await client.query(`select * from edit_manifests where id = $1 and ${ownerColumn} = $2 for update`, [input.parentManifestId, ownerId]);
       const parent = parentResult.rows[0] as Record<string, unknown> | undefined;
       if (!parent) throw new Error('VIDEO_MANIFEST_PARENT_NOT_FOUND');
       if (String(parent.status) !== 'PERSISTED') throw new Error('VIDEO_MANIFEST_PARENT_NOT_CURRENT');
       const parentValue = parent.manifest as EditManifestV0;
       validateEditManifest(parentValue);
       const sourceIds = [...new Set(parentValue.timeline.map((clip) => clip.assetId))];
-      const sourceRows = await this.assets.listReadySourceAssets(input.projectId, sourceIds, 'VIDEO');
-      if (sourceRows.length !== sourceIds.length) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
-      const allSources = await this.assets.listReadyVideoAssets(input.projectId);
+      const sourceRows = input.workspaceId ? await this.assets.listReadyWorkspaceAssets(input.workspaceId, 'VIDEO') : await this.assets.listReadySourceAssets(input.projectId!, sourceIds, 'VIDEO');
+      if (!input.workspaceId && sourceRows.length !== sourceIds.length) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
+      const allSources = sourceRows.length > 0 && input.workspaceId ? sourceRows : await this.assets.listReadyVideoAssets(input.projectId!);
       const sourceById = new Map(allSources.map((asset) => [asset.id, asset]));
       const next = applyQuickEditOperations(parentValue, operations, allSources.map((asset) => ({ id: asset.id, durationMs: sourceDuration(asset, asset.id), sourcePath: asset.storageKey })));
       next.timeline = next.timeline.map((clip) => {
@@ -103,16 +112,16 @@ export class VideoAdjustmentService {
         return { ...clip, sourcePath: source.storageKey };
       });
       if (next.audio.voiceAssetId) {
-        const voice = await this.assets.getReadySourceAsset(input.projectId, next.audio.voiceAssetId, 'AUDIO');
+        const voice = input.workspaceId ? await this.assets.getReadyWorkspaceAsset(input.workspaceId, next.audio.voiceAssetId, 'AUDIO', 'VOICE') : await this.assets.getReadySourceAsset(input.projectId!, next.audio.voiceAssetId, 'AUDIO');
         if (!voice) throw new Error('VIDEO_MANIFEST_VOICE_UNAVAILABLE');
         next.audio = { ...next.audio, voicePath: voice.storageKey };
       }
       validateEditManifest(next);
-      const revisionResult = await client.query<{ revision: number }>('select coalesce(max(revision), 0) + 1 as revision from edit_manifests where project_id = $1', [input.projectId]);
+      const revisionResult = await client.query<{ revision: number }>(`select coalesce(max(revision), 0) + 1 as revision from edit_manifests where ${ownerColumn} = $1`, [ownerId]);
       const revision = Number(revisionResult.rows[0]?.revision || 1);
       await client.query("update edit_manifests set status = 'SUPERSEDED' where id = $1 and status = 'PERSISTED'", [input.parentManifestId]);
       const id = `manifest-${randomUUID()}`;
-      const inserted = await client.query('insert into edit_manifests (id, project_id, revision, schema_version, manifest, manifest_digest, status, parent_manifest_id, edit_operations, created_by, idempotency_key, input_digest) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning *', [id, input.projectId, revision, 'EDIT_MANIFEST_V0', next, digestEditManifest(next), 'PERSISTED', input.parentManifestId, JSON.stringify(operations), input.createdBy.trim(), input.idempotencyKey || null, inputDigest]);
+      const inserted = await client.query('insert into edit_manifests (id, project_id, workspace_id, revision, schema_version, manifest, manifest_digest, status, parent_manifest_id, edit_operations, created_by, idempotency_key, input_digest) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning *', [id, input.projectId || null, input.workspaceId || null, revision, 'EDIT_MANIFEST_V0', next, digestEditManifest(next), 'PERSISTED', input.parentManifestId, JSON.stringify(operations), input.createdBy.trim(), input.idempotencyKey || null, inputDigest]);
       await client.query('commit');
       return mapRecord(inserted.rows[0] as Record<string, unknown>);
     } catch (error) {

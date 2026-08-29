@@ -350,3 +350,12 @@
   **3/3**, full suite **191/191**, browser **1/1**, doctor and diff check passed.
 - Branch: `codex/unified-product-flow`, commits `715155a` and `20b676a`; no
   freeze, push or merge was performed.
+
+## Session: 2026-08-30 — Video Direction Correction + Standalone Quick Edit V1
+
+- Correction baseline recorded from accepted `codex/video-quick-edit@1e8b770`; worktree is `E:\ContentOS\.worktrees\video-direction-correction` on `codex/video-direction-correction`.
+- Reclassified Project Quick Edit as Video Adjustment while preserving TRIM, REMOVE, REORDER, immutable revisions, digest fencing and Exact Render. Added REPLACE and REROLL.
+- Added `video_workspaces`, standalone sessions, workspace asset links and workspace-scoped Asset Import ownership without fake Projects.
+- Added deterministic Random Montage Planner V2, voice-duration planning, source rotation, exact-duration final clip fill and FFprobe codec reporting. Default renderer is H.264/AAC with a legacy mpeg4 fallback only for old local encoders.
+- Added standalone API/UI, including batch workspace uploads through the existing Asset Import/Asset Worker path.
+- Verification so far: full suite **203/204** before correcting the migration inventory assertion; focused standalone API **2/2**, typecheck and lint pass. Final full suite/build/clean-tree gate remains pending.

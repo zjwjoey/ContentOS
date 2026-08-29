@@ -169,14 +169,14 @@ Architecture V0 — formal design documentation and self-review.
 
 ## Phase 20: Video Direction Correction + Standalone Quick Edit V1
 
-- [ ] Record baseline and ownership decision — **DONE (audit and plan recorded 2026-08-30)**
-- [ ] Add workspace ownership schema and scope-aware contracts — TODO
-- [ ] Reclassify Project Quick Edit as Video Adjustment with compatibility alias — TODO
-- [ ] Add REPLACE and REROLL — TODO
-- [ ] Upgrade Random Montage Planner V2 and H.264/AAC renderer invariants — TODO
-- [ ] Implement no-project Standalone Quick Edit session/API — TODO
-- [ ] Implement Standalone Quick Edit web flow — TODO
-- [ ] Add full regression tests, docs and correction report — TODO
+- [x] Record baseline and ownership decision — **DONE (audit and plan recorded 2026-08-30)**
+- [x] Add workspace ownership schema and scope-aware contracts — **DONE**
+- [x] Reclassify Project Quick Edit as Video Adjustment with compatibility alias — **DONE**
+- [x] Add REPLACE and REROLL — **DONE**
+- [x] Upgrade Random Montage Planner V2 and H.264/AAC renderer invariants — **DONE**
+- [x] Implement no-project Standalone Quick Edit session/API — **DONE**
+- [x] Implement Standalone Quick Edit web flow — **DONE**
+- [ ] Add full regression tests, docs and correction report — **IN PROGRESS (final verification pending)**
 
 Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-direction-correction.md`.
 

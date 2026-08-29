@@ -12,3 +12,5 @@ export { applyQuickEditOperations, digestEditManifest, parseQuickEditOperations 
 export type { QuickEditOperation } from './quick-edit.js';
 export { VideoAdjustmentService, VideoQuickEditService } from './quick-edit-service.js';
 export type { CreateQuickEditVersionInput, QuickEditManifestRecord } from './quick-edit-service.js';
+export { StandaloneQuickEditService } from './standalone-quick-edit-service.js';
+export type { CreateStandaloneQuickEditInput, StandaloneQuickEditSession } from './standalone-quick-edit-service.js';

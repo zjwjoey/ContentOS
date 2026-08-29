@@ -58,6 +58,15 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 8. The current planner shuffles with `sort(() => random() - 0.5)`, does not enforce 2–5 second clip bounds, does not use real voice duration, and only avoids immediate repeats. Random Montage Planner V2 must replace these behaviors deterministically.
 9. No standalone session, standalone API, standalone UI, REPLACE or REROLL exists on the baseline branch.
 
+## Video Direction Correction Implementation Findings (2026-08-30)
+
+1. The ownership correction is implemented with `video_workspaces` and nullable workspace scope on Jobs, manifests, renders and asset imports; standalone rows have no `project_id`.
+2. `VideoAdjustmentService` is the single implementation; `VideoQuickEditService` remains a deprecated compatibility export only.
+3. Standalone uploads enter the existing `ASSET_IMPORT` durable Job path. Workspace AUDIO imports link as VOICE; workspace VIDEO imports link as SOURCE.
+4. Random Montage Planner V2 uses deterministic seeded rotation and exact target-duration fill; the final clip may be shorter than the configured minimum.
+5. FFprobe now reports video/audio codec names. Modern FFmpeg uses libx264/AAC; an old local encoder without libx264 has a narrowly-scoped mpeg4 compatibility fallback for legacy tests.
+6. Known limitation: the Web page queues uploads but does not poll import completion; operators must wait for READY assets before planning.
+
 ## Director V1 implementation findings — 2026-08-22
 
 - The Director worktree is based on `main` and has a clean 41/41 baseline when using the isolated `contentos_director_dev` database.

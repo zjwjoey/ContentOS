@@ -4,7 +4,8 @@ export type AssetImportKind = 'VIDEO' | 'AUDIO';
 export interface AssetImportV0 {
   schemaVersion: 'ASSET_IMPORT_V0';
   id: string;
-  projectId: string;
+  projectId?: string;
+  workspaceId?: string;
   originalName: string;
   kind: AssetImportKind;
   byteSize: number;
@@ -33,7 +34,7 @@ const identifier = (value: string): boolean => Boolean(value.trim()) && value.le
 
 export function validateAssetImportV0(value: AssetImportV0): void {
   if (value.schemaVersion !== 'ASSET_IMPORT_V0') throw new Error('Unsupported Asset Import schema');
-  if (!identifier(value.id) || !identifier(value.projectId)) throw new Error('Asset import identifiers are invalid');
+  if (!identifier(value.id) || (Boolean(value.projectId) === Boolean(value.workspaceId)) || !identifier(value.projectId || value.workspaceId || '')) throw new Error('Asset import identifiers are invalid');
   if (!safeName(value.originalName) || value.originalName.length > 255) throw new Error('Asset import originalName is invalid');
   if (!importKinds.includes(value.kind) || !importStates.includes(value.state)) throw new Error('Asset import kind or state is invalid');
   if (!Number.isSafeInteger(value.byteSize) || value.byteSize <= 0 || value.byteSize > 10 * 1024 * 1024 * 1024) throw new Error('Asset import byteSize is invalid');

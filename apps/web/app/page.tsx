@@ -49,7 +49,7 @@ export default function HomePage() {
   };
 
   return <main className="shell">
-    <header><p className="eyebrow">ContentOS / Operator</p><h1>内容项目</h1><p className="muted">从项目总控查看 Director、Video、Approval 和 Publisher 的整体进度。</p></header>
+    <header><p className="eyebrow">ContentOS / Operator</p><h1>内容项目</h1><p className="muted">从项目总控查看 Director、Video、Approval 和 Publisher 的整体进度。</p><nav className="module-nav"><Link href="/video/quick-edit">快速剪辑</Link></nav></header>
     <section className="card">
       <div className="section-title"><h2>创建项目</h2><span>Operator</span></div>
       <form className="project-create" onSubmit={createProject}>
