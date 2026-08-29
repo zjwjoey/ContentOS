@@ -28,3 +28,8 @@ test('Director and Publisher pages provide project-local navigation', async () =
   assert.match(director, /href=\{`\/projects\/\$\{projectId\}\/publisher`\}/);
   assert.match(publisher, /href=\{`\/projects\/\$\{projectId\}\/director`\}/);
 });
+
+test('Publisher development composition is not mistaken for the fail-closed main entrypoint', async () => {
+  const main = await readFile('workers/publisher-worker/src/main.ts', 'utf8');
+  assert.match(main, /basename\(process\.argv\[1\] \?\? ''\) === 'main\.ts'/);
+});

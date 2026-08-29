@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { JobRunner, type JobService, type JobRecord } from '../../../packages/modules/job/src/index.js';
 import { PublisherService, FakePublisherService, PublisherAdapterRegistry, type CredentialProvider, type PublisherPublishJobPayload } from '../../../packages/modules/publisher/src/index.js';
@@ -210,6 +210,6 @@ export function createPublisherWorker(options?: PublisherWorkerOptions | JobHand
   return runtime;
 }
 
-if (process.argv[1]?.endsWith('main.ts')) {
+if (basename(process.argv[1] ?? '') === 'main.ts') {
   throw new Error('Publisher worker composition must be provided by the deployment entrypoint');
 }
