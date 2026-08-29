@@ -8,3 +8,5 @@ export { VideoProjectReadService } from './video-project-read-service.js';
 export type { CurrentRenderSummary, RenderHistorySummary, VideoJobProgressSummary } from './video-project-read-service.js';
 export type { BuildManifestInput, PlannerAsset } from './planner.js';
 export type { EditManifestV0, ManifestClip } from '../../../contracts/src/index.js';
+export { applyQuickEditOperations, parseQuickEditOperations } from './quick-edit.js';
+export type { QuickEditOperation } from './quick-edit.js';

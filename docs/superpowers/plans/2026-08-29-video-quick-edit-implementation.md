@@ -22,7 +22,7 @@
 - Create: `tests/contract/video-quick-edit.test.ts`
 - Modify: `tests/integration/database.test.ts`
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
   Add tests for the three explicit operations and rejection of negative timing,
   duplicate reorder indexes, incomplete reorder indexes, and an empty final
@@ -30,7 +30,7 @@
   non-adjacent clips. The public parser must return the normalized operation
   union and never accept an unknown operation type.
 
-- [ ] **Step 2: Run the contract tests and confirm RED**
+- [x] **Step 2: Run the contract tests and confirm RED**
 
   Run:
 
@@ -41,7 +41,7 @@
   Expected: FAIL because `parseQuickEditOperations` and the operation types do
   not exist.
 
-- [ ] **Step 3: Implement the contract and persistence columns**
+- [x] **Step 3: Implement the contract and persistence columns**
 
   Export `QuickEditOperation`, `QuickEditManifestInput` and
   `parseQuickEditOperations`. The parser must require integer `clipIndex`,
@@ -70,7 +70,7 @@
   The down migration must drop the index, constraint and five columns. Update the
   migration matrix and database migration assertions from `0013` to `0014`.
 
-- [ ] **Step 4: Run focused checks and commit**
+- [x] **Step 4: Run focused checks and commit**
 
   Run:
 
