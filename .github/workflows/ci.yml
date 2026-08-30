@@ -14,8 +14,10 @@ env:
   DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/contentos_test
   CONTENTOS_TEST_ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/contentos_test
   STORAGE_ROOT: storage/ci
-  FFMPEG_PATH: ffmpeg
-  FFPROBE_PATH: ffprobe
+  # Use the apt-installed binaries explicitly. Relying on PATH can select an
+  # unrelated legacy ffmpeg binary on hosted/self-hosted runners.
+  FFMPEG_PATH: /usr/bin/ffmpeg
+  FFPROBE_PATH: /usr/bin/ffprobe
   FFMPEG_FONT_FILE: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 
 jobs:
@@ -32,6 +34,7 @@ jobs:
         with:
           version: ${{ env.PNPM_VERSION }}
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+      - run: /usr/bin/ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])libx264([[:space:]]|$)' && /usr/bin/ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])aac([[:space:]]|$)'
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm lint
@@ -62,6 +65,7 @@ jobs:
         with:
           version: ${{ env.PNPM_VERSION }}
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+      - run: /usr/bin/ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])libx264([[:space:]]|$)' && /usr/bin/ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])aac([[:space:]]|$)'
       - run: pnpm install --frozen-lockfile
       - run: pnpm test:migrations
       - run: pnpm test
@@ -104,6 +108,7 @@ jobs:
         with:
           version: ${{ env.PNPM_VERSION }}
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+      - run: /usr/bin/ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])libx264([[:space:]]|$)' && /usr/bin/ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])aac([[:space:]]|$)'
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:browser
