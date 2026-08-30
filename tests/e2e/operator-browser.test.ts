@@ -156,8 +156,15 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
     let revision = await currentRevision();
     await page.getByRole('button', { name: 'REROLL' }).click();
     revision = await waitForRevision(revision);
-    await page.getByLabel('替换素材').selectOption({ index: 1 });
+    const replacementPicker = page.getByLabel('替换素材');
+    const replacementOption = replacementPicker.locator('option').nth(1);
+    const replacementAssetId = await replacementOption.getAttribute('value');
+    assert.ok(replacementAssetId, 'a replacement READY asset must be available');
+    await replacementPicker.selectOption(replacementAssetId);
+    const replaceResponse = page.waitForResponse((response) => response.url().includes('/api/v1/video/quick-edits/') && response.url().endsWith('/adjustments') && response.request().method() === 'POST', { timeout: 15_000 });
     await page.getByRole('button', { name: 'REPLACE' }).click();
+    const replaceResult = await replaceResponse;
+    if (replaceResult.status() !== 201) throw new Error(`REPLACE failed with ${replaceResult.status()}: ${await replaceResult.text()}`);
     revision = await waitForRevision(revision);
     await page.getByRole('button', { name: 'TRIM' }).click();
     revision = await waitForRevision(revision);
