@@ -350,6 +350,11 @@ export class PublisherService {
     return result.rows.map((row) => mapExternalPost(row as Record<string, unknown>));
   }
 
+  async listProjectExternalPosts(projectId: string): Promise<PublisherExternalPost[]> {
+    const result = await this.db.query('select ep.* from publisher_external_posts ep join publisher_requests pr on pr.id = ep.request_id where pr.project_id = $1 and pr.status = \'PUBLISHED\' order by ep.first_observed_at desc, ep.id desc', [projectId]);
+    return result.rows.map((row) => mapExternalPost(row as Record<string, unknown>));
+  }
+
   async getExternalPost(projectId: string, externalPostId: string): Promise<PublisherExternalPost | null> {
     const result = await this.db.query(
       "select ep.* from publisher_external_posts ep join publisher_requests pr on pr.id = ep.request_id where pr.project_id = $1 and ep.id = $2 and pr.status = 'PUBLISHED'",
