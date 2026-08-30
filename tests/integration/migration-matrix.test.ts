@@ -10,7 +10,7 @@ import { createDatabase, migrateDown, migrateUp, resolveMigrationsDirectory } fr
 const adminUrl =
   process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test';
 const migrationDirectory = resolveMigrationsDirectory();
-const migrationNames = Array.from({ length: 18 }, (_, index) => String(index + 1).padStart(4, '0'));
+const migrationNames = Array.from({ length: 19 }, (_, index) => String(index + 1).padStart(4, '0'));
 
 function schemaUrl(name: string): string {
   const url = new URL(adminUrl);
@@ -67,7 +67,7 @@ for (const [label, subset] of [
       const db = await createDatabase(database.url);
       try {
         const result = await migrateUp(db);
-        assert.equal(result.applied, 18 - subset);
+        assert.equal(result.applied, 19 - subset);
         const rows = await db.query<{ name: string }>('select name from schema_migrations order by name');
         assert.deepEqual(
           rows.rows.map((row) => row.name.slice(0, 4)),
@@ -118,6 +118,31 @@ test('migration 0016 down restores the legacy project ownership constraints', as
     }
   } finally {
     await rm(temp, { recursive: true, force: true });
+    await database.drop();
+  }
+});
+
+test('migration 0019 creates review analytics tables with ownership and uniqueness constraints', async () => {
+  const database = await createTemporarySchema();
+  try {
+    const db = await createDatabase(database.url);
+    try {
+      await migrateUp(db);
+      const tables = await db.query<{ table_name: string }>(
+        "select table_name from information_schema.tables where table_schema = current_schema() and table_name in ('review_metric_snapshots', 'review_analysis_reports') order by table_name",
+      );
+      assert.deepEqual(tables.rows.map((row) => row.table_name), ['review_analysis_reports', 'review_metric_snapshots']);
+      const constraints = await db.query<{ constraint_name: string }>(
+        "select constraint_name from information_schema.table_constraints where table_schema = current_schema() and constraint_name in ('review_metric_snapshots_external_source_capture_key', 'review_metric_snapshots_metrics_check') order by constraint_name",
+      );
+      assert.deepEqual(constraints.rows.map((row) => row.constraint_name), [
+        'review_metric_snapshots_external_source_capture_key',
+        'review_metric_snapshots_metrics_check',
+      ]);
+    } finally {
+      await db.end();
+    }
+  } finally {
     await database.drop();
   }
 });
