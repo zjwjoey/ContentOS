@@ -104,6 +104,7 @@ PASS — report, task plan, progress and findings record PR #4, final local evid
 - Branch: `codex/operator-ui-v1`
 - Repair code commit: `f19f55f` (`fix: close Operator UI V1 acceptance gaps`)
 - Documentation finalization commit: follows on the same branch after this report update.
+- Browser acceptance stabilization commit: `e472984` (`test: stabilize operator adjustment acceptance`).
 - Remote push: YES
 - PR: #4
 - PR state: OPEN
