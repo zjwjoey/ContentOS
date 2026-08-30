@@ -13,6 +13,7 @@
 ## Task 1: Add Review Analytics contracts and validators
 
 **Files:**
+
 - Create: `packages/contracts/src/review-analytics.ts`
 - Modify: `packages/contracts/src/index.ts`
 - Test: `tests/contract/review-analytics.test.ts`
@@ -58,6 +59,7 @@ git commit -m "feat: add review analytics contracts"
 ## Task 2: Add migration 0019 and migration-matrix coverage
 
 **Files:**
+
 - Create: `migrations/0019_review_analytics.sql`
 - Create: `migrations/0019_review_analytics.down.sql`
 - Modify: `tests/integration/migration-matrix.test.ts:14-17,45-58`
@@ -90,6 +92,7 @@ git commit -m "feat: add review analytics persistence"
 ## Task 3: Expose a public ExternalPost reader
 
 **Files:**
+
 - Modify: `packages/modules/publisher/src/publisher-service.ts`
 - Modify: `packages/modules/publisher/src/index.ts` if a new type export is needed
 - Test: `tests/integration/publisher-external-post-reader.test.ts`
@@ -121,6 +124,7 @@ git commit -m "feat: expose project-scoped external post reader"
 ## Task 4: Implement Review Analytics application service and Job creation
 
 **Files:**
+
 - Create: `packages/modules/review/src/review-job-service.ts`
 - Create: `packages/modules/review/src/review-analytics-service.ts`
 - Modify: `packages/modules/review/src/index.ts`
@@ -161,6 +165,7 @@ git commit -m "feat: add review analytics application service"
 ## Task 5: Add Fake metrics source and Review Worker collection path
 
 **Files:**
+
 - Create: `packages/modules/review/src/metrics-source.ts`
 - Create: `packages/modules/review/src/fake-metrics-source.ts`
 - Create: `workers/review-worker/package.json`
@@ -195,6 +200,7 @@ git commit -m "feat: add review metrics worker"
 ## Task 6: Extend AI provenance for Review analysis
 
 **Files:**
+
 - Modify: `packages/modules/ai/src/ai-service.ts` operation type
 - Modify: `packages/modules/ai/src/prompt-registry.ts`
 - Modify: `packages/modules/ai/src/fake-provider.ts`
@@ -227,6 +233,7 @@ git commit -m "feat: add review analysis ai contract"
 ## Task 7: Add Review analysis worker path
 
 **Files:**
+
 - Modify: `workers/review-worker/src/handler.ts`
 - Modify: `workers/review-worker/src/main.ts`
 - Test: `tests/worker/review-worker.test.ts`
@@ -257,6 +264,7 @@ git commit -m "feat: add review analysis worker"
 ## Task 8: Add analytics API routes and runtime composition
 
 **Files:**
+
 - Create: `apps/api/src/review-analytics-routes.ts`
 - Modify: `apps/api/src/app.ts`
 - Modify: `workers/review-worker/src/dev-main.ts`
@@ -288,6 +296,7 @@ git commit -m "feat: expose review analytics api"
 ## Task 9: Add Review Analytics Operator UI and browser acceptance
 
 **Files:**
+
 - Create: `apps/web/app/projects/[id]/review/page.tsx`
 - Modify: `apps/web/app/projects/[id]/layout.tsx` or shared project navigation component
 - Test: `tests/e2e/review-analytics-browser.test.ts`
@@ -319,6 +328,7 @@ git commit -m "feat: add review analytics workspace"
 ## Task 10: Documentation, ADR status and final verification
 
 **Files:**
+
 - Modify: `packages/modules/review/README.md`
 - Create or modify: `docs/contracts/METRIC_SNAPSHOT_CONTRACT_V1.md`
 - Create or modify: `docs/adr/ADR-014-review-analytics.md`
