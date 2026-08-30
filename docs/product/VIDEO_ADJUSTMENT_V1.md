@@ -13,4 +13,3 @@ Supported immutable operations:
 Every successful operation creates a new Manifest Revision with a new digest. Exact Render receives the chosen Manifest ID, revision and digest; the renderer never re-plans or invents creative choices.
 
 Project API: `POST /api/v1/projects/:projectId/video/adjustments`. The old `/video/quick-edits` route remains a deprecated compatibility alias.
-

@@ -25,4 +25,3 @@ Primary routes:
 - `GET /api/v1/video/quick-edits/:id/manifests`
 - `POST /api/v1/video/quick-edits/:id/adjustments`
 - `POST /api/v1/video/quick-edits/:id/manifests/:manifestId/render`
-

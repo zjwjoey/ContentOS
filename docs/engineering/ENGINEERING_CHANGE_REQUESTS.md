@@ -24,4 +24,3 @@
 ### 基线数据库隔离记录
 
 Director 分支从 `main`（当前迁移至 `0005`）开始，而共享 `contentos_dev` 已包含 Publisher 分支的 `0006`。为避免跨分支复用迁移历史，Director 验证使用同一 PostgreSQL 16 实例上的逻辑数据库 `contentos_director_dev`；这不是新的 PostgreSQL 安装，也不替换共享数据库。
-

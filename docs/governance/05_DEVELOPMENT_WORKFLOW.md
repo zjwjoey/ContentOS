@@ -62,4 +62,3 @@ High risk: data loss, migration corruption, duplicate/wrong-account publishing, 
 ## Documentation and commits
 
 Update only documents affected by reality, including `progress.md`, `NEXT_VERTICAL_SLICES.md`, ADRs/ECRs, setup and environment examples. Use focused commit messages such as `feat:`, `fix:`, `test:`, `docs:` or `chore:`. Never mark a simulated adapter as live-verified.
-

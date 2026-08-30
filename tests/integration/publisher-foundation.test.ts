@@ -56,6 +56,10 @@ test('Publisher foundation migration down and up restores its schema without ass
   const db = await createDatabase(databaseUrl);
   try {
     await migrateUp(db);
+    // This test exercises the legacy rollback boundary, so remove any
+    // workspace-owned rows left by earlier shared-database integration tests.
+    await db.query('delete from renders where project_id is null');
+    await db.query('delete from edit_manifests where project_id is null');
     let removedCount = 0;
     while ((await db.query("select to_regclass('public.publisher_requests') as table_name")).rows[0]?.table_name) {
       const down = await migrateDown(db);

@@ -81,4 +81,3 @@ Do not prioritize a full timeline editor, generic no-code workflow engine, dozen
 ## V1 completion target
 
 One integrated branch must demonstrate Project → Director V1 → Video → Human Approval → Publisher with one migration chain, one Web UI path, a complete automated suite, a working Fake Publisher and real adapters present only behind explicit authorization gates. “Implemented” and “LIVE-VERIFIED” are different statuses.
-

@@ -1,8 +1,8 @@
 # ADR-011: Director Application Worker
 
-**Status:** Accepted with Conditions  
-**Date:** 2026-08-22  
-**Owners:** ContentOS Engineering  
+**Status:** Accepted with Conditions
+**Date:** 2026-08-22
+**Owners:** ContentOS Engineering
 **Related:** ADR-001, ADR-003, ADR-007, `WORKER_ARCHITECTURE_V0`, ECR-001
 
 ## Context
@@ -35,4 +35,3 @@ Worker 通过 Director application port 读取和追加版本，通过 AI Provid
 ## Consequences
 
 正面影响是 API 延迟与生成工作解耦，崩溃和重试遵循现有 Job 事实模型，Director 生成可审计且可扩展。代价是新增进程、监督配置、运行时测试和部署文档；这些是可接受的边界成本，不能通过把生成逻辑塞回 API 来规避。
-

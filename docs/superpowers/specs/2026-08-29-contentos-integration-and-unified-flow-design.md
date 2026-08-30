@@ -1,7 +1,7 @@
 # ContentOS Integration Closure and Unified Product Flow Design
 
-**Date:** 2026-08-29  
-**Status:** Approved in conversation; written specification awaiting final user review  
+**Date:** 2026-08-29
+**Status:** Approved in conversation; written specification awaiting final user review
 **Decision:** Integration stops on `integration/contentos-v1`; it does not merge into `main` automatically.
 
 ## 1. Purpose
@@ -232,4 +232,3 @@ Estimated effort: 8–12 working days. Durable browser asset ingestion is the la
 ## 6. Stage boundary and handoff
 
 Stage 1 produces a trustworthy integration branch. Stage 2 branches from the accepted Stage 1 head. Failure of any Stage 1 Gate keeps Stage 2 closed. Each stage receives its own implementation plan, execution branch/worktree, verification report and user approval checkpoint.
-

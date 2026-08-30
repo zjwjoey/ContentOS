@@ -184,4 +184,3 @@ git diff --check
 - [ ] Step 4: 在三个历史规划文件中追加完成记录，并在验收报告中记录基线、变更文件、测试命令、结果、未启动 Slice ④/⑤/⑥ 和后续限制。
 - [ ] Step 5: 提交 git commit -m "docs: verify project center slice"。
 - [ ] Step 6: 最终运行 git status --short 和 git log --oneline -8，预期工作树干净且仍位于 codex/project-center，不合并 main，不启动下一 Slice。
-

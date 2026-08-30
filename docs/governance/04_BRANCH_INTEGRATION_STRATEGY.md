@@ -66,4 +66,3 @@ Real-platform smoke remains opt-in, account-specific and human-approved. It is n
 ## Main-branch criteria
 
 Merge only when migrations are linear, all relevant tests and builds pass, no secret scan finding exists, no architecture deviation is unresolved, the combined E2E passes, docs/status reflect actual branch state and live verification is labeled accurately.
-

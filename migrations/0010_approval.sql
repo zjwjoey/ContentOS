@@ -15,4 +15,3 @@ create table approval_decisions (
 );
 
 create index approval_decision_current_idx on approval_decisions (project_id, target_type, target_id, target_revision_id, revision desc);
-
