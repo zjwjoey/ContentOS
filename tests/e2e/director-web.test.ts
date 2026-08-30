@@ -50,3 +50,10 @@ test('Director handoff requires an accepted Script and matching approved Storybo
   assert.match(director, /等待前置条件/);
   assert.match(director, /Video handoff/);
 });
+
+test('Director Storyboard UI uses the official durationHintSeconds contract', async () => {
+  const director = await readFile('apps/web/app/projects/[id]/director/page.tsx', 'utf8');
+  assert.match(director, /durationHintSeconds/);
+  assert.doesNotMatch(director, /durationHintMs/);
+  assert.match(director, /秒/);
+});

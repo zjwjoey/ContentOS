@@ -27,6 +27,7 @@ export interface StandaloneQuickEditSession {
 }
 
 export interface CreateStandaloneQuickEditInput { sourceAssetIds: string[]; voiceAssetId?: string; seed?: number; targetDurationMs?: number; minClipDurationMs?: number; maxClipDurationMs?: number; }
+export interface UpdateStandaloneQuickEditInput { seed?: number; targetDurationMs?: number | null; minClipDurationMs?: number; maxClipDurationMs?: number; }
 
 function mapSession(row: Record<string, unknown>, sourceAssetIds: string[]): StandaloneQuickEditSession {
   return { id: String(row.id), workspaceId: String(row.workspace_id), sourceAssetIds, voiceAssetId: row.voice_asset_id ? String(row.voice_asset_id) : null, plannerType: 'RANDOM_MONTAGE', seed: Number(row.seed), targetDurationMs: row.target_duration_ms == null ? null : Number(row.target_duration_ms), minClipDurationMs: Number(row.min_clip_duration_ms), maxClipDurationMs: Number(row.max_clip_duration_ms), width: 1080, height: 1920, fps: 30, transitionPolicy: 'CUT', currentManifestId: row.current_manifest_id ? String(row.current_manifest_id) : null, createdAt: new Date(String(row.created_at)).toISOString(), updatedAt: new Date(String(row.updated_at)).toISOString() };
@@ -93,10 +94,36 @@ export class StandaloneQuickEditService {
     return (await this.adjustments.getManifest('', manifestId, session.workspaceId)) || (inserted.rows[0] as QuickEditManifestRecord);
   }
 
+  async setVoiceAsset(id: string, assetId: string): Promise<StandaloneQuickEditSession> {
+    const session = await this.get(id);
+    if (!session) throw new Error('STANDALONE_QUICK_EDIT_NOT_FOUND');
+    if (session.currentManifestId) throw new Error('STANDALONE_PLANNER_LOCKED');
+    const voice = await this.assets.getReadyWorkspaceAsset(session.workspaceId, assetId, 'AUDIO', 'VOICE');
+    if (!voice) throw new Error('STANDALONE_VOICE_ASSET_INVALID');
+    await this.db.query('update video_quick_edit_sessions set voice_asset_id = $2, updated_at = now() where id = $1 and workspace_id = $3', [id, assetId, session.workspaceId]);
+    return (await this.get(id))!;
+  }
+
+  async updateSettings(id: string, input: UpdateStandaloneQuickEditInput): Promise<StandaloneQuickEditSession> {
+    const session = await this.get(id);
+    if (!session) throw new Error('STANDALONE_QUICK_EDIT_NOT_FOUND');
+    if (session.currentManifestId) throw new Error('STANDALONE_PLANNER_LOCKED');
+    const seed = input.seed ?? session.seed;
+    const minClipDurationMs = input.minClipDurationMs ?? session.minClipDurationMs;
+    const maxClipDurationMs = input.maxClipDurationMs ?? session.maxClipDurationMs;
+    const targetDurationMs = input.targetDurationMs === undefined ? session.targetDurationMs : input.targetDurationMs;
+    if (!Number.isInteger(seed) || !Number.isInteger(minClipDurationMs) || minClipDurationMs <= 0 || !Number.isInteger(maxClipDurationMs) || maxClipDurationMs < minClipDurationMs || (targetDurationMs !== null && (!Number.isInteger(targetDurationMs) || targetDurationMs <= 0))) throw new Error('STANDALONE_PLANNER_SETTINGS_INVALID');
+    const result = await this.db.query('update video_quick_edit_sessions set seed = $2, target_duration_ms = $3, min_clip_duration_ms = $4, max_clip_duration_ms = $5, updated_at = now() where id = $1 and current_manifest_id is null returning *', [id, seed, targetDurationMs, minClipDurationMs, maxClipDurationMs]);
+    if (!result.rows[0]) throw new Error('STANDALONE_PLANNER_LOCKED');
+    return (await this.get(id))!;
+  }
+
   async adjust(id: string, operations: Parameters<VideoAdjustmentService['createVersion']>[0]['operations'], createdBy = 'operator'): Promise<QuickEditManifestRecord> {
     const session = await this.get(id);
     if (!session || !session.currentManifestId) throw new Error('STANDALONE_MANIFEST_REQUIRED');
-    return this.adjustments.createVersion({ workspaceId: session.workspaceId, parentManifestId: session.currentManifestId, operations, createdBy });
+    const revised = await this.adjustments.createVersion({ workspaceId: session.workspaceId, parentManifestId: session.currentManifestId, operations, createdBy });
+    await this.db.query('update video_quick_edit_sessions set current_manifest_id = $2, updated_at = now() where id = $1 and workspace_id = $3 and current_manifest_id = $4', [id, revised.id, session.workspaceId, session.currentManifestId]);
+    return revised;
   }
 
   async render(id: string): Promise<JobRecord> {

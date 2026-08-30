@@ -279,3 +279,51 @@ Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-directio
 - [x] Push the feature branch and recheck PR #3; do not merge, force-push, delete branches/worktrees or alter `main`.
 
 **Status:** complete; PR #3 ready for human merge into `main`
+
+## Operator UI V1
+
+- [x] Baseline: fetch `origin/main`, verify PR #3 ancestry, create `codex/operator-ui-v1` worktree.
+- [x] UI Audit: classify current Web capabilities as SUPPORTED / PARTIAL / MISSING.
+- [x] Global Shell
+- [x] Project Workspace Layout
+- [x] Status Mapping
+- [x] Standalone Asset UX
+- [x] Standalone Timeline
+- [x] Five Adjustments
+- [x] Standalone Render Preview
+- [x] Director Visualization
+- [x] Project Video Visualization
+- [x] Approval Visualization
+- [x] Publisher Visualization
+- [x] Browser Acceptance
+- [x] Full Gate
+- [x] Docs
+- [x] Push
+- [x] PR
+
+**Status:** PR #4 acceptance repair is implemented; final local gates and browser acceptance are green, and human visual acceptance remains pending.
+
+## Operator UI V1 Acceptance Repair
+
+- [x] Historical Manifest read-only semantics
+- [x] Formal Project Video adjustment route
+- [x] Storyboard duration contract correction
+- [x] Five-operation browser acceptance
+- [x] Voice-driven planner defaults
+- [x] Plan-time settings lock
+- [x] Docs / PR truth sync
+- [x] Final Gate
+- [x] Push Repair
+- [x] Recheck PR #4
+
+## Operator UI V1 Final Merge Repair
+
+- [x] Selected/current Manifest identity separation
+- [x] Historical picker truth
+- [x] Historical browser regression
+- [x] Domain primary Voice lock
+- [x] Voice lock integration/API regression
+- [x] Full Gate
+- [x] Docs Sync
+- [x] Push
+- [x] PR #4 Recheck

@@ -12,20 +12,22 @@ function multipart(filename: string, contentType: string, content: string): { bo
 }
 
 test('Standalone Quick Edit API exposes no-project create, plan and render flow', async () => {
-  const db = await createDatabase(databaseUrl); await migrateUp(db); const app = await buildApi(db); const suffix = randomUUID(); const assetIds = [`api-standalone-a-${suffix}`, `api-standalone-b-${suffix}`]; const voiceId = `api-standalone-voice-${suffix}`; let workspaceId = '';
+  const db = await createDatabase(databaseUrl); await migrateUp(db); const app = await buildApi(db); const suffix = randomUUID(); const assetIds = [`api-standalone-a-${suffix}`, `api-standalone-b-${suffix}`]; const voiceId = `api-standalone-voice-${suffix}`; const secondVoiceId = `api-standalone-voice-b-${suffix}`; let workspaceId = '';
   try {
     for (const id of assetIds) await db.query('insert into assets (id, project_id, kind, checksum, byte_size, storage_key, lifecycle, metadata) values ($1, null, $2, $3, $4, $5, $6, $7)', [id, 'VIDEO', `sha256:${id}`, 100, `standalone/${id}.mp4`, 'READY', { durationMs: 8_000 }]);
     await db.query('insert into assets (id, project_id, kind, checksum, byte_size, storage_key, lifecycle, metadata) values ($1, null, $2, $3, $4, $5, $6, $7)', [voiceId, 'AUDIO', `sha256:${voiceId}`, 100, `standalone/${voiceId}.wav`, 'READY', { durationMs: 10_000 }]);
+    await db.query('insert into assets (id, project_id, kind, checksum, byte_size, storage_key, lifecycle, metadata) values ($1, null, $2, $3, $4, $5, $6, $7)', [secondVoiceId, 'AUDIO', `sha256:${secondVoiceId}`, 100, `standalone/${secondVoiceId}.wav`, 'READY', { durationMs: 8_000 }]);
     const created = await app.inject({ method: 'POST', url: '/api/v1/video/quick-edits', payload: { sourceAssetIds: assetIds, voiceAssetId: voiceId, seed: 7 } });
     assert.equal(created.statusCode, 201, created.body); const session = JSON.parse(created.body) as { id: string; workspaceId: string }; workspaceId = session.workspaceId;
     assert.equal((await db.query('select count(*)::int as count from content_projects where id = $1', [workspaceId])).rows[0]?.count, 0);
     const planned = await app.inject({ method: 'POST', url: `/api/v1/video/quick-edits/${session.id}/plan`, payload: {} }); assert.equal(planned.statusCode, 201, planned.body); const manifest = JSON.parse(planned.body) as { id: string; revision: number; projectId: string; workspaceId: string }; assert.equal(manifest.projectId, ''); assert.equal(manifest.workspaceId, workspaceId);
+    const voiceChange = await app.inject({ method: 'POST', url: `/api/v1/video/quick-edits/${session.id}/voice`, payload: { assetId: secondVoiceId } }); assert.equal(voiceChange.statusCode, 409, voiceChange.body); assert.match(voiceChange.body, /STANDALONE_PLANNER_LOCKED/);
     const listed = await app.inject({ method: 'GET', url: `/api/v1/video/quick-edits/${session.id}/manifests` }); assert.equal(listed.statusCode, 200); assert.equal(JSON.parse(listed.body).items.length, 1);
     const assetList = await app.inject({ method: 'GET', url: `/api/v1/video/quick-edits/${session.id}/assets` }); assert.equal(assetList.statusCode, 200); assert.equal('storageKey' in assetList.json().items[0], false);
     const rendered = await app.inject({ method: 'POST', url: `/api/v1/video/quick-edits/${session.id}/render`, payload: {} }); assert.equal(rendered.statusCode, 201, rendered.body); const job = JSON.parse(rendered.body) as { projectId: string | null; workspaceId: string }; assert.equal(job.projectId, null); assert.equal(job.workspaceId, workspaceId);
   } finally {
     if (workspaceId) { await db.query('delete from renders where workspace_id = $1', [workspaceId]); await db.query('update video_quick_edit_sessions set current_manifest_id = null where workspace_id = $1', [workspaceId]); await db.query('delete from edit_manifests where workspace_id = $1', [workspaceId]); await db.query('delete from jobs where workspace_id = $1', [workspaceId]); await db.query('delete from video_quick_edit_sessions where workspace_id = $1', [workspaceId]); await db.query('delete from video_workspace_assets where workspace_id = $1', [workspaceId]); await db.query('delete from video_workspaces where id = $1', [workspaceId]); }
-    await db.query('delete from assets where id = any($1::text[])', [assetIds.concat(voiceId)]); await app.close(); await db.end();
+    await db.query('delete from assets where id = any($1::text[])', [assetIds.concat(voiceId, secondVoiceId)]); await app.close(); await db.end();
   }
 });
 

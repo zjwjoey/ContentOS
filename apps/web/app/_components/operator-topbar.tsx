@@ -1,0 +1,1 @@
+export function OperatorTopbar({ title = 'Operator Console', projectName }: { title?: string; projectName?: string }) { return <header className="operator-topbar"><div><p className="eyebrow">ContentOS / Operator</p><h1>{title}</h1></div>{projectName && <span className="topbar-context">项目：{projectName}</span>}</header>; }

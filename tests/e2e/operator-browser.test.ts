@@ -4,6 +4,8 @@ import { chromium, type Page } from 'playwright';
 
 const baseUrl = process.env.CONTENTOS_OPERATOR_URL;
 const fixtureVideo = process.env.CONTENTOS_BROWSER_FIXTURE_VIDEO;
+const fixtureVideos = process.env.CONTENTOS_BROWSER_FIXTURE_VIDEOS ? JSON.parse(process.env.CONTENTOS_BROWSER_FIXTURE_VIDEOS) as string[] : fixtureVideo ? [fixtureVideo] : [];
+const fixtureAudio = process.env.CONTENTOS_BROWSER_FIXTURE_AUDIO;
 
 async function waitForText(page: Page, text: string, timeout = 30_000): Promise<void> {
   await page.getByText(text, { exact: false }).first().waitFor({ state: 'visible', timeout });
@@ -16,7 +18,7 @@ async function createAndApprovePublish(page: Page, title: string, description: s
   const draft = page.getByRole('listitem').filter({ hasText: title });
   await draft.getByRole('link', { name: '前往 Approval Gate' }).click();
   await page.getByRole('button', { name: '批准此 Revision' }).click();
-  await page.getByRole('link', { name: 'Publisher' }).click();
+  await page.getByRole('link', { name: 'Publisher', exact: true }).click();
   return page.getByRole('listitem').filter({ hasText: title });
 }
 
@@ -64,7 +66,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('button', { name: '批准此 Revision' }).click();
     await waitForText(page, 'APPROVED');
 
-    await page.getByRole('link', { name: 'Publisher' }).click();
+    await page.getByRole('link', { name: /^Publisher/ }).first().click();
     await page.getByRole('button', { name: '创建测试账号' }).click();
     await waitForText(page, '开发模拟结果');
     const success = await createAndApprovePublish(page, '浏览器完整闭环', 'Fake Platform 成功发布');
@@ -75,7 +77,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.goto(`${baseUrl}/projects/${projectId}`, { waitUntil: 'networkidle' });
     await waitForText(page, 'PUBLISHED');
 
-    await page.getByRole('link', { name: 'Publisher' }).click();
+    await page.getByRole('link', { name: /^Publisher/ }).first().click();
     const outcome = page.getByLabel('开发模拟结果');
     await outcome.selectOption('NETWORK');
     await waitForText(page, '开发模拟结果已更新');
@@ -104,6 +106,96 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await reconciling.getByText('ExternalPost', { exact: false }).waitFor({ state: 'visible', timeout: 30_000 });
     assert.equal(await reconciling.getByText('PublishAttempt #', { exact: false }).count(), 2, 'reconciliation must preserve publish and reconcile attempts');
     assert.equal(await reconciling.getByText('ExternalPost', { exact: false }).count(), 1, 'reconciliation must confirm exactly one ExternalPost');
+  } finally {
+    await browser.close();
+  }
+});
+
+test('operator browser completes Standalone Quick Edit upload, adjustment and render journeys', async () => {
+  assert.ok(baseUrl, 'test:browser must start an isolated operator');
+  assert.equal(fixtureVideos.length, 4, 'test:browser must provide four playable upload fixtures');
+  assert.ok(fixtureAudio, 'test:browser must provide an audio fixture');
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${baseUrl}/video/quick-edit`, { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: '创建草稿会话' }).click();
+    await page.getByLabel('上传视频 / 配音').setInputFiles([...fixtureVideos, fixtureAudio]);
+    await page.getByText('source.mp4', { exact: false }).first().waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByText('已就绪', { exact: false }).first().waitFor({ state: 'visible', timeout: 45_000 });
+    const voice = page.getByRole('combobox', { name: '主配音' });
+    const durationMode = page.getByRole('combobox', { name: '目标时长' });
+    assert.equal(await voice.isDisabled(), false, 'voice must be selectable before planning');
+    assert.equal(await durationMode.isDisabled(), false, 'planner settings must be editable before planning');
+    await voice.selectOption({ label: 'voice.wav' });
+    await page.getByText('主配音已选择。').waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByRole('button', { name: 'Generate Plan' }).click();
+    await page.getByText('Manifest 计划已生成，规划设置已锁定。').waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByLabel('Manifest 时间线').waitFor({ state: 'visible', timeout: 30_000 });
+    const timelineButtons = page.getByLabel('Manifest 时间线').getByRole('button');
+    const timelineCount = await timelineButtons.count();
+    assert.ok(timelineCount >= 3, `auto voice duration must produce enough clips for all adjustments (got ${timelineCount}: ${await page.getByLabel('Manifest 时间线').innerText()}; body: ${await page.locator('body').innerText()})`);
+    assert.equal(await voice.isDisabled(), true, 'voice must lock after planning');
+    assert.equal(await durationMode.isDisabled(), true, 'planner settings must lock after planning');
+
+    const currentRevision = async (): Promise<number> => {
+      const selected = await page.getByLabel('Manifest Revision').locator('option:checked').textContent();
+      const match = selected?.match(/v(\d+)/);
+      if (!match) throw new Error(`Unable to read selected Manifest revision: ${selected}`);
+      return Number(match[1]);
+    };
+    const waitForRevision = async (previous: number): Promise<number> => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const next = await currentRevision();
+        if (next > previous) return next;
+        await page.waitForTimeout(100);
+      }
+      throw new Error(`Manifest revision did not advance beyond v${previous}`);
+    };
+
+    let revision = await currentRevision();
+    await page.getByRole('button', { name: 'REROLL' }).click();
+    revision = await waitForRevision(revision);
+    const replacementPicker = page.getByLabel('替换素材');
+    const replacementValues = await replacementPicker.locator('option').evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value).filter(Boolean));
+    assert.ok(replacementValues.length > 0, 'a replacement READY asset must be available');
+    let replacementSucceeded = false;
+    for (const replacementAssetId of replacementValues) {
+      await replacementPicker.selectOption(replacementAssetId);
+      const replaceResponse = page.waitForResponse((response) => response.url().includes('/api/v1/video/quick-edits/') && response.url().endsWith('/adjustments') && response.request().method() === 'POST', { timeout: 15_000 });
+      await page.getByRole('button', { name: 'REPLACE' }).click();
+      const replaceResult = await replaceResponse;
+      if (replaceResult.status() === 201) { replacementSucceeded = true; break; }
+      const replaceBody = await replaceResult.text();
+      if (replaceResult.status() !== 409 || !replaceBody.includes('Adjacent duplicate clips are not allowed')) throw new Error(`REPLACE failed with ${replaceResult.status()}: ${replaceBody}`);
+    }
+    assert.equal(replacementSucceeded, true, 'REPLACE must find a valid non-adjacent replacement asset');
+    revision = await waitForRevision(revision);
+    await page.getByRole('button', { name: 'TRIM' }).click();
+    revision = await waitForRevision(revision);
+    await page.getByLabel('Manifest 时间线').getByRole('button').nth(1).click();
+    await page.getByRole('button', { name: 'REORDER' }).click();
+    revision = await waitForRevision(revision);
+    await page.getByRole('button', { name: 'REMOVE' }).click();
+    revision = await waitForRevision(revision);
+    assert.ok(revision >= 6, `all five adjustments must create revisions, got v${revision}`);
+    const revisionPicker = page.getByLabel('Manifest Revision');
+    const currentManifestValue = await revisionPicker.inputValue();
+    await revisionPicker.locator('option').nth(2).waitFor({ state: 'attached', timeout: 15_000 });
+    const historicalManifestValue = await revisionPicker.locator('option').nth(2).getAttribute('value');
+    assert.ok(historicalManifestValue && historicalManifestValue !== currentManifestValue, 'a historical Manifest revision must be available');
+    await revisionPicker.selectOption(historicalManifestValue);
+    await page.getByText('历史版本仅供查看，但仍可精确渲染。').waitFor({ state: 'visible', timeout: 15_000 });
+    assert.equal(await revisionPicker.inputValue(), historicalManifestValue);
+    for (const name of ['TRIM', 'REMOVE', 'REORDER', 'REPLACE', 'REROLL']) assert.equal(await page.getByRole('button', { name }).isDisabled(), true, `${name} must be disabled for a historical revision`);
+    assert.equal(await page.getByRole('button', { name: 'Render 成品' }).isDisabled(), false, 'historical revisions must remain renderable');
+    await revisionPicker.selectOption(currentManifestValue);
+    await page.getByText(`Manifest v${revision}`).waitFor({ state: 'visible', timeout: 15_000 });
+    for (const name of ['TRIM', 'REMOVE', 'REORDER', 'REROLL']) assert.equal(await page.getByRole('button', { name }).isDisabled(), false, `${name} must be enabled for the current revision`);
+    await page.getByRole('button', { name: 'Render 成品' }).click();
+    await page.getByText('Render 状态：SUCCEEDED').waitFor({ state: 'visible', timeout: 60_000 });
+    await page.getByText('Render 输出成片').waitFor({ state: 'visible', timeout: 15_000 });
+    assert.equal(await page.locator('video').count() >= 1, true, 'rendered output video should be visible');
   } finally {
     await browser.close();
   }

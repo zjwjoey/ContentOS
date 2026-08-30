@@ -1,0 +1,1 @@
+export function MediaPreview({ url, kind, label }: { url?: string; kind: string; label?: string }) { if (!url) return <div className="feedback">选择 READY 素材后预览</div>; return kind === 'AUDIO' ? <audio className="media-preview" controls src={url}>{label}</audio> : <video className="media-preview" controls preload="metadata" src={url}>{label}</video>; }

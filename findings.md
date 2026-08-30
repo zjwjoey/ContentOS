@@ -144,3 +144,35 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - The full local gate is green: migration matrix **4/4**, full suite **211/211**, format, lint, typecheck, root build, Web build, Doctor and diff-check.
 - Real Douyin/WeChat adapters are implemented behind the Publisher boundary but are not live-verified and remain disabled by default. Fake Publisher remains available for deterministic acceptance.
 - Finalization changed documentation only; no business code, migration SQL or runtime behavior changed in the finalization commit.
+
+## Operator UI V1 Baseline and Gap Audit (2026-08-30)
+
+- PR #3 is merged into `main` at `fbf7dadf189355bf55d7b937c08226029556c26c`; the new UI branch baseline is `origin/main` at the same SHA.
+- Baseline install completed with the frozen lockfile. Migration matrix passed **4/4**. The full suite passed **211/211** on the clean baseline after one transient shared-database concurrency failure was reproduced as green in isolation and on a second full run.
+- Supported: real Project Center snapshot, stage cards/health/actions/jobs, project-scoped API routes, Asset Worker upload/import and ready media content, Director Script/Storyboard Jobs, Project Video render/manifest/adjustment contracts, Approval Gate decisions, Fake Publisher flows, and standalone session/upload/plan/render APIs.
+- Partial: RootLayout has no global shell; homepage is a project create/list page; ProjectNav is duplicated by individual pages; status labels are page-local; Assets has upload/import polling and previews but only one-file upload; Director exposes only a compact Script/Storyboard summary; Project Video has adjustment controls but no visual timeline/inspector; Approval rejection uses `window.prompt`; Publisher is functional but log-dense; Standalone Quick Edit requires manual Asset IDs and only shows a text Manifest list.
+- Missing: unified OperatorShell/sidebar/topbar/page primitives, nested Project Workspace layout, shared status mapping, standalone workspace asset list/content endpoint and voice/settings update (if required by audit), reusable media/timeline components, visible REPLACE/REROLL/REMOVE/REORDER/TRIM controls for standalone Quick Edit, output preview/polling closure, and automated browser scenarios for the new visual flows.
+- No Review Analytics page should be added in V1; Review remains deferred. No new migration is justified by the current UI gaps.
+- The implementation must keep Web as a contract client: Video Adjustment operations remain owned by the Video module, and browser-facing APIs must not expose storage keys or private credentials.
+- Visual design decision: the user selected Shell option A, a persistent left navigation with project workspace content.
+- Visual design decision: for standalone Quick Edit, the user selected layout option C, a three-column editing workspace with asset library, preview/timeline center, and inspector panel.
+
+## Operator UI V1 Review Repairs (2026-08-30)
+
+- Root cause: `StandaloneQuickEditService.adjust()` persisted a new immutable Manifest but did not advance `video_quick_edit_sessions.current_manifest_id`; subsequent adjustments therefore reused a superseded parent. Added a consecutive-adjustment regression test and pointer update.
+- Root cause: shared Inspector defaulted to a one-item timeline and emitted the selected clip as its own replacement. Added real clip counts, READY replacement choices, clip-change state synchronization and operation helper tests.
+- Root cause: Standalone UI only retained the initial Render Job response. Added Job polling, output Asset resolution and native output preview, plus explicit voice selection and Manifest revision loading.
+- Root cause: project layout rendered the shared stage rail only on Overview. The layout now resolves the active stage for every project route and child pages no longer own duplicate stage navigation.
+- The isolated Playwright harness now covers both the existing Fake Publisher journey and Standalone Quick Edit upload/adjust/render/output closure; human visual acceptance remains a separate manual gate.
+
+## Operator UI V1 Acceptance Repair (2026-08-30)
+
+- Standalone historical Manifest revisions are view/render-only in V1; mutations always apply only to `session.currentManifestId`.
+- Project Video new UI uses `POST /api/v1/projects/:projectId/video/adjustments`; the deprecated compatibility route remains for historical callers.
+- Director Web uses the official `durationHintSeconds` field and displays seconds.
+- Standalone planner defaults to optional voice-driven duration with a 2–5 second clip range.
+- Planner and primary Voice settings become immutable after the first Manifest in V1.
+## Operator UI V1 Final Merge Repair
+
+- Standalone Quick Edit has two Manifest identities: selected Manifest is the current UI inspection target; current Manifest is `session.currentManifestId` and the sole mutable revision.
+- Primary Voice is part of immutable Planner Configuration after the first Manifest; changing it requires a new Standalone session.

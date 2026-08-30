@@ -80,6 +80,8 @@ importers:
 
   packages/shared: {}
 
+  workers/asset-worker: {}
+
   workers/director-worker: {}
 
   workers/publisher-worker: {}

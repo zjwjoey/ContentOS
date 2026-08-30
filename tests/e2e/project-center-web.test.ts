@@ -24,7 +24,16 @@ test('Project list enters Project Center', async () => {
 
 test('Project Center uses the shared five-stage navigation shell', async () => {
   const page = await readFile('apps/web/app/projects/[id]/page.tsx', 'utf8');
+  const layout = await readFile('apps/web/app/projects/[id]/layout.tsx', 'utf8');
   const nav = await readFile('apps/web/app/projects/[id]/product-model.ts', 'utf8');
-  assert.match(page, /ProjectNav/);
+  assert.match(layout, /ProjectNav/);
+  assert.match(layout, /currentStage/);
+  for (const child of ['assets', 'director', 'video', 'approvals', 'publisher']) assert.doesNotMatch(await readFile(`apps/web/app/projects/[id]/${child}/page.tsx`, 'utf8'), /ProjectNav/);
   for (const stage of ['ASSETS', 'DIRECTOR', 'VIDEO', 'APPROVALS', 'PUBLISHER']) assert.match(nav, new RegExp(stage));
+});
+
+test('Project Video uses the formal Video Adjustment route', async () => {
+  const page = await readFile('apps/web/app/projects/[id]/video/page.tsx', 'utf8');
+  assert.match(page, /video\/adjustments/);
+  assert.doesNotMatch(page, /video\/quick-edits/);
 });
