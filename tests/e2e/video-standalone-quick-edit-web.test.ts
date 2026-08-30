@@ -21,6 +21,10 @@ test('Standalone historical Manifest revisions are read-only while the current r
   assert.match(inspector, /editable/);
   assert.match(inspector, /disabled=\{!editable(?: \|\| busy)?\}/);
   assert.match(picker, /isCurrentManifest\(item\.id, currentId\)/);
+  assert.match(picker, /selectedId/);
+  assert.match(picker, /value=\{selectedId \|\| ''\}/);
+  assert.match(page, /selectedId=\{manifest\?\.id\}/);
+  assert.match(page, /currentId=\{session\.currentManifestId \|\| undefined\}/);
 });
 
 test('Standalone planner uses optional voice-driven duration and locks settings after planning', async () => {

@@ -157,14 +157,19 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
     await page.getByRole('button', { name: 'REROLL' }).click();
     revision = await waitForRevision(revision);
     const replacementPicker = page.getByLabel('替换素材');
-    const replacementOption = replacementPicker.locator('option').nth(1);
-    const replacementAssetId = await replacementOption.getAttribute('value');
-    assert.ok(replacementAssetId, 'a replacement READY asset must be available');
-    await replacementPicker.selectOption(replacementAssetId);
-    const replaceResponse = page.waitForResponse((response) => response.url().includes('/api/v1/video/quick-edits/') && response.url().endsWith('/adjustments') && response.request().method() === 'POST', { timeout: 15_000 });
-    await page.getByRole('button', { name: 'REPLACE' }).click();
-    const replaceResult = await replaceResponse;
-    if (replaceResult.status() !== 201) throw new Error(`REPLACE failed with ${replaceResult.status()}: ${await replaceResult.text()}`);
+    const replacementValues = await replacementPicker.locator('option').evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value).filter(Boolean));
+    assert.ok(replacementValues.length > 0, 'a replacement READY asset must be available');
+    let replacementSucceeded = false;
+    for (const replacementAssetId of replacementValues) {
+      await replacementPicker.selectOption(replacementAssetId);
+      const replaceResponse = page.waitForResponse((response) => response.url().includes('/api/v1/video/quick-edits/') && response.url().endsWith('/adjustments') && response.request().method() === 'POST', { timeout: 15_000 });
+      await page.getByRole('button', { name: 'REPLACE' }).click();
+      const replaceResult = await replaceResponse;
+      if (replaceResult.status() === 201) { replacementSucceeded = true; break; }
+      const replaceBody = await replaceResult.text();
+      if (replaceResult.status() !== 409 || !replaceBody.includes('Adjacent duplicate clips are not allowed')) throw new Error(`REPLACE failed with ${replaceResult.status()}: ${replaceBody}`);
+    }
+    assert.equal(replacementSucceeded, true, 'REPLACE must find a valid non-adjacent replacement asset');
     revision = await waitForRevision(revision);
     await page.getByRole('button', { name: 'TRIM' }).click();
     revision = await waitForRevision(revision);
@@ -174,6 +179,19 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
     await page.getByRole('button', { name: 'REMOVE' }).click();
     revision = await waitForRevision(revision);
     assert.ok(revision >= 6, `all five adjustments must create revisions, got v${revision}`);
+    const revisionPicker = page.getByLabel('Manifest Revision');
+    const currentManifestValue = await revisionPicker.inputValue();
+    await revisionPicker.locator('option').nth(2).waitFor({ state: 'attached', timeout: 15_000 });
+    const historicalManifestValue = await revisionPicker.locator('option').nth(2).getAttribute('value');
+    assert.ok(historicalManifestValue && historicalManifestValue !== currentManifestValue, 'a historical Manifest revision must be available');
+    await revisionPicker.selectOption(historicalManifestValue);
+    await page.getByText('历史版本仅供查看，但仍可精确渲染。').waitFor({ state: 'visible', timeout: 15_000 });
+    assert.equal(await revisionPicker.inputValue(), historicalManifestValue);
+    for (const name of ['TRIM', 'REMOVE', 'REORDER', 'REPLACE', 'REROLL']) assert.equal(await page.getByRole('button', { name }).isDisabled(), true, `${name} must be disabled for a historical revision`);
+    assert.equal(await page.getByRole('button', { name: 'Render 成品' }).isDisabled(), false, 'historical revisions must remain renderable');
+    await revisionPicker.selectOption(currentManifestValue);
+    await page.getByText(`Manifest v${revision}`).waitFor({ state: 'visible', timeout: 15_000 });
+    for (const name of ['TRIM', 'REMOVE', 'REORDER', 'REROLL']) assert.equal(await page.getByRole('button', { name }).isDisabled(), false, `${name} must be enabled for the current revision`);
     await page.getByRole('button', { name: 'Render 成品' }).click();
     await page.getByText('Render 状态：SUCCEEDED').waitFor({ state: 'visible', timeout: 60_000 });
     await page.getByText('Render 输出成片').waitFor({ state: 'visible', timeout: 15_000 });
