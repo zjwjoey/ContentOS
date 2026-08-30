@@ -60,6 +60,12 @@ Correction branch: `codex/video-direction-correction`, worktree `E:\ContentOS\.w
 
 Review repair commits: `c0943ff` (implementation/tests) and `a347838` (verification records).
 
+## Main Merge Acceptance Repair
+
+The main-branch acceptance found and closed two repository gates. Migration `0016_video_workspaces.down.sql` now restores the legacy `NOT NULL` ownership constraints; PostgreSQL fails the rollback transaction when standalone rows exist instead of silently leaving an incompatible schema. The migration matrix now covers that rollback boundary, and the shared Publisher migration fixture removes workspace-owned rows before testing a legacy rollback. Trailing whitespace and extra EOF blank lines were removed from the affected changed files.
+
+Repair commit: `e7fca5a` (`fix: close main merge acceptance gates`).
+
 ## Documentation Updated
 
 Updated `VIDEO_MODULE_V0.md`, `EDIT_MANIFEST_V0.md`; added `VIDEO_PRODUCT_MODEL.md`, `VIDEO_ADJUSTMENT_V1.md` and `VIDEO_QUICK_EDIT_V1.md`. The historical 2026-08-29 report was not rewritten.
@@ -76,6 +82,6 @@ PROJECT VIDEO ADJUSTMENT: APPROVED
 
 STANDALONE QUICK EDIT V1: APPROVED
 
-Final gate evidence: full test suite 211/211, format, typecheck, lint, root build, Web build, migration matrix and diff-check all passed; working tree is clean. A modern FFmpeg/FFprobe run produced MP4 with `videoCodec=h264` and `audioCodec=aac`; the standalone worker E2E also verified the workspace `OUTPUT` relation.
+Final gate evidence: full test suite 211/211, migration matrix 4/4, format, typecheck, lint, root build, Web build, Doctor and diff-check all passed; working tree is clean. A modern FFmpeg/FFprobe run produced MP4 with `videoCodec=h264` and `audioCodec=aac`; the standalone worker E2E also verified the workspace `OUTPUT` relation.
 
 Pushed To Remote: NO (no push authorization was given).
