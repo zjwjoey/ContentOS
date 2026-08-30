@@ -35,7 +35,6 @@ test('operator browser completes Fake Publisher success, retry, human-action and
   const page = await browser.newPage();
   try {
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-    await page.waitForLoadState('networkidle');
     await page.getByRole('textbox', { name: /项目名称/ }).fill(`Browser flow ${Date.now()}`);
     await page.locator('form').evaluate((form) => (form as HTMLFormElement).requestSubmit());
     await page.getByTestId('project-center').waitFor({ timeout: 10_000 });
@@ -95,7 +94,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await success.getByText('ExternalPost', { exact: false }).waitFor({ state: 'visible', timeout: 30_000 });
     assert.equal(await success.getByText('ExternalPost', { exact: false }).count(), 1, 'duplicate queue clicks must not duplicate ExternalPost');
 
-    await page.goto(`${baseUrl}/projects/${projectId}`, { waitUntil: 'networkidle' });
+    await page.goto(`${baseUrl}/projects/${projectId}`, { waitUntil: 'domcontentloaded' });
     await waitForText(page, 'PUBLISHED');
 
     await page.getByRole('link', { name: /^Review Analytics/ }).click();
@@ -161,7 +160,7 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
-    await page.goto(`${baseUrl}/video/quick-edit`, { waitUntil: 'networkidle' });
+    await page.goto(`${baseUrl}/video/quick-edit`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: '创建草稿会话' }).click();
     await page.getByLabel('上传视频 / 配音').setInputFiles([...fixtureVideos, fixtureAudio]);
     await page.getByText('source.mp4', { exact: false }).first().waitFor({ state: 'visible', timeout: 30_000 });
