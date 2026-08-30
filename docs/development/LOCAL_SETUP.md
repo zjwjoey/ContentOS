@@ -4,8 +4,9 @@
 
 - Node.js 22 LTS target (the current validation host reports Node 24.14.0).
 - pnpm 10.32.1.
-- PostgreSQL 16 development server. The initialized local cluster uses `127.0.0.1:55432` and database `contentos_dev`.
-- FFmpeg and FFprobe on `PATH`, with `drawtext`, `scale`, `crop`, `concat`, `mpeg4` and `aac` capabilities.
+- PostgreSQL 16 development server. The local cluster used by this workspace is `127.0.0.1:55433`.
+- Use separate databases for operator preview (`contentos_operator_dev`) and automated tests (`contentos_test`).
+- FFmpeg and FFprobe on `PATH`, with `drawtext`, `scale`, `crop`, `concat`, `libx264` and `aac` capabilities. H.264 manifests require the `libx264` encoder; the renderer validates the actual FFprobe codec and never silently substitutes another codec.
 - Chinese font file at `C:\Windows\Fonts\msyh.ttc` or an explicit `FFMPEG_FONT_FILE`.
 
 ## Install and verify
@@ -20,13 +21,18 @@ pnpm run build
 pnpm run doctor
 ```
 
-Set `DATABASE_URL` and `STORAGE_ROOT` before starting the API. `.env.example` contains the non-secret shape; never commit `.env` or credentials.
+Set `DATABASE_URL` and `STORAGE_ROOT` before starting the API. For the one-command Director preview, set `CONTENTOS_OPERATOR_DATABASE_URL` and run `pnpm dev:operator`; the launcher defaults to `contentos_operator_dev`. For tests, set `DATABASE_URL` to `contentos_test`. `.env.example` contains the non-secret shape; never commit `.env` or credentials.
 
 ## Development order
 
-1. Start PostgreSQL and confirm port `55432` is reachable.
-2. Run migrations through the database package before using API/workers.
-3. Start API with `pnpm dev`.
-4. Start the Video Worker and Publisher Worker as separate processes when their composition roots are wired for an environment.
+1. Start PostgreSQL and confirm port `55433` is reachable.
+2. Create or select the `contentos_operator_dev` and `contentos_test` databases.
+3. Run `pnpm dev:operator` for the API, Web and Fake AI Director Worker.
+4. Run `pnpm test` with `DATABASE_URL` pointing at `contentos_test`.
+5. Start the Video Worker and Publisher Worker as separate processes when their composition roots are wired for an environment.
 
-The current initialization includes a local-only Asset provider and a real FFmpeg vertical-slice test. It intentionally does not include platform adapters, real AI providers, Director, Review or a production Web UI.
+The local Operator uses the Fake AI Provider only. It intentionally does not include platform adapters, real AI providers, real credentials or external platform calls.
+
+## Integration Closure verification
+
+Use an existing local PostgreSQL database as the business truth and point `DATABASE_URL` at it before running the gates. The migration matrix creates and removes UUID-scoped schemas, so the test role does not need `CREATEDB` privileges. Run `pnpm test:migrations` and `pnpm test:integration-closure` for the migration, adapter, safety and real-worker composition gates. Real adapters remain disabled unless an explicitly authorized environment enables them.

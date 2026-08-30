@@ -2,7 +2,7 @@
 
 ## Decision
 
-ContentOS V0 is a **modular monolith control plane** with separately deployed Video and Publisher worker processes. PostgreSQL is the durable source of truth; asset storage holds immutable media/artifacts; the queue delivers durable Job work but is not authoritative.
+ContentOS V0 is a **modular monolith control plane** with separately deployed Director, Video and Publisher worker processes. PostgreSQL is the durable source of truth; asset storage holds immutable media/artifacts; the queue delivers durable Job work but is not authoritative.
 
 ```text
                                   ContentOS
@@ -17,12 +17,12 @@ ContentOS V0 is a **modular monolith control plane** with separately deployed Vi
                                     Job Module
                                      |
                              durable queue adapter
-                         +-----------+-----------+
-                         |                       |
-                    Video Worker           Publisher Worker
-                         |                       |
-                      FFmpeg              Playwright + adapters
-                         \                       /
+                   +-----------+-----------+-----------+
+                   |                       |           |
+              Video Worker       Publisher Worker  Director Worker
+                   |                       |           |
+                FFmpeg              Playwright      AI Providers
+                   \                       /           /
                     PostgreSQL + Asset Storage
 ```
 
@@ -36,12 +36,13 @@ Owns request authentication, Project lifecycle, module use-case orchestration, J
 |---|---|---|
 | Web UI | user interaction and read models | domain mutations other than API calls; credentials; worker logic |
 | API/Core | domain commands, persistence, Job orchestration | FFmpeg/Chromium/platform automation |
+| Director Worker | claimed Director AI Jobs, provider calls, revision result reporting | Video/Publisher/Review execution; private tables |
 | Video Worker | claimed render Job, staging, FFmpeg, artifact reporting | asset selection, Project lifecycle, publishing |
 | Publisher Worker | claimed publish Job, account-session lease, Adapter execution | rendering, Director rules |
 
 ## Fixed V1 workflow
 
-`Director -> Video -> Publish -> Review` is a set of explicit application use cases. Each phase may create several Jobs. V1 has no user-authored workflow graphs; dependencies are persisted Job dependency rows.
+`Director -> Video -> Approval Gate -> Publish -> post-publish Review` is a set of explicit application use cases. Each phase may create several Jobs. V1 has no user-authored workflow graphs; dependencies are persisted Job dependency rows.
 
 ## Architectural fitness tests
 

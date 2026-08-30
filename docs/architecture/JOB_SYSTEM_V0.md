@@ -2,7 +2,7 @@
 
 ## Decision
 
-`Job` is the durable record of asynchronous intent. PostgreSQL is the business source of truth; a queue adapter only delivers eligible work. V0 uses a fixed process: `Director -> Video -> Publish -> Review`.
+`Job` is the durable record of asynchronous intent. PostgreSQL is the business source of truth; a queue adapter only delivers eligible work. The frozen product process is `Director -> Video -> Approval Gate -> Publish -> post-publish Review`.
 
 ```mermaid
 stateDiagram-v2

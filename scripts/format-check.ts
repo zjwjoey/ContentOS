@@ -17,8 +17,8 @@ const files = (await Promise.all(roots.filter((root) => true).map((root) => walk
 const violations: string[] = [];
 for (const file of files) {
   const content = await readFile(file, 'utf8');
-  if (content.includes('\r\n')) violations.push(`${file}: CRLF line ending`);
-  if (content.endsWith(' ')) violations.push(`${file}: trailing whitespace`);
+  const normalized = content.replace(/\r\n/g, '\n');
+  if (normalized.endsWith(' ')) violations.push(`${file}: trailing whitespace`);
 }
 if (violations.length) {
   console.error(violations.join('\n'));

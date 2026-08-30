@@ -2,7 +2,9 @@
 
 ## Boundary
 
-Publisher owns destinations, account references, platform capability profiles, publishing requests, schedules, attempts, external post references and normalized metrics links. It is the only module that creates `publisher.publish` jobs. It does not execute a browser; the Publisher Worker does.
+Publisher owns destinations, account references, platform capability profiles, publishing requests, schedules, attempts and confirmed external post references. It is the only module that creates `PUBLISH` and `PUBLISH_RECONCILE` jobs. It does not execute a browser; the Publisher Worker does. Pre-publish eligibility is owned by the separate Approval Gate contract; post-publish metrics are owned by Review.
+
+The foundation persistence is private to Publisher: `publisher_accounts`, `publisher_requests`, `publisher_request_revisions`, `publisher_attempts` and `publisher_external_posts`. Other modules use public service contracts and never read these tables directly.
 
 ## Account and credential model
 
@@ -15,12 +17,14 @@ Platform adapters publish a capability profile: supported media types, title/des
 | Command | Result |
 |---|---|
 | `CreatePublishRequest` | immutable snapshot of output asset, metadata revision, account and desired schedule |
-| `SchedulePublish` | schedule policy and `publisher.publish` Job |
+| `SchedulePublish` | schedule policy and `PUBLISH` Job, after an approved exact Publish Revision |
 | `RecordPublishResult` | append-only Attempt and external post reference |
 | `RequestReauthentication` | blocks new requests and marks account state |
 | `CollectMetrics` | creates a Review-owned collection request/job dependency |
 
-Publish requests move through `DRAFT -> SCHEDULED -> QUEUED -> PUBLISHING -> PUBLISHED | FAILED | CANCELLED`. Attempts are separate and never overwritten. The worker receives `publishRequestId` and a snapshot revision, then revalidates account state, asset checksum and schedule window.
+Publish requests move through `DRAFT -> SCHEDULED -> QUEUED -> PUBLISHING -> PUBLISHED | FAILED | CANCELLED`, with `RECONCILING` as the mandatory state after an uncertain external side effect. Attempts are separate historical records and request revisions are immutable. The worker receives `publishRequestId` and a snapshot revision, then revalidates account state, asset checksum and schedule window.
+
+The `0009_publisher_foundation` migration protects enum values, revision numbering, request idempotency and external-post uniqueness. `PublisherService` locks the request aggregate before transitions, requires a reused idempotency key to match the original project/account/Revision snapshot, and requires a reconciliation result before another publish attempt after an unknown outcome. `PUBLISH_RECONCILE` is a durable worker path, not an in-process callback.
 
 ## Browser automation constraints
 
@@ -32,4 +36,12 @@ Adapters normalize at least `AUTH_EXPIRED`, `REQUIRES_VERIFICATION`, `PLATFORM_C
 
 ## Dependencies
 
-Publisher reads validated rendered Asset metadata through Asset and Project metadata snapshots through Project. It depends on Job for delivery and Review only through a metric-collection contract. It must not depend on Video implementation, FFmpeg, Director planning or AI provider SDKs.
+Publisher reads validated rendered Asset metadata through the public Asset contract and Project metadata snapshots through Project. It depends on Job for delivery, Approval for pre-publish gates and Review only through a metric-collection contract. It must not depend on Video implementation, FFmpeg, Director planning or AI provider SDKs.
+
+## Project integration
+
+Publisher exposes `PublisherProjectSummary` as a read-only public contract. The summary contains project-scoped account/request counts, normalized request status counts, confirmed external-post count and unresolved human-action count (based on each request's latest attempt); it never contains attempt diagnostics, credentials or profile references. Project lifecycle updates are coordinated by API/Worker composition roots using this summary and the public Asset Catalog contract. Before an external publish call, the Worker revalidates the project-owned READY Render Asset and frozen checksum, and rejects accounts that are not `READY`. Publisher never writes `content_projects` directly.
+
+## Integration Closure state
+
+Migration `0006_publisher_state` adds durable per-account idempotency state for the real adapters. The registry accepts only the three known platform IDs and is composed behind `PUBLISHER_REAL_ADAPTERS_ENABLED=false`. The Fake adapter remains the default development path. Approval is bound to the exact immutable Publish Revision; a browser or API outcome that is not confirmed becomes `RECONCILING`, never a blind retry.

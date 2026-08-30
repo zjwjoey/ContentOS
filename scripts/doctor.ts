@@ -9,7 +9,7 @@ const checks: Array<[string, () => Promise<void>]> = [
   ['ffmpeg executable', async () => { await run(process.env.FFMPEG_PATH || 'ffmpeg', ['-version']); }],
   ['ffprobe executable', async () => { await run(process.env.FFPROBE_PATH || 'ffprobe', ['-version']); }],
   ['ffmpeg filters', async () => { const result = await run(process.env.FFMPEG_PATH || 'ffmpeg', ['-filters']); const output = `${result.stdout}\n${result.stderr}`; for (const filter of ['drawtext', 'scale', 'crop', 'concat']) if (!output.includes(filter)) throw new Error(`missing filter ${filter}`); }],
-  ['ffmpeg codecs', async () => { const result = await run(process.env.FFMPEG_PATH || 'ffmpeg', ['-codecs']); const output = `${result.stdout}\n${result.stderr}`; for (const codec of ['mpeg4', 'aac']) if (!output.includes(codec)) throw new Error(`missing codec ${codec}`); }],
+  ['ffmpeg codecs', async () => { const result = await run(process.env.FFMPEG_PATH || 'ffmpeg', ['-encoders']); const output = `${result.stdout}\n${result.stderr}`; for (const codec of ['libx264', 'aac']) if (!output.includes(codec)) throw new Error(`missing encoder ${codec}`); }],
   ['subtitle font', async () => { const font = process.env.FFMPEG_FONT_FILE || (process.platform === 'win32' ? 'C:\\Windows\\Fonts\\msyh.ttc' : ''); if (font) await access(font); }],
 ];
 let failed = 0;

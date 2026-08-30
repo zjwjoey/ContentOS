@@ -1,8 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDatabase, migrateDown, migrateUp } from '../../packages/database/src/index.js';
+import { readdir } from 'node:fs/promises';
+import { createDatabase, migrateDown, migrateUp, resolveMigrationsDirectory } from '../../packages/database/src/index.js';
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55432/contentos_dev';
+
+test('migration files form a complete ordered 0001 through 0018 chain', async () => {
+  const names = (await readdir(resolveMigrationsDirectory())).filter((file) => /^\d+_.+\.sql$/.test(file) && !file.endsWith('.down.sql')).sort();
+  assert.deepEqual(names.map((file) => file.slice(0, 4)), Array.from({ length: 18 }, (_, index) => String(index + 1).padStart(4, '0')));
+});
+
+test('migration directory resolution is independent of the process working directory', () => {
+  const originalCwd = process.cwd();
+  try {
+    process.chdir('apps/api');
+    assert.match(resolveMigrationsDirectory(), /migrations$/);
+    assert.ok(resolveMigrationsDirectory().endsWith('migrations'));
+  } finally {
+    process.chdir(originalCwd);
+  }
+});
 
 test('database migrations create the first vertical-slice schema and are idempotent', async () => {
   const db = await createDatabase(databaseUrl);
@@ -50,6 +67,25 @@ test('migration down removes the latest migration and up restores it', async () 
     assert.equal(down.removed, 1);
     const restored = await migrateUp(db);
     assert.equal(restored.applied, 1);
+  } finally {
+    await db.end();
+  }
+});
+
+test('Director V1 and AI provenance migrations create bounded append-only tables and constraints', async () => {
+  const db = await createDatabase(databaseUrl);
+  try {
+    await migrateUp(db);
+    const tables = await db.query<{ table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('ai_model_profiles', 'ai_prompt_versions', 'ai_runs', 'director_briefs', 'director_project_state', 'director_script_revisions', 'director_scripts', 'director_storyboard_revisions', 'director_storyboards') order by table_name");
+    assert.deepEqual(tables.rows.map((row) => row.table_name), [
+      'ai_model_profiles', 'ai_prompt_versions', 'ai_runs', 'director_briefs', 'director_project_state',
+      'director_script_revisions', 'director_scripts', 'director_storyboard_revisions', 'director_storyboards',
+    ]);
+    const constraints = await db.query<{ constraint_name: string }>("select constraint_name from information_schema.table_constraints where table_schema = 'public' and constraint_name in ('director_script_revisions_source_job_key', 'director_storyboard_revisions_source_job_key', 'director_script_revisions_aggregate_revision_key', 'director_storyboard_revisions_aggregate_revision_key') order by constraint_name");
+    assert.deepEqual(constraints.rows.map((row) => row.constraint_name), [
+      'director_script_revisions_aggregate_revision_key', 'director_script_revisions_source_job_key',
+      'director_storyboard_revisions_aggregate_revision_key', 'director_storyboard_revisions_source_job_key',
+    ]);
   } finally {
     await db.end();
   }

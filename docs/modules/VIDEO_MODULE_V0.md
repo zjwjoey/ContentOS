@@ -2,7 +2,13 @@
 
 ## Boundary
 
-Video owns edit planning, immutable edit manifests, render requests, render records and render validation. It is the only module allowed to create `video.render` jobs. It does not execute FFmpeg; the Video Worker does.
+Video owns Project Video, Standalone Quick Edit, shared Video Adjustment, immutable edit manifests, render requests, render records and render validation. It is the only module allowed to create `video.render` jobs. It does not execute FFmpeg; the Video Worker does.
+
+## Product boundaries
+
+Project Video consumes an approved Director pair. Standalone Quick Edit consumes READY Video/Voice Assets inside a `STANDALONE` Video Workspace and does not require a Content Project. Both paths share Planner output, Manifest Revision, Exact Render, Video Worker and FFmpeg.
+
+Video Adjustment supports TRIM, REMOVE, REORDER, REPLACE and REROLL. The historical Project-scoped Quick Edit route is a deprecated compatibility alias for this capability.
 
 ## Inputs and outputs
 
@@ -13,7 +19,7 @@ Video owns edit planning, immutable edit manifests, render requests, render reco
 | `AcceptRenderResult` | active attempt, valid staged output | validated canonical output Asset + Render completion |
 | `SupersedeManifest` | a requested creative change | new revision; previous remains auditable |
 
-The render payload contains only `renderId`, `manifestId`, `manifestVersion`, `projectId` and correlation data. The worker fetches the manifest by exact version. It must fail terminally if it cannot resolve required assets, expected checksums or the target profile.
+The render payload contains `renderId`, `manifestId`, `manifestVersion`, one of `projectId` or `workspaceId`, and correlation data. The worker fetches the manifest by exact version. It must fail terminally if it cannot resolve required assets, expected checksums or the target profile.
 
 ## Render lifecycle
 
@@ -25,7 +31,7 @@ V1 uses direct FFmpeg invocations composed by a thin internal command builder. T
 
 The Video Worker declares the supported FFmpeg binary, codecs, filters and required font files at startup. Missing capabilities are structured terminal errors; a successful process exit is not sufficient evidence of a valid captioned render.
 
-Validation records duration, dimensions, codec/container, checksum, output size, source manifest version and tool version. A render is publishable only after validation and Review policy allow it.
+Validation records duration, dimensions, codec/container, checksum, output size, source manifest version and tool version. A render is publishable only after validation and an Approval Gate allow it.
 
 ## Dependencies
 

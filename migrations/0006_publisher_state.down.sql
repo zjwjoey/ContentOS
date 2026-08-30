@@ -1,0 +1,1 @@
+drop table publisher_publication_states;

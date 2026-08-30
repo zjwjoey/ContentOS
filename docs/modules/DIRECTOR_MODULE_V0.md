@@ -22,4 +22,4 @@ AI output is untrusted input until schema validation, policy validation and huma
 
 ## Dependencies
 
-Director depends on Project context, AI application ports and Asset query references for storyboard source choices. It must not create FFmpeg commands, publish directly, own platform accounts or bypass Review policy.
+Director depends on Project context, AI application ports and Asset query references for storyboard source choices. It must not create FFmpeg commands, publish directly, own platform accounts or bypass Approval policy.

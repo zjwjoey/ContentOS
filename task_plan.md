@@ -128,6 +128,19 @@ Architecture V0 — formal design documentation and self-review.
 - [x] Commit and push.
 - **Status:** complete; Slices 3, 4 and 6 are implemented, verified and pushed. Slice 5 real platform adapters explicitly deferred.
 
+### Phase 22: Director V1 implementation
+- [x] Create isolated `codex/director-v1` worktree from `main` and verify the clean 41-test baseline with `contentos_director_dev`.
+- [x] Record the migration-state conflict caused by sharing `contentos_dev` across unreconciled branches.
+- [x] Write and review the Director V1 professional design and implementation plan.
+- [x] Freeze the Application Worker ADR and record the Director/AI contract gate.
+- [x] Add append-only Director V1 and AI provenance migrations/services.
+- [x] Add fake-provider AI infrastructure and AI Run provenance service.
+- [x] Add Director V1 API.
+- [x] Add Video provenance bridge.
+- [x] Add minimal Operator UI.
+- [x] Run Director→Video E2E, final verification gate and report.
+- **Status:** Phase 22 implementation complete; fake-provider E2E and all automated gates are green, real Provider Sandbox remains explicitly BLOCKED.
+
 ## Key constraints
 - Only Phase-1 projects are in scope: MatrixMedia, short-video-factory, MoneyPrinterTurbo, AutoSocial, and Postiz.
 - Research must be based on source evidence, not README-only summaries.
@@ -153,3 +166,116 @@ Architecture V0 — formal design documentation and self-review.
 | Initial clone command used a not-yet-created working directory | 1 | Create the research directories from the workspace root before cloning. |
 | MoneyPrinterTurbo shallow clone exceeded the command execution window | 3 | Verify its immutable SHA and selected source tree through read-only GitHub API/raw endpoints; do not use incomplete clone remnants as evidence. |
 | PowerShell interpolation treated a colon after a variable name as a drive qualifier | 2 | Use string concatenation or `${variable}` in validation scripts. |
+
+## Phase 20: Video Direction Correction + Standalone Quick Edit V1
+
+- [x] Record baseline and ownership decision — **DONE (audit and plan recorded 2026-08-30)**
+- [x] Add workspace ownership schema and scope-aware contracts — **DONE**
+- [x] Reclassify Project Quick Edit as Video Adjustment with compatibility alias — **DONE**
+- [x] Add REPLACE and REROLL — **DONE**
+- [x] Upgrade Random Montage Planner V2 and H.264/AAC renderer invariants — **DONE**
+- [x] Implement no-project Standalone Quick Edit session/API — **DONE**
+- [x] Implement Standalone Quick Edit web flow — **DONE**
+- [x] Add full regression tests, docs and correction report — **DONE (206/206 and final build gate passed)**
+
+Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-direction-correction.md`.
+
+
+## Slice ③ Project Center — 2026-08-22
+
+- [x] 读取 Slice ② 验收结果和现有模块公开接口。
+- [x] 完成视觉设计选择：A3 健康度+待处理、B2 左侧阶段栏、C1 状态摘要+快捷动作。
+- [x] 完成并提交设计稿：`docs/superpowers/specs/2026-08-22-project-center-design.md`（commit `c319e62`）。
+- [ ] 用户审阅并确认设计稿。
+- [ ] 编写实施计划并获得执行方式确认。
+- [ ] 实现 Project Center 聚合 Contract/API。
+- [ ] 实现健康度、阶段状态和待处理事项推导。
+- [ ] 实现桌面横屏 Web 页面和响应式收窄布局。
+- [ ] 添加 API、规则、Web 回归测试并执行完整 Gate。
+
+- [x] Slice ③ Contract、Job 安全摘要、健康度规则、聚合 API、横屏总控页和回归测试已完成。
+- [x] 隔离数据库全量 Gate：128 tests passed；typecheck、lint、Web build、diff-check 通过。
+- [x] 已确认格式检查失败来自 Windows 工作区既有 CRLF，不是 Slice ③ 文件特有问题；主线工作区同样复现。
+
+约束：基于已验收分支 `codex/publisher-project-integration`；不跨读模块私表；不在 Project Center 重复执行模块写操作；不启动 Slice ④、⑤、⑥。
+
+## Slice ③ final review repair — 2026-08-23
+
+- [x] RED：覆盖成功 Render 在源素材不可用时仍可复用。
+- [x] RED：覆盖租约恢复后旧 attempt 不能覆盖新 attempt，并使用隔离输出路径。
+- [x] RED：覆盖 Approval 读取失败时不生成伪 MISSING 动作。
+- [x] RED：覆盖旧 READY Asset 不能掩盖当前 Render 运行状态。
+- [x] 将 Director→Video 全链路 E2E 纳入标准测试命令。
+- [x] RED/GREEN：覆盖租约恢复后、下一次 claim 前的旧 attempt 落库窗口。
+- [x] RED/GREEN：Asset 导入与 Render 完成进入 Job 公共 attempt fence，旧 attempt 不产生 READY Asset。
+- [x] RED/GREEN：取消信号从 JobRunner 传播到 FFmpeg，取消落为 CANCELLED 且不重试。
+- [x] 清理每个 FFmpeg attempt 的临时输出文件。
+- [x] RED/GREEN：4 个并发 attempt fence 不再因嵌套借连接耗尽 `max=4` 连接池。
+- [x] RED/GREEN：Asset、Render、JobAttempt、Job 最终化使用同一 PostgreSQL 事务，失败整体回滚。
+- [x] RED/GREEN：Video 公开 Render 转换只接受不可伪造的活跃 Job attempt scope；取消 Render 落为 CANCELLED。
+- [x] RED/GREEN：正在运行的 FFmpeg 收到 abort 后终止并删除 `.part.mp4`。
+- [x] RED/GREEN：崩溃 Worker 的 CANCEL_REQUESTED lease recovery 通过 Video 公共 callback 原子关闭 Render；缺 callback 时保持待取消而不伪造终态。
+- [x] RED/GREEN：当前 attempt 的 startRender=false 抛出 invariant error，不再把 Job 记为成功。
+- [x] 文件 hash/probe/stage/promotion 移到短数据库事务之前；abort 等待子进程 close 后再返回。
+- [x] cancellation callback 返回 handled；混合 Job 类型不会被错误收敛为 CANCELLED。
+- [x] lease recovery 改为逐 Job 独立事务；poison callback 只回滚自身，不阻塞其他 Job。
+- [x] Prepared Asset 改为模块内部 branded capability，并验证 storage owner 与 blob 存在。
+- [x] 组合式 Video Worker 启动即执行并周期运行 lease recovery，shutdown 停止并等待；真实 CLI 与 dev-operator 已接线。
+- [x] Video Worker 启动即消费并周期轮询 PostgreSQL 中的待运行 `VIDEO_RENDER` Jobs；E2E 不再手工投递。
+- [x] RED/GREEN：首轮消费长期运行时，lease reconciliation 仍按独立周期执行且 Worker 启动不被阻塞。
+- [x] 更新 ADR/设计证据并完成格式、类型、Lint、构建、全量测试、doctor、diff-check 与独立复审。
+
+**Status:** complete; 180/180 tests and final independent review passed
+
+## ContentOS Integration Closure + Unified Product Flow planning — 2026-08-29
+
+- [x] 恢复并核对现有规划文件、治理文档和分支状态。
+- [x] 确认第一步终点：只推送 `integration/contentos-v1`，不自动合并 `main`。
+- [x] 核验分支祖先关系和迁移编号，确认 Project Center 已包含 Director V1 与 Publisher Project Integration。
+- [x] 比较三种集成方式并选择以 `codex/project-center@d257229` 为集成基线。
+- [x] 确认 `0006_publisher_state` 与真实 Adapter 代码在第一步集成，但保持默认关闭且不做 Live Smoke。
+- [x] 冻结第一步 Integration Closure 与第二步 Unified Product Flow 的设计边界、数据流和 Gate。
+- [x] 写入设计文档 `docs/superpowers/specs/2026-08-29-contentos-integration-and-unified-flow-design.md`。
+- [x] 用户审阅并确认书面设计。
+- [x] 分别编写第一步和第二步实施计划并完成自检。
+- [ ] 用户选择后续执行方式。
+
+**Status:** written design and both implementation plans complete; awaiting execution-mode selection; no business code changed
+
+## Integration Closure execution — 2026-08-29
+
+- [x] Created `E:\ContentOS\.worktrees\integration-contentos-v1` from the accepted Project Center head and recorded the baseline.
+- [x] Converged `main@752e8c4` with an explicit merge commit.
+- [x] Restored Publisher migration `0006` and added clean/upgrade migration matrix coverage.
+- [x] Extended Publisher contracts, browser-session and credential boundaries.
+- [x] Added durable Douyin and WeChat Channels adapters with idempotency and reconciliation.
+- [x] Composed the real adapters behind a disabled-by-default Publisher Worker registry.
+- [x] Added the integrated Director→Video→Approval→Fake Publisher E2E and retry/auth/reconciliation scenarios.
+- [x] Synchronized architecture, governance, local setup and Publisher documentation; created the acceptance report.
+- [x] Run the final lint/build/doctor/secret scan and full acceptance gate.
+- [ ] Push `integration/contentos-v1` and wait for user acceptance.
+
+**Status:** implementation and final repository gate complete; push pending
+
+## Phase 23: Video Direction Correction Review Repairs — 2026-08-30
+
+- [x] Add regression tests for planner bounds, REROLL safety, codec enforcement, output ownership, asset API redaction, project workspace propagation and standalone worker coverage.
+- [x] Fix planner and adjustment invariants without changing the frozen product scope.
+- [x] Fix renderer codec contract and workspace output role.
+- [x] Remove storage-key leakage and complete Project workspace propagation.
+- [x] Add standalone upload/import/render worker E2E coverage.
+- [x] Run final format/lint/typecheck/build/doctor/diff-check gate and commit; do not push or merge.
+
+**Status:** complete; review repairs implemented, verified and committed as `c0943ff`; no push or merge
+
+## Main Merge Finalization — 2026-08-30
+
+- [x] Verify `codex/video-direction-correction` source head, `origin/main` base head and PR #3 metadata.
+- [x] Confirm Stage 2, Video Quick Edit and Video Direction Correction accepted baselines are ancestors.
+- [x] Recheck migrations `0001`–`0018`, up/down pairs and the `0016` rollback boundary.
+- [x] Run migration matrix **4/4**, full test suite **211/211**, format, lint, typecheck, root/Web builds, Doctor and diff-check.
+- [x] Check secret/artifact safety and real-adapter default-off behavior.
+- [x] Synchronize finalization documentation and prepare one docs-only finalization commit.
+- [x] Push the feature branch and recheck PR #3; do not merge, force-push, delete branches/worktrees or alter `main`.
+
+**Status:** complete; PR #3 ready for human merge into `main`

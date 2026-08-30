@@ -20,5 +20,6 @@ These rules are non-negotiable unless changed by a superseding ADR.
 16. API controllers are thin, versioned and do not run workers.
 17. External publishing uncertainty is explicit; the system must reconcile before retrying a possibly successful post.
 18. Observability metadata is propagated across API, Job, worker and external adapter boundaries.
-19. V1 workflow is fixed: Director, Video, Publisher, then Review; no generic workflow engine.
+19. V1 workflow is fixed: Director, Video, Approval Gate, Publisher, then post-publish Review; no generic workflow engine.
+20. Approval decisions bind an exact target revision; Review owns post-publish metrics and recommendations only.
 20. New dependencies that violate these invariants require an ADR before introduction.

@@ -2,5 +2,6 @@
   "name": "@contentos/worker-publisher",
   "private": true,
   "version": "0.1.0",
-  "type": "module"
+  "type": "module",
+  "scripts": { "dev": "tsx src/dev-main.ts", "start": "tsx src/main.ts" }
 }

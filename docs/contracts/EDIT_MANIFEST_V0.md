@@ -10,7 +10,7 @@
 |---|---|
 | `schemaVersion` | literal `EDIT_MANIFEST_V0` |
 | `manifestId`, `revision` | stable identifier and immutable revision |
-| `projectId`, `storyboardRevisionId` | source provenance |
+| `projectId`, `workspaceId`, `storyboardRevisionId` | source provenance; exactly one of `projectId` or `workspaceId` owns a persisted manifest |
 | `target` | aspect ratio, width/height, fps, audio and output container profile |
 | `timeline` | ordered tracks and clips with explicit timing |
 | `sources` | immutable Asset IDs, derivative IDs and expected checksums |
@@ -32,6 +32,7 @@
 6. User-visible text, transition selection, crop and ordering are explicit values, never renderer defaults.
 7. The renderer rejects unsupported schema or operations rather than approximating them.
 8. Secrets, absolute workstation paths and browser/platform state are forbidden.
+9. Standalone manifests use `workspaceId` and have no fake Content Project; Project manifests use `projectId`.
 
 ## Compatibility
 

@@ -3,5 +3,10 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "scripts": { "dev": "tsx src/main.ts" }
+  "scripts": {
+    "dev": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@fastify/multipart": "9.0.3"
+  }
 }

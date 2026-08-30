@@ -18,7 +18,7 @@ Project, Director, Asset, Video, Publisher, Review, Job and AI have exclusive ow
 
 ## 5. Jobs
 
-Jobs are durable records with attempts, leases, events, retry policy, cancellation and idempotency. They run the V1 fixed sequence: Director -> Video -> Publish -> Review.
+Jobs are durable records with attempts, leases, events, retry policy, cancellation and idempotency. They run the frozen sequence: Director -> Video -> Approval Gate -> Publish -> post-publish Review.
 
 ## 6. Video
 

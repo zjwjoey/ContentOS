@@ -1,10 +1,24 @@
+import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
 import type { Database } from './client.js';
 
-const migrationsDirectory = join(process.cwd(), 'migrations');
+const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 
-export async function migrateUp(db: Database): Promise<{ applied: number }> {
+export function resolveMigrationsDirectory(explicitDirectory?: string): string {
+  if (explicitDirectory?.trim()) return resolve(explicitDirectory);
+  const candidates = [
+    resolve(moduleDirectory, '../../../migrations'),
+    resolve(moduleDirectory, '../../../../migrations'),
+    resolve(process.cwd(), 'migrations'),
+  ];
+  const directory = candidates.find((candidate) => existsSync(candidate));
+  if (!directory) throw new Error(`Migrations directory not found; checked ${candidates.join(', ')}`);
+  return directory;
+}
+
+export async function migrateUp(db: Database, migrationsDirectory = resolveMigrationsDirectory()): Promise<{ applied: number }> {
   const client = await db.connect();
   try {
     await client.query("select pg_advisory_lock(hashtext('contentos:migrations'))");
@@ -32,7 +46,7 @@ export async function migrateUp(db: Database): Promise<{ applied: number }> {
   }
 }
 
-export async function migrateDown(db: Database): Promise<{ removed: number }> {
+export async function migrateDown(db: Database, migrationsDirectory = resolveMigrationsDirectory()): Promise<{ removed: number }> {
   const client = await db.connect();
   try {
     await client.query("select pg_advisory_lock(hashtext('contentos:migrations'))");

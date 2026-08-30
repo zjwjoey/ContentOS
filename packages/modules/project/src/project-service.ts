@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 
 export interface ProjectRecord { id: string; name: string; status: string; metadata: unknown; createdAt: string; updatedAt: string; }
+export interface ProjectPublishingFacts { hasPublishableAsset: boolean; publishedRequestCount: number; }
 
 function mapProject(row: Record<string, unknown>): ProjectRecord {
   return { id: String(row.id), name: String(row.name), status: String(row.status), metadata: row.metadata, createdAt: new Date(String(row.created_at)).toISOString(), updatedAt: new Date(String(row.updated_at)).toISOString() };
@@ -25,5 +26,23 @@ export class ProjectService {
   async setCurrentDirectorRevision(projectId: string, revisionId: string): Promise<void> {
     const result = await this.db.query('update content_projects set current_director_revision_id = $2, updated_at = now() where id = $1', [projectId, revisionId]);
     if (!result.rowCount) throw new Error(`Project ${projectId} not found`);
+  }
+
+  async syncPublishingStatus(projectId: string, facts: ProjectPublishingFacts): Promise<ProjectRecord> {
+    if (!Number.isInteger(facts.publishedRequestCount) || facts.publishedRequestCount < 0) throw new Error('publishedRequestCount must be a non-negative integer');
+    const updated = await this.db.query(`
+      update content_projects
+      set status = case
+        when status in ('ARCHIVED', 'REVIEWED', 'PUBLISHED') then status
+        when $2::integer > 0 then 'PUBLISHED'
+        when $3::boolean and status in ('DRAFT', 'IN_PRODUCTION') then 'READY_TO_PUBLISH'
+        else status
+      end,
+      updated_at = now()
+      where id = $1
+      returning *
+    `, [projectId, facts.publishedRequestCount, facts.hasPublishableAsset]);
+    if (!updated.rowCount) throw new Error(`Project ${projectId} not found`);
+    return mapProject(updated.rows[0] as Record<string, unknown>);
   }
 }

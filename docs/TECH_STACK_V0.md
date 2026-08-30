@@ -16,7 +16,7 @@ This is the engineering initialization target. It freezes architectural directio
 | Asset storage | Storage adapter; local filesystem first, S3-compatible later | **CONFIRMED boundary / PROVISIONAL backend** | Spike 03 validates local promotion only |
 | Testing | Node test runner during initialization; contract/unit/integration/fixture layers | **CONFIRMED** | Four Spikes and Test Strategy V0 |
 | Logging/tracing | Pino structured logs + OpenTelemetry-compatible propagation | **CONFIRMED** | Redaction and correlation are invariants |
-| Process model | API/Core plus separately supervised Video and Publisher Workers | **CONFIRMED** | Worker Spike and Worker Architecture V0 |
+| Process model | API/Core plus separately supervised Director, Video and Publisher Workers | **ACCEPTED WITH CONDITIONS** | ADR-011; Director Worker is limited to two durable AI Job types and must pass composition/recovery gates |
 | Desktop | No Electron-first V0; Web UI + local/server backend | **CONFIRMED** | Desktop packaging deferred |
 
 ## Backend decision

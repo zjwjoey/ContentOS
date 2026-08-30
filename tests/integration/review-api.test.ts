@@ -6,7 +6,7 @@ import { buildApi } from '../../apps/api/src/app.js';
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://contentos_dev@127.0.0.1:55432/contentos_dev';
 
-test('Review API creates, approves and rejects decisions with guarded transitions', async () => {
+test('Review API keeps historical reads but rejects new pre-publish writes', async () => {
   const db = await createDatabase(databaseUrl);
   await migrateUp(db);
   const project = await new ProjectService(db).create('Review API');
@@ -15,20 +15,12 @@ test('Review API creates, approves and rejects decisions with guarded transition
     const invalid = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/reviews`, payload: { targetType: 'BAD', targetId: '', status: 'PENDING', reviewer: '' } });
     assert.equal(invalid.statusCode, 422);
     const created = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/reviews`, payload: { targetType: 'RENDER', targetId: 'render-api', status: 'PENDING', reviewer: 'operator' } });
-    assert.equal(created.statusCode, 201);
-    assert.equal(created.json().status, 'PENDING');
+    assert.equal(created.statusCode, 410);
+    assert.equal(created.json().error.code, 'REVIEW_LEGACY_READ_ONLY');
     const target = `/api/v1/projects/${project.id}/reviews/RENDER/render-api`;
-    assert.equal((await app.inject({ method: 'GET', url: `${target}/current` })).statusCode, 200);
-    assert.equal((await app.inject({ method: 'POST', url: `${target}/approve`, payload: { reviewer: 'lead' } })).statusCode, 200);
-    assert.equal((await app.inject({ method: 'POST', url: `${target}/approve`, payload: { reviewer: 'lead' } })).statusCode, 409);
-
-    const rejected = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/reviews`, payload: { targetType: 'PUBLISH', targetId: 'publish-api', status: 'PENDING', reviewer: 'operator' } });
-    assert.equal(rejected.statusCode, 201);
-    const rejectUrl = `/api/v1/projects/${project.id}/reviews/PUBLISH/publish-api/reject`;
-    assert.equal((await app.inject({ method: 'POST', url: rejectUrl, payload: { reviewer: 'lead' } })).statusCode, 422);
-    const result = await app.inject({ method: 'POST', url: rejectUrl, payload: { reviewer: 'lead', reason: 'Needs evidence' } });
-    assert.equal(result.statusCode, 200);
-    assert.equal(result.json().status, 'REJECTED');
+    assert.equal((await app.inject({ method: 'GET', url: `${target}/current` })).statusCode, 404);
+    assert.equal((await app.inject({ method: 'POST', url: `${target}/approve`, payload: { reviewer: 'lead' } })).statusCode, 410);
+    assert.equal((await app.inject({ method: 'POST', url: `${target}/reject`, payload: { reviewer: 'lead', reason: 'Needs evidence' } })).statusCode, 410);
   } finally {
     await app.close();
     await db.query('delete from review_decisions where project_id = $1', [project.id]);

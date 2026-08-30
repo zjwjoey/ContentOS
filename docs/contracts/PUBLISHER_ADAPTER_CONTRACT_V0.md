@@ -31,3 +31,9 @@ Browser/worker crashes are mapped to `UNKNOWN_EXTERNAL_STATE` when a side effect
 ## Security and isolation
 
 One browser context and profile directory per account/environment. Credentials, cookies, authorization headers, private URLs and tokens never enter ordinary logs or Job payloads. Failure evidence is redacted and access-controlled.
+
+## Integration Closure additions
+
+The current contract accepts `fake-platform`, `douyin` and `wechat-channels`. A publish snapshot may carry immutable media paths and SHA-256 fields; `createPublishSnapshotDigest` binds the reviewed account, platform, asset and content fields. Credentials are resolved from an `env://NAME` reference inside the Publisher Worker and exist only in process memory.
+
+`UNKNOWN_EXTERNAL_STATE` always enters reconciliation before another publish attempt. Adapter code is implemented and simulated against fakes; **IMPLEMENTED != LIVE-VERIFIED**. Live verification remains an explicit, separately authorized gate.
