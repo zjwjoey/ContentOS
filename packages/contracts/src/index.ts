@@ -40,6 +40,16 @@ export type {
 } from './publisher.js';
 export { validateReviewDecision } from './review.js';
 export type { ReviewDecisionV0, ReviewStatus, ReviewTargetType } from './review.js';
+export { validateMetricSnapshotV1, validateReviewAnalysisReportV1 } from './review-analytics.js';
+export type {
+  MetricSnapshotSource,
+  MetricSnapshotV1,
+  MetricValuesV1,
+  ReviewAnalysisReportV1,
+  ReviewInsightV1,
+  ReviewRecommendationPriority,
+  ReviewRecommendationV1,
+} from './review-analytics.js';
 export { validateApprovalDecision } from './approval.js';
 export type { ApprovalDecisionV0, ApprovalStatus, ApprovalTargetType, LegacyApprovalTargetType } from './approval.js';
 export type {
