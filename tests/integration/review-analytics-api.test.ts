@@ -12,7 +12,11 @@ test('Review Analytics API validates input and exposes project-scoped routes', a
     await migrateUp(db);
     const missing = await app.inject({ method: 'GET', url: '/api/v1/projects/missing/reviews/analytics' });
     assert.equal(missing.statusCode, 404);
-    const invalid = await app.inject({ method: 'POST', url: '/api/v1/projects/project/reviews/analytics/posts/post/analyze', payload: { metricSnapshotIds: [] } });
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/project/reviews/analytics/posts/post/analyze',
+      payload: { metricSnapshotIds: [] },
+    });
     assert.equal(invalid.statusCode, 422);
     assert.equal((invalid.json() as { error: { code: string } }).error.code, 'VALIDATION_ERROR');
   } finally {
@@ -20,4 +24,3 @@ test('Review Analytics API validates input and exposes project-scoped routes', a
     await db.end();
   }
 });
-

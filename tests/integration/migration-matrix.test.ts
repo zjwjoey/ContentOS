@@ -131,14 +131,17 @@ test('migration 0019 creates review analytics tables with ownership and uniquene
       const tables = await db.query<{ table_name: string }>(
         "select table_name from information_schema.tables where table_schema = current_schema() and table_name in ('review_metric_snapshots', 'review_analysis_reports') order by table_name",
       );
-      assert.deepEqual(tables.rows.map((row) => row.table_name), ['review_analysis_reports', 'review_metric_snapshots']);
+      assert.deepEqual(
+        tables.rows.map((row) => row.table_name),
+        ['review_analysis_reports', 'review_metric_snapshots'],
+      );
       const constraints = await db.query<{ constraint_name: string }>(
         "select constraint_name from information_schema.table_constraints where table_schema = current_schema() and constraint_name in ('review_metric_snapshots_external_source_capture_key', 'review_metric_snapshots_metrics_check') order by constraint_name",
       );
-      assert.deepEqual(constraints.rows.map((row) => row.constraint_name), [
-        'review_metric_snapshots_external_source_capture_key',
-        'review_metric_snapshots_metrics_check',
-      ]);
+      assert.deepEqual(
+        constraints.rows.map((row) => row.constraint_name),
+        ['review_metric_snapshots_external_source_capture_key', 'review_metric_snapshots_metrics_check'],
+      );
     } finally {
       await db.end();
     }

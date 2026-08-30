@@ -7,7 +7,10 @@ const databaseUrl = process.env.DATABASE_URL || 'postgresql://contentos_dev:chan
 
 test('migration files form a complete ordered 0001 through 0019 chain', async () => {
   const names = (await readdir(resolveMigrationsDirectory())).filter((file) => /^\d+_.+\.sql$/.test(file) && !file.endsWith('.down.sql')).sort();
-  assert.deepEqual(names.map((file) => file.slice(0, 4)), Array.from({ length: 19 }, (_, index) => String(index + 1).padStart(4, '0')));
+  assert.deepEqual(
+    names.map((file) => file.slice(0, 4)),
+    Array.from({ length: 19 }, (_, index) => String(index + 1).padStart(4, '0')),
+  );
 });
 
 test('migration directory resolution is independent of the process working directory', () => {
@@ -28,8 +31,23 @@ test('database migrations create the first vertical-slice schema and are idempot
     const second = await migrateUp(db);
     assert.ok(first.applied >= 0);
     assert.equal(second.applied, 0);
-    const tables = await db.query<{ table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('content_projects','assets','jobs','job_attempts','job_dependencies','edit_manifests','renders','review_metric_snapshots','review_analysis_reports') order by table_name");
-    assert.deepEqual(tables.rows.map((row) => row.table_name), ['assets', 'content_projects', 'edit_manifests', 'job_attempts', 'job_dependencies', 'jobs', 'renders', 'review_analysis_reports', 'review_metric_snapshots']);
+    const tables = await db.query<{ table_name: string }>(
+      "select table_name from information_schema.tables where table_schema = 'public' and table_name in ('content_projects','assets','jobs','job_attempts','job_dependencies','edit_manifests','renders','review_metric_snapshots','review_analysis_reports') order by table_name",
+    );
+    assert.deepEqual(
+      tables.rows.map((row) => row.table_name),
+      [
+        'assets',
+        'content_projects',
+        'edit_manifests',
+        'job_attempts',
+        'job_dependencies',
+        'jobs',
+        'renders',
+        'review_analysis_reports',
+        'review_metric_snapshots',
+      ],
+    );
   } finally {
     await db.end();
   }
@@ -49,9 +67,32 @@ test('project, asset, job and manifest records retain project traceability', asy
     await db.query('delete from jobs where project_id = $1', [projectId]);
     await db.query('delete from content_projects where id = $1', [projectId]);
     await db.query('insert into content_projects (id, status, metadata) values ($1, $2, $3)', [projectId, 'DRAFT', '{}']);
-    await db.query('insert into assets (id, project_id, kind, checksum, byte_size, storage_key, lifecycle, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8)', [assetId, projectId, 'VIDEO', 'sha256:test', 10, 'staging/test', 'STAGED', '{}']);
-    await db.query('insert into jobs (id, project_id, type, state, idempotency_key, payload) values ($1, $2, $3, $4, $5, $6)', [jobId, projectId, 'video.render', 'QUEUED', 'project-test-001:video.render:1', '{}']);
-    await db.query('insert into edit_manifests (id, project_id, revision, schema_version, manifest, status) values ($1, $2, $3, $4, $5, $6)', ['manifest-test-001', projectId, 1, 'EDIT_MANIFEST_V0', '{}', 'PERSISTED']);
+    await db.query('insert into assets (id, project_id, kind, checksum, byte_size, storage_key, lifecycle, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8)', [
+      assetId,
+      projectId,
+      'VIDEO',
+      'sha256:test',
+      10,
+      'staging/test',
+      'STAGED',
+      '{}',
+    ]);
+    await db.query('insert into jobs (id, project_id, type, state, idempotency_key, payload) values ($1, $2, $3, $4, $5, $6)', [
+      jobId,
+      projectId,
+      'video.render',
+      'QUEUED',
+      'project-test-001:video.render:1',
+      '{}',
+    ]);
+    await db.query('insert into edit_manifests (id, project_id, revision, schema_version, manifest, status) values ($1, $2, $3, $4, $5, $6)', [
+      'manifest-test-001',
+      projectId,
+      1,
+      'EDIT_MANIFEST_V0',
+      '{}',
+      'PERSISTED',
+    ]);
     const result = await db.query<{ count: string }>('select count(*)::text as count from jobs where project_id = $1', [projectId]);
     assert.equal(result.rows[0]?.count, '1');
   } finally {
@@ -76,16 +117,35 @@ test('Director V1 and AI provenance migrations create bounded append-only tables
   const db = await createDatabase(databaseUrl);
   try {
     await migrateUp(db);
-    const tables = await db.query<{ table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('ai_model_profiles', 'ai_prompt_versions', 'ai_runs', 'director_briefs', 'director_project_state', 'director_script_revisions', 'director_scripts', 'director_storyboard_revisions', 'director_storyboards') order by table_name");
-    assert.deepEqual(tables.rows.map((row) => row.table_name), [
-      'ai_model_profiles', 'ai_prompt_versions', 'ai_runs', 'director_briefs', 'director_project_state',
-      'director_script_revisions', 'director_scripts', 'director_storyboard_revisions', 'director_storyboards',
-    ]);
-    const constraints = await db.query<{ constraint_name: string }>("select constraint_name from information_schema.table_constraints where table_schema = 'public' and constraint_name in ('director_script_revisions_source_job_key', 'director_storyboard_revisions_source_job_key', 'director_script_revisions_aggregate_revision_key', 'director_storyboard_revisions_aggregate_revision_key') order by constraint_name");
-    assert.deepEqual(constraints.rows.map((row) => row.constraint_name), [
-      'director_script_revisions_aggregate_revision_key', 'director_script_revisions_source_job_key',
-      'director_storyboard_revisions_aggregate_revision_key', 'director_storyboard_revisions_source_job_key',
-    ]);
+    const tables = await db.query<{ table_name: string }>(
+      "select table_name from information_schema.tables where table_schema = 'public' and table_name in ('ai_model_profiles', 'ai_prompt_versions', 'ai_runs', 'director_briefs', 'director_project_state', 'director_script_revisions', 'director_scripts', 'director_storyboard_revisions', 'director_storyboards') order by table_name",
+    );
+    assert.deepEqual(
+      tables.rows.map((row) => row.table_name),
+      [
+        'ai_model_profiles',
+        'ai_prompt_versions',
+        'ai_runs',
+        'director_briefs',
+        'director_project_state',
+        'director_script_revisions',
+        'director_scripts',
+        'director_storyboard_revisions',
+        'director_storyboards',
+      ],
+    );
+    const constraints = await db.query<{ constraint_name: string }>(
+      "select constraint_name from information_schema.table_constraints where table_schema = 'public' and constraint_name in ('director_script_revisions_source_job_key', 'director_storyboard_revisions_source_job_key', 'director_script_revisions_aggregate_revision_key', 'director_storyboard_revisions_aggregate_revision_key') order by constraint_name",
+    );
+    assert.deepEqual(
+      constraints.rows.map((row) => row.constraint_name),
+      [
+        'director_script_revisions_aggregate_revision_key',
+        'director_script_revisions_source_job_key',
+        'director_storyboard_revisions_aggregate_revision_key',
+        'director_storyboard_revisions_source_job_key',
+      ],
+    );
   } finally {
     await db.end();
   }

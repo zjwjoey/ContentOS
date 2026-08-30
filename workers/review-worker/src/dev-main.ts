@@ -15,19 +15,38 @@ async function startLocalWorker(): Promise<void> {
   const jobs = new JobService(db);
   const publisher = new PublisherService(db);
   const analytics = new ReviewAnalyticsService(db, jobs, publisher);
-  const ai = new AIService(db, new FakeAIProvider(), new PromptRegistry(), { id: 'review-fake-profile', providerId: 'fake', modelId: 'fake-zh-v1', displayName: 'Fake Chinese V1', capabilities: ['TEXT', 'STRUCTURED'], maxInputCharacters: 20_000, maxOutputTokens: 2_000, enabled: true });
+  const ai = new AIService(db, new FakeAIProvider(), new PromptRegistry(), {
+    id: 'review-fake-profile',
+    providerId: 'fake',
+    modelId: 'fake-zh-v1',
+    displayName: 'Fake Chinese V1',
+    capabilities: ['TEXT', 'STRUCTURED'],
+    maxInputCharacters: 20_000,
+    maxOutputTokens: 2_000,
+    enabled: true,
+  });
   const worker = createReviewWorker({ jobs, analytics, posts: publisher, metricsSource: new FakeMetricsSource(), ai, workerId: 'review-worker-dev' });
   await worker.start();
   const poll = async () => {
     const runnable = await jobs.listRunnable([REVIEW_COLLECT_METRICS, REVIEW_GENERATE_ANALYSIS], 10);
     await Promise.all(runnable.map((job) => worker.execute(job.type, { jobId: job.id })));
   };
-  const timer = setInterval(() => { void poll(); }, 250);
+  const timer = setInterval(() => {
+    void poll();
+  }, 250);
   timer.unref();
   await poll();
-  const close = async (signal: string) => { clearInterval(timer); await worker.shutdown(signal); await db.end(); };
-  process.once('SIGINT', () => { void close('SIGINT'); });
-  process.once('SIGTERM', () => { void close('SIGTERM'); });
+  const close = async (signal: string) => {
+    clearInterval(timer);
+    await worker.shutdown(signal);
+    await db.end();
+  };
+  process.once('SIGINT', () => {
+    void close('SIGINT');
+  });
+  process.once('SIGTERM', () => {
+    void close('SIGTERM');
+  });
 }
 
 if (process.argv[1]?.endsWith('dev-main.ts')) await startLocalWorker();

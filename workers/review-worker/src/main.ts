@@ -8,17 +8,21 @@ import { basename } from 'node:path';
 
 export type { ReviewWorkerDependencies } from './handler.js';
 
-export interface ReviewWorkerOptions extends ReviewWorkerDependencies { workerId?: string; concurrency?: number; }
+export interface ReviewWorkerOptions extends ReviewWorkerDependencies {
+  workerId?: string;
+  concurrency?: number;
+}
 
 export function createReviewWorker(options: ReviewWorkerOptions): WorkerRuntime {
   const runner = new JobRunner(options.jobs, options.workerId || 'review-worker');
   const handler = createReviewJobHandler(options);
   const runtime = new WorkerRuntime(options.workerId || 'review-worker');
-  const register = (type: string) => runtime.register(type, (payload) => {
-    const jobId = payload && typeof payload === 'object' ? (payload as { jobId?: unknown }).jobId : undefined;
-    if (typeof jobId !== 'string' || !jobId) throw new Error('Review delivery requires jobId');
-    return runner.run(jobId, handler);
-  });
+  const register = (type: string) =>
+    runtime.register(type, (payload) => {
+      const jobId = payload && typeof payload === 'object' ? (payload as { jobId?: unknown }).jobId : undefined;
+      if (typeof jobId !== 'string' || !jobId) throw new Error('Review delivery requires jobId');
+      return runner.run(jobId, handler);
+    });
   register(REVIEW_COLLECT_METRICS);
   register(REVIEW_GENERATE_ANALYSIS);
   return runtime;

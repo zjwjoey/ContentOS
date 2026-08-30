@@ -13,16 +13,35 @@ interface RegisteredPrompt {
 
 const defaultPrompts: RegisteredPrompt[] = [
   {
-    promptVersion: { id: 'prompt-director-script-v1', key: 'director.script.v1', version: 1, templateHash: 'sha256:director-script-v1', requiredVariables: ['topic', 'coreThesis'] },
+    promptVersion: {
+      id: 'prompt-director-script-v1',
+      key: 'director.script.v1',
+      version: 1,
+      templateHash: 'sha256:director-script-v1',
+      requiredVariables: ['topic', 'coreThesis'],
+    },
     template: '你是短视频 Director。选题：{{topic}}\n核心观点：{{coreThesis}}\n请输出专业、克制、可执行的中文脚本。',
   },
   {
-    promptVersion: { id: 'prompt-director-storyboard-v1', key: 'director.storyboard.v1', version: 1, templateHash: 'sha256:director-storyboard-v1', requiredVariables: ['topic', 'coreThesis'] },
+    promptVersion: {
+      id: 'prompt-director-storyboard-v1',
+      key: 'director.storyboard.v1',
+      version: 1,
+      templateHash: 'sha256:director-storyboard-v1',
+      requiredVariables: ['topic', 'coreThesis'],
+    },
     template: '你是短视频 Director。选题：{{topic}}\n核心观点：{{coreThesis}}\n请输出绑定脚本的中文分镜结构。',
   },
   {
-    promptVersion: { id: 'prompt-review-analysis-v1', key: 'review.analysis.v1', version: 1, templateHash: 'sha256:review-analysis-v1', requiredVariables: ['platformId', 'publishedAt', 'metrics', 'history'] },
-    template: '你是内容运营分析师。平台：{{platformId}}\n发布时间：{{publishedAt}}\n当前指标：{{metrics}}\n历史指标：{{history}}\n请输出克制、可执行的复盘建议。',
+    promptVersion: {
+      id: 'prompt-review-analysis-v1',
+      key: 'review.analysis.v1',
+      version: 1,
+      templateHash: 'sha256:review-analysis-v1',
+      requiredVariables: ['platformId', 'publishedAt', 'metrics', 'history'],
+    },
+    template:
+      '你是内容运营分析师。平台：{{platformId}}\n发布时间：{{publishedAt}}\n当前指标：{{metrics}}\n历史指标：{{history}}\n请输出克制、可执行的复盘建议。',
   },
 ];
 
@@ -37,7 +56,10 @@ export class PromptRegistry {
     validatePromptVersion(promptVersion);
     if (!template.trim() || template.length > 20_000) throw new Error('prompt template must be bounded and non-empty');
     if (this.prompts.has(promptVersion.key)) throw new Error(`Prompt version already registered: ${promptVersion.key}`);
-    this.prompts.set(promptVersion.key, { promptVersion: Object.freeze({ ...promptVersion, requiredVariables: [...promptVersion.requiredVariables] }), template });
+    this.prompts.set(promptVersion.key, {
+      promptVersion: Object.freeze({ ...promptVersion, requiredVariables: [...promptVersion.requiredVariables] }),
+      template,
+    });
   }
 
   get(key: string): PromptVersion {

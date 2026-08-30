@@ -1,6 +1,6 @@
 # ContentOS
 
-ContentOS is a local-first content production and matrix operations console. The current product path is `Project Center → Assets → Director → Video → Approval → Fake Publisher`; Standalone Quick Edit remains available, while Review analytics and live platform adapters are deferred.
+ContentOS is a local-first content production and matrix operations console. The current product path is `Project Center → Assets → Director → Video → Approval → Fake Publisher → Review Analytics`; Standalone Quick Edit remains available. Review Analytics currently supports deterministic Fake/Import metrics only; live platform metrics remain deferred.
 
 ## Commands
 

@@ -10,4 +10,3 @@ export interface CollectedReviewMetrics {
 export interface ReviewMetricsSource {
   collect(post: PublisherExternalPost): Promise<CollectedReviewMetrics>;
 }
-

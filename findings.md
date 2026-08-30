@@ -226,3 +226,10 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - Existing `AIService` persists provenance but types operations as Director-only; the plan extends the operation union and Fake Provider with `review.analysis.v1`.
 - There is no Review Worker package today. The design adds one rather than putting Review persistence or AI calls in HTTP handlers or Publisher private code.
 - Existing migration sequence ends at `0018`; Review Analytics uses `0019` with an explicit down migration and migration-matrix coverage.
+
+## Review Analytics V1 implementation findings
+
+- Migration 0019 extends the AI operation check with `REVIEW_GENERATE_ANALYSIS`; Review tables remain project-scoped and do not reference Publisher private tables.
+- Publisher exposes confirmed ExternalPosts through public project-scoped readers; Review consumes only that port.
+- Collection and analysis execute in durable Jobs handled by the dedicated Review Worker; routes do not call metrics or AI synchronously.
+- Fake and Import are the explicit rollout boundary. Real platform metrics remain disabled and require a later adapter review.

@@ -109,7 +109,11 @@ export function validateReviewAnalysisReportV1(report: ReviewAnalysisReportV1): 
   assertBoundedArray(report.metricSnapshotIds, 'metricSnapshotIds');
   if (report.metricSnapshotIds.length === 0) throw new Error('metricSnapshotIds must contain at least one snapshot');
   for (const id of report.metricSnapshotIds) assertBoundedString(id, 'metricSnapshotIds entry');
-  for (const [key, recommendation] of [['highlights', false], ['risks', false], ['recommendations', true]] as const) {
+  for (const [key, recommendation] of [
+    ['highlights', false],
+    ['risks', false],
+    ['recommendations', true],
+  ] as const) {
     assertBoundedArray(report[key], key);
     report[key].forEach((item, index) => assertInsight(item, `${key}[${index}]`, recommendation));
   }

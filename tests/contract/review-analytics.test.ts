@@ -37,10 +37,7 @@ const validReport: ReviewAnalysisReportV1 = {
 
 test('accepts a complete metric snapshot and rejects unsafe metric values', () => {
   assert.doesNotThrow(() => validateMetricSnapshotV1(validSnapshot));
-  assert.throws(
-    () => validateMetricSnapshotV1({ ...validSnapshot, metrics: { ...validSnapshot.metrics, plays: -1 } }),
-    /non-negative integer/,
-  );
+  assert.throws(() => validateMetricSnapshotV1({ ...validSnapshot, metrics: { ...validSnapshot.metrics, plays: -1 } }), /non-negative integer/);
   assert.throws(() => validateMetricSnapshotV1({ ...validSnapshot, capturedAt: 'not-a-date' }), /capturedAt/);
   assert.throws(() => validateMetricSnapshotV1({ ...validSnapshot, schemaVersion: 'V0' } as unknown as MetricSnapshotV1), /schemaVersion/);
 });
