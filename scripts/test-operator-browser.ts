@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { createDatabase, migrateUp } from '../packages/database/src/index.js';
-import { generateFixtureVideo } from '../packages/infrastructure/ffmpeg/src/index.js';
+import { generateFixtureAudio, generateFixtureVideo } from '../packages/infrastructure/ffmpeg/src/index.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL ?? process.env.DATABASE_URL ?? 'postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test';
@@ -82,7 +82,8 @@ async function main(): Promise<void> {
   const admin = new pg.Pool({ connectionString: adminUrl });
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'contentos-browser-acceptance-'));
   const storageRoot = join(temporaryRoot, 'storage');
-  const fixtureVideo = join(temporaryRoot, 'source.mp4');
+  const fixtureVideos = ['source.mp4', 'source-2.mp4', 'source-3.mp4', 'source-4.mp4'].map((name) => join(temporaryRoot, name));
+  const fixtureAudio = join(temporaryRoot, 'voice.wav');
   const apiPort = await freePort();
   const webPort = await freePort();
   const databaseUrl = scopedDatabaseUrl(schema);
@@ -92,7 +93,8 @@ async function main(): Promise<void> {
     const database = await createDatabase(databaseUrl);
     try { await migrateUp(database); } finally { await database.end(); }
     await mkdir(storageRoot, { recursive: true });
-    await generateFixtureVideo(fixtureVideo, process.env.FFMPEG_PATH ?? 'ffmpeg', '0x2057d4');
+    for (const [index, path] of fixtureVideos.entries()) await generateFixtureVideo(path, process.env.FFMPEG_PATH ?? 'ffmpeg', ['0x2057d4', '0x3b82f6', '0x16a34a', '0xea580c'][index]!);
+    await generateFixtureAudio(fixtureAudio, process.env.FFMPEG_PATH ?? 'ffmpeg');
 
     const apiUrl = `http://127.0.0.1:${apiPort}`;
     const webUrl = `http://127.0.0.1:${webPort}`;
@@ -113,7 +115,9 @@ async function main(): Promise<void> {
     await run(invocation.command, invocation.args, {
       ...environment,
       CONTENTOS_OPERATOR_URL: webUrl,
-      CONTENTOS_BROWSER_FIXTURE_VIDEO: fixtureVideo,
+       CONTENTOS_BROWSER_FIXTURE_VIDEO: fixtureVideos[0]!,
+       CONTENTOS_BROWSER_FIXTURE_VIDEOS: JSON.stringify(fixtureVideos),
+       CONTENTOS_BROWSER_FIXTURE_AUDIO: fixtureAudio,
     });
   } finally {
     if (operator) await stopOwnedTree(operator);

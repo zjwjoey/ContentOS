@@ -156,3 +156,11 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - The implementation must keep Web as a contract client: Video Adjustment operations remain owned by the Video module, and browser-facing APIs must not expose storage keys or private credentials.
 - Visual design decision: the user selected Shell option A, a persistent left navigation with project workspace content.
 - Visual design decision: for standalone Quick Edit, the user selected layout option C, a three-column editing workspace with asset library, preview/timeline center, and inspector panel.
+
+## Operator UI V1 Review Repairs (2026-08-30)
+
+- Root cause: `StandaloneQuickEditService.adjust()` persisted a new immutable Manifest but did not advance `video_quick_edit_sessions.current_manifest_id`; subsequent adjustments therefore reused a superseded parent. Added a consecutive-adjustment regression test and pointer update.
+- Root cause: shared Inspector defaulted to a one-item timeline and emitted the selected clip as its own replacement. Added real clip counts, READY replacement choices, clip-change state synchronization and operation helper tests.
+- Root cause: Standalone UI only retained the initial Render Job response. Added Job polling, output Asset resolution and native output preview, plus explicit voice selection and Manifest revision loading.
+- Root cause: project layout rendered the shared stage rail only on Overview. The layout now resolves the active stage for every project route and child pages no longer own duplicate stage navigation.
+- The isolated Playwright harness now covers both the existing Fake Publisher journey and Standalone Quick Edit upload/adjust/render/output closure; human visual acceptance remains a separate manual gate.

@@ -22,6 +22,7 @@ const legacyVideoJobInput = videoJobInput.partial();
 const quickEditInput = z.object({ parentManifestId: z.string().trim().min(1), operations: z.array(z.record(z.string(), z.unknown())).max(128), createdBy: z.string().trim().min(1).max(200), idempotencyKey: z.string().trim().min(1).max(200).optional() });
 const standaloneCreateInput = z.object({ sourceAssetIds: z.array(z.string().trim().min(1)).max(128).default([]), voiceAssetId: z.string().trim().min(1).optional(), seed: z.number().int().optional(), targetDurationMs: z.number().int().positive().optional(), minClipDurationMs: z.number().int().positive().optional(), maxClipDurationMs: z.number().int().positive().optional() });
 const standaloneAdjustmentInput = z.object({ operations: z.array(z.record(z.string(), z.unknown())).min(1).max(128), createdBy: z.string().trim().min(1).max(200).optional() });
+const standaloneVoiceInput = z.object({ assetId: z.string().trim().min(1) });
 
 export interface VideoRouteDependencies {
   projects: ProjectService;
@@ -75,6 +76,11 @@ function safeManifestRecord(record: Awaited<ReturnType<VideoAdjustmentService['g
 function safeJob(job: JobRecord): Record<string, unknown> {
   return { id: job.id, projectId: job.projectId, workspaceId: job.workspaceId, type: job.type, state: job.state, attemptCount: job.attemptCount, maxAttempts: job.maxAttempts };
 }
+function mediaContentType(asset: { kind: string; metadata: { format?: string }; originalName: string }): string {
+  const format = (asset.metadata.format || '').toLowerCase().split(',')[0] || asset.originalName.toLowerCase().split('.').pop() || '';
+  const types: Record<string, string> = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', mkv: 'video/x-matroska', avi: 'video/x-msvideo', wav: 'audio/wav', mp3: 'audio/mpeg', m4a: 'audio/mp4', ogg: 'audio/ogg', flac: 'audio/flac' };
+  return types[format] || (asset.kind === 'AUDIO' ? 'audio/mpeg' : 'video/mp4');
+}
 
 export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRouteDependencies): void {
   const { projects, director, videoFromDirector, videoRead, assets, approvals, jobs, video, quickEdit, standaloneQuickEdit } = dependencies;
@@ -89,6 +95,12 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     const session = await standaloneQuickEdit.get((request.params as { id: string }).id);
     return session ? session : reply.code(404).send({ error: { code: 'STANDALONE_QUICK_EDIT_NOT_FOUND', message: 'Standalone Quick Edit not found', details: [] } });
   });
+  app.post('/api/v1/video/quick-edits/:id/voice', async (request, reply) => {
+    const parsed = standaloneVoiceInput.safeParse(request.body || {});
+    if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid voice asset input', details: parsed.error.issues } });
+    try { return reply.code(200).send(await standaloneQuickEdit.setVoiceAsset((request.params as { id: string }).id, parsed.data.assetId)); }
+    catch (error) { return reply.code(409).send({ error: { code: 'STANDALONE_VOICE_CONFLICT', message: error instanceof Error ? error.message : 'Voice asset selection rejected', details: [] } }); }
+  });
   app.post('/api/v1/video/quick-edits/:id/plan', async (request, reply) => {
     try { return reply.code(201).send(safeManifestRecord(await standaloneQuickEdit.plan((request.params as { id: string }).id))); }
     catch (error) { return reply.code(422).send({ error: { code: 'STANDALONE_PLAN_INVALID', message: error instanceof Error ? error.message : 'Standalone plan rejected', details: [] } }); }
@@ -97,6 +109,13 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     const session = await standaloneQuickEdit.get((request.params as { id: string }).id);
     if (!session) return reply.code(404).send({ error: { code: 'STANDALONE_QUICK_EDIT_NOT_FOUND', message: 'Standalone Quick Edit not found', details: [] } });
     return { items: (await quickEdit.listManifests('', session.workspaceId)).map((record) => safeManifestRecord(record)) };
+  });
+  app.get('/api/v1/video/quick-edits/:id/manifests/:manifestId', async (request, reply) => {
+    const { id, manifestId } = request.params as { id: string; manifestId: string };
+    const session = await standaloneQuickEdit.get(id);
+    if (!session) return reply.code(404).send({ error: { code: 'STANDALONE_QUICK_EDIT_NOT_FOUND', message: 'Standalone Quick Edit not found', details: [] } });
+    const manifest = await quickEdit.getManifest('', manifestId, session.workspaceId);
+    return manifest ? safeManifestRecord(manifest) : reply.code(404).send({ error: { code: 'VIDEO_MANIFEST_NOT_FOUND', message: 'Video Manifest not found', details: [] } });
   });
   app.post('/api/v1/video/quick-edits/:id/adjustments', async (request, reply) => {
     const parsed = standaloneAdjustmentInput.safeParse(request.body || {});
@@ -146,7 +165,7 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     if (!session) return reply.code(404).send({ error: { code: 'STANDALONE_QUICK_EDIT_NOT_FOUND', message: 'Standalone Quick Edit not found', details: [] } });
     const asset = await assets.getReadyWorkspaceAssetContent(session.workspaceId, assetId);
     if (!asset) return reply.code(404).send({ error: { code: 'ASSET_NOT_FOUND', message: 'Ready workspace asset not found', details: [] } });
-    reply.header('content-type', asset.metadata.format === 'wav' ? 'audio/wav' : asset.kind === 'AUDIO' ? 'audio/mpeg' : asset.kind === 'VIDEO_RENDER' ? 'video/mp4' : 'video/mp4');
+    reply.header('content-type', mediaContentType(asset));
     reply.header('content-length', asset.byteSize); reply.header('accept-ranges', 'bytes'); reply.header('etag', `"${asset.checksum}"`);
     return reply.send((await import('node:fs')).createReadStream(dependencies.storage.objectPath(asset.storageKey)));
   });

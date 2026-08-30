@@ -301,4 +301,4 @@ Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-directio
 - [ ] Push
 - [ ] PR
 
-**Status:** implementation and automated acceptance complete; Push and PR remain as the final remote handoff steps.
+**Status:** review repairs and two-scenario isolated Playwright acceptance implemented; final full gates, Push and PR remain before human acceptance.

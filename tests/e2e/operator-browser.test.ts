@@ -4,6 +4,8 @@ import { chromium, type Page } from 'playwright';
 
 const baseUrl = process.env.CONTENTOS_OPERATOR_URL;
 const fixtureVideo = process.env.CONTENTOS_BROWSER_FIXTURE_VIDEO;
+const fixtureVideos = process.env.CONTENTOS_BROWSER_FIXTURE_VIDEOS ? JSON.parse(process.env.CONTENTOS_BROWSER_FIXTURE_VIDEOS) as string[] : fixtureVideo ? [fixtureVideo] : [];
+const fixtureAudio = process.env.CONTENTOS_BROWSER_FIXTURE_AUDIO;
 
 async function waitForText(page: Page, text: string, timeout = 30_000): Promise<void> {
   await page.getByText(text, { exact: false }).first().waitFor({ state: 'visible', timeout });
@@ -16,7 +18,7 @@ async function createAndApprovePublish(page: Page, title: string, description: s
   const draft = page.getByRole('listitem').filter({ hasText: title });
   await draft.getByRole('link', { name: '前往 Approval Gate' }).click();
   await page.getByRole('button', { name: '批准此 Revision' }).click();
-  await page.getByRole('link', { name: 'Publisher' }).click();
+  await page.getByRole('link', { name: 'Publisher', exact: true }).click();
   return page.getByRole('listitem').filter({ hasText: title });
 }
 
@@ -64,7 +66,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('button', { name: '批准此 Revision' }).click();
     await waitForText(page, 'APPROVED');
 
-    await page.getByRole('link', { name: 'Publisher' }).click();
+    await page.getByRole('link', { name: /^Publisher/ }).first().click();
     await page.getByRole('button', { name: '创建测试账号' }).click();
     await waitForText(page, '开发模拟结果');
     const success = await createAndApprovePublish(page, '浏览器完整闭环', 'Fake Platform 成功发布');
@@ -75,7 +77,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.goto(`${baseUrl}/projects/${projectId}`, { waitUntil: 'networkidle' });
     await waitForText(page, 'PUBLISHED');
 
-    await page.getByRole('link', { name: 'Publisher' }).click();
+    await page.getByRole('link', { name: /^Publisher/ }).first().click();
     const outcome = page.getByLabel('开发模拟结果');
     await outcome.selectOption('NETWORK');
     await waitForText(page, '开发模拟结果已更新');
@@ -104,6 +106,34 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await reconciling.getByText('ExternalPost', { exact: false }).waitFor({ state: 'visible', timeout: 30_000 });
     assert.equal(await reconciling.getByText('PublishAttempt #', { exact: false }).count(), 2, 'reconciliation must preserve publish and reconcile attempts');
     assert.equal(await reconciling.getByText('ExternalPost', { exact: false }).count(), 1, 'reconciliation must confirm exactly one ExternalPost');
+  } finally {
+    await browser.close();
+  }
+});
+
+test('operator browser completes Standalone Quick Edit upload, adjustment and render journeys', async () => {
+  assert.ok(baseUrl, 'test:browser must start an isolated operator');
+  assert.equal(fixtureVideos.length, 4, 'test:browser must provide four playable upload fixtures');
+  assert.ok(fixtureAudio, 'test:browser must provide an audio fixture');
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${baseUrl}/video/quick-edit`, { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: '创建草稿会话' }).click();
+    await page.getByLabel('上传视频 / 配音').setInputFiles([...fixtureVideos, fixtureAudio]);
+    await page.getByText('source.mp4', { exact: false }).first().waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByText('已就绪', { exact: false }).first().waitFor({ state: 'visible', timeout: 45_000 });
+    await page.getByRole('combobox', { name: '主配音' }).selectOption({ label: 'voice.wav' });
+    await page.getByRole('button', { name: 'Generate Plan' }).click();
+    await page.getByLabel('Manifest 时间线').waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByRole('button', { name: 'REROLL' }).click();
+    await page.getByText('已创建新的 Manifest Revision。').waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByRole('button', { name: 'TRIM' }).click();
+    await page.getByText('已创建新的 Manifest Revision。').waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByRole('button', { name: 'Render 成品' }).click();
+    await page.getByText('Render 状态：SUCCEEDED').waitFor({ state: 'visible', timeout: 60_000 });
+    await page.getByText('Render 输出成片').waitFor({ state: 'visible', timeout: 15_000 });
+    assert.equal(await page.locator('video').count() >= 1, true, 'rendered output video should be visible');
   } finally {
     await browser.close();
   }

@@ -42,7 +42,7 @@ The new content route returns media bytes only after session and workspace membe
 
 ## Browser Acceptance
 
-The existing isolated operator browser harness passed the Fake Product Flow including success, retry, human-action, reconciliation, and duplicate-click idempotency. New UI contract coverage is present in `tests/e2e/operator-ui-v1-browser.test.ts`.
+The isolated operator browser harness passed both the Fake Product Flow (success, retry, human-action, reconciliation, duplicate-click idempotency) and the Standalone Quick Edit Flow (four uploads, READY imports, explicit voice, plan, consecutive adjustments, Render polling and playable output). Structural UI contract coverage remains in `tests/e2e/operator-ui-v1-browser.test.ts`.
 
 ## Git Evidence
 
@@ -52,9 +52,17 @@ Final SHA, commit list, push, and PR URL are filled only after the final gate an
 
 Design, implementation plan, product scope, findings, progress, and task plan are synchronized. Review Analytics remains deferred.
 
+## Review Repair Status
+
+- Standalone current Manifest pointer now advances after each adjustment and is covered by a consecutive-adjustment integration test.
+- Inspector now emits complete reorder permutations and selected replacement Asset IDs, and resets clip-local fields when the selected clip changes.
+- Standalone Render polls Job status, resolves `outputAssetId`, and displays a playable output preview when READY.
+- Project stage navigation is supplied by the shared project layout for every project route, with explicit loading/error states.
+- Standalone supports explicit primary voice selection and revision switching.
+
 ## Known Limitations
 
-Standalone render output polling is currently represented by the returned Job state; a future slice may add a dedicated output resolver/polling endpoint if the existing API requires it. Mobile editing is not a V1 target.
+The isolated Playwright harness now exercises both Fake Publisher and Standalone Quick Edit flows. Mobile editing is not a V1 target.
 
 ## Human Acceptance Status
 
@@ -62,4 +70,4 @@ Standalone render output polling is currently represented by the returned Job st
 
 ## Final Verdict
 
-**READY FOR HUMAN ACCEPTANCE** after the final automated browser run and full local gate; remote push and PR creation are the remaining handoff steps.
+**READY FOR HUMAN ACCEPTANCE** after the final local gate; remote push and PR creation remain the final handoff actions, and manual visual acceptance is still pending.

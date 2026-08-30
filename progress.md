@@ -412,3 +412,12 @@
 - Project Director, Video, Approval, and Fake Publisher surfaces were upgraded while preserving existing contracts and real data.
 - Automated browser acceptance passed the isolated Fake Publisher flow. Full regression passed **211/211**; migration matrix **4/4**; typecheck, lint, format, root build, Web build all passed.
 - Ready for final Git commit, push, and PR creation; human acceptance remains deferred.
+
+## Session: 2026-08-30 — Operator UI V1 Review Repairs
+
+- Added regression coverage for standalone consecutive Manifest adjustments and shared Inspector operation payloads.
+- Fixed Standalone Quick Edit current Manifest pointer advancement, real REPLACE asset selection, complete REORDER permutations, and clip-field reset when selection changes.
+- Added Standalone Manifest revision selection, explicit primary voice selection, Render Job polling, output Asset resolution, and playable output preview.
+- Moved project stage navigation into the shared project layout and added explicit loading/error states; removed duplicate ProjectNav markup from Assets and Director.
+- Added format-aware MIME mapping for Standalone media delivery.
+- Verification: targeted UI/integration tests, typecheck, lint, format, Web build, migration matrix, full suite and the new two-scenario isolated browser run passed.

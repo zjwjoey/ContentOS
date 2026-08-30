@@ -93,10 +93,21 @@ export class StandaloneQuickEditService {
     return (await this.adjustments.getManifest('', manifestId, session.workspaceId)) || (inserted.rows[0] as QuickEditManifestRecord);
   }
 
+  async setVoiceAsset(id: string, assetId: string): Promise<StandaloneQuickEditSession> {
+    const session = await this.get(id);
+    if (!session) throw new Error('STANDALONE_QUICK_EDIT_NOT_FOUND');
+    const voice = await this.assets.getReadyWorkspaceAsset(session.workspaceId, assetId, 'AUDIO', 'VOICE');
+    if (!voice) throw new Error('STANDALONE_VOICE_ASSET_INVALID');
+    await this.db.query('update video_quick_edit_sessions set voice_asset_id = $2, updated_at = now() where id = $1 and workspace_id = $3', [id, assetId, session.workspaceId]);
+    return (await this.get(id))!;
+  }
+
   async adjust(id: string, operations: Parameters<VideoAdjustmentService['createVersion']>[0]['operations'], createdBy = 'operator'): Promise<QuickEditManifestRecord> {
     const session = await this.get(id);
     if (!session || !session.currentManifestId) throw new Error('STANDALONE_MANIFEST_REQUIRED');
-    return this.adjustments.createVersion({ workspaceId: session.workspaceId, parentManifestId: session.currentManifestId, operations, createdBy });
+    const revised = await this.adjustments.createVersion({ workspaceId: session.workspaceId, parentManifestId: session.currentManifestId, operations, createdBy });
+    await this.db.query('update video_quick_edit_sessions set current_manifest_id = $2, updated_at = now() where id = $1 and workspace_id = $3 and current_manifest_id = $4', [id, revised.id, session.workspaceId, session.currentManifestId]);
+    return revised;
   }
 
   async render(id: string): Promise<JobRecord> {

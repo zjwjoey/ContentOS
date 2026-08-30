@@ -20,6 +20,8 @@ test('Standalone Quick Edit plans and adjusts without creating a Content Project
     const first = await standalone.plan(session.id); assert.equal(first.workspaceId, session.workspaceId); assert.equal(first.projectId, ''); assert.equal(first.manifest.timeline.reduce((sum, clip) => sum + clip.durationMs, 0), 30_000);
     const second = await standalone.plan(session.id); assert.equal(second.id, first.id);
     const revised = await standalone.adjust(session.id, [{ type: 'REROLL', clipIndex: 0, seed: 4 }]); assert.equal(revised.revision, 2); assert.equal(revised.parentManifestId, first.id);
+    const currentAfterFirstAdjustment = await standalone.get(session.id); assert.equal(currentAfterFirstAdjustment?.currentManifestId, revised.id);
+    const revisedAgain = await standalone.adjust(session.id, [{ type: 'TRIM', clipIndex: 0, sourceInMs: 0, durationMs: revised.manifest.timeline[0]!.durationMs }]); assert.equal(revisedAgain.revision, 3); assert.equal(revisedAgain.parentManifestId, revised.id);
     const job = await standalone.render(session.id); assert.equal(job.projectId, null); assert.equal(job.workspaceId, session.workspaceId);
   } finally {
     if (workspaceId) {
