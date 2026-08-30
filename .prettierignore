@@ -6,3 +6,4 @@ artifacts
 research
 spikes
 *.lock
+pnpm-lock.yaml
