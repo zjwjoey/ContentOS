@@ -37,8 +37,8 @@ test('Director Operator exposes project creation, complete Brief inputs and Job 
   assert.match(director, /setInterval/);
   assert.match(director, /clearInterval/);
   assert.match(director, /error/);
-  assert.match(director, /scripts\/\$\{scriptId\}\/accept.*body: '\{\}'/);
-  assert.match(director, /storyboards\/\$\{storyboardId\}\/approve.*body: '\{\}'/);
+  assert.match(director, /scripts\/\$\{scriptId\}\/accept[\s\S]*body: '\{\}'/);
+  assert.match(director, /storyboards\/\$\{storyboardId\}\/approve[\s\S]*body: '\{\}'/);
 });
 
 test('Director handoff requires an accepted Script and matching approved Storyboard', async () => {

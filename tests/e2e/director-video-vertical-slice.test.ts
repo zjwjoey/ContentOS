@@ -17,21 +17,129 @@ import { createDirectorWorker } from '../../workers/director-worker/src/main.js'
 import type { ModelProfile } from '../../packages/contracts/src/index.js';
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55432/contentos_director_dev';
-const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg'; const ffprobePath = process.env.FFPROBE_PATH || 'ffprobe'; const fontFile = process.env.FFMPEG_FONT_FILE || 'C:\\Windows\\Fonts\\msyh.ttc';
-const profile: ModelProfile = { id: 'fake-profile-e2e', providerId: 'fake', modelId: 'fake-zh-v1', displayName: 'Fake E2E', capabilities: ['TEXT', 'STRUCTURED'], maxInputCharacters: 20_000, maxOutputTokens: 2_000, enabled: true };
+const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
+const ffprobePath = process.env.FFPROBE_PATH || 'ffprobe';
+const fontFile = process.env.FFMPEG_FONT_FILE || 'C:\\Windows\\Fonts\\msyh.ttc';
+const profile: ModelProfile = {
+  id: 'fake-profile-e2e',
+  providerId: 'fake',
+  modelId: 'fake-zh-v1',
+  displayName: 'Fake E2E',
+  capabilities: ['TEXT', 'STRUCTURED'],
+  maxInputCharacters: 20_000,
+  maxOutputTokens: 2_000,
+  enabled: true,
+};
 
 test('ContentProject -> Brief -> Director Jobs -> approved pair -> Video -> FFmpeg preserves full provenance', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'contentos-director-e2e-')); const db = await createDatabase(databaseUrl); await migrateUp(db); const storage = new LocalStorageProvider(join(root, 'storage')); const project = await new ProjectService(db).create('Director Video Vertical Slice'); const jobs = new JobService(db); const director = new DirectorV1Service(db); const directorJobs = new DirectorJobService(jobs); const ai = new AIService(db, new FakeAIProvider(), new PromptRegistry(), profile); const worker = createDirectorWorker({ jobs, director, ai, modelProfile: profile }); await worker.start();
-  const assets = new AssetService(db, storage, (path) => probeMedia(path, ffprobePath)); let videoJobId = '';
+  const root = await mkdtemp(join(tmpdir(), 'contentos-director-e2e-'));
+  const db = await createDatabase(databaseUrl);
+  await migrateUp(db);
+  const storage = new LocalStorageProvider(join(root, 'storage'));
+  const project = await new ProjectService(db).create('Director Video Vertical Slice');
+  const jobs = new JobService(db);
+  const director = new DirectorV1Service(db);
+  const directorJobs = new DirectorJobService(jobs);
+  const ai = new AIService(db, new FakeAIProvider(), new PromptRegistry(), profile);
+  const worker = createDirectorWorker({ jobs, director, ai, modelProfile: profile });
+  await worker.start();
+  const assets = new AssetService(db, storage, (path) => probeMedia(path, ffprobePath));
+  let videoJobId = '';
   try {
-    const brief = await director.createBrief(project.id, { topic: '门店经营', targetPlatform: 'douyin', channelPositioning: '经营知识栏目', targetDurationSeconds: 4, contentType: 'knowledge', audience: '小微商家', coreThesis: '先验证，再扩大投入。', tone: '清晰', referenceMaterial: 'Fake E2E 用户材料', mustInclude: ['反例'], mustAvoid: ['夸大'], requirements: {}, createdBy: 'operator' });
-    const script = await director.createScript(project.id, brief.id); const scriptJob = await directorJobs.createScriptGeneration({ projectId: project.id, briefId: brief.id, scriptAggregateId: script.id, correlationId: 'corr-e2e-script' }); await worker.execute('DIRECTOR_GENERATE_SCRIPT', { jobId: scriptJob.id });
-    const acceptedScript = await director.acceptScript(project.id, (await director.listScriptRevisions(project.id))[0]!.id); const storyboard = await director.createStoryboard(project.id); const storyboardJob = await directorJobs.createStoryboardGeneration({ projectId: project.id, scriptRevisionId: acceptedScript.id, storyboardAggregateId: storyboard.id, correlationId: 'corr-e2e-storyboard' }); await worker.execute('DIRECTOR_GENERATE_STORYBOARD', { jobId: storyboardJob.id }); const approvedStoryboard = await director.approveStoryboard(project.id, (await director.listStoryboardRevisions(project.id))[0]!.id);
-    const sourcePaths = await Promise.all(['red', 'green', 'blue'].map(async (color) => { const path = join(root, `${color}.mp4`); await generateFixtureVideo(path, ffmpegPath, color); return assets.importFile({ projectId: project.id, sourcePath: path, kind: 'VIDEO' }); })); const voicePath = join(root, 'voice.wav'); await generateFixtureAudio(voicePath, ffmpegPath); const voice = await assets.importFile({ projectId: project.id, sourcePath: voicePath, kind: 'AUDIO' });
-    const video = new VideoService(db, storage, jobs, new AssetCatalogService(db)); const bridge = new DirectorVideoService(director, video); const videoJob = await bridge.createVideoJob(project.id, { videoAssetIds: sourcePaths.map((asset) => asset.id), voiceAssetId: voice.id, targetDurationMs: 3_000, subtitleText: 'ContentOS Director V1' }); videoJobId = videoJob.id; const renderResult = await new JobRunner(jobs, 'video-worker-director-e2e').run(videoJob.id, createVideoJobHandler({ db, storage, assets, jobs, video, ffmpegPath, ffprobePath, fontFile }));
-    assert.equal(renderResult.state, 'SUCCEEDED'); const result = renderResult.result as { manifestId: string; renderId: string; outputAssetId: string }; const manifest = await db.query<{ manifest: { metadata?: { briefId: string; scriptRevisionId: string; storyboardRevisionId: string } } }>('select manifest from edit_manifests where id = $1', [result.manifestId]); assert.equal(manifest.rows[0]?.manifest.metadata?.briefId, brief.id); assert.equal(manifest.rows[0]?.manifest.metadata?.scriptRevisionId, acceptedScript.id); assert.equal(manifest.rows[0]?.manifest.metadata?.storyboardRevisionId, approvedStoryboard.id);
-    const render = await db.query<{ status: string }>('select status from renders where id = $1', [result.renderId]); assert.equal(render.rows[0]?.status, 'SUCCEEDED'); const output = await db.query<{ storage_key: string }>('select storage_key from assets where id = $1', [result.outputAssetId]); const probe = await probeMedia(storage.objectPath(output.rows[0]!.storage_key), ffprobePath); assert.equal(probe.width, 1080); assert.equal(probe.height, 1920); assert.equal(probe.format, 'mp4'); assert.equal(probe.audio, true);
+    const brief = await director.createBrief(project.id, {
+      topic: '门店经营',
+      targetPlatform: 'douyin',
+      channelPositioning: '经营知识栏目',
+      targetDurationSeconds: 4,
+      contentType: 'knowledge',
+      audience: '小微商家',
+      coreThesis: '先验证，再扩大投入。',
+      tone: '清晰',
+      referenceMaterial: 'Fake E2E 用户材料',
+      mustInclude: ['反例'],
+      mustAvoid: ['夸大'],
+      requirements: {},
+      createdBy: 'operator',
+    });
+    const script = await director.createScript(project.id, brief.id);
+    const scriptJob = await directorJobs.createScriptGeneration({
+      projectId: project.id,
+      briefId: brief.id,
+      scriptAggregateId: script.id,
+      correlationId: 'corr-e2e-script',
+    });
+    await worker.execute('DIRECTOR_GENERATE_SCRIPT', { jobId: scriptJob.id });
+    const acceptedScript = await director.acceptScript(project.id, (await director.listScriptRevisions(project.id))[0]!.id);
+    const storyboard = await director.createStoryboard(project.id);
+    const storyboardJob = await directorJobs.createStoryboardGeneration({
+      projectId: project.id,
+      scriptRevisionId: acceptedScript.id,
+      storyboardAggregateId: storyboard.id,
+      correlationId: 'corr-e2e-storyboard',
+    });
+    await worker.execute('DIRECTOR_GENERATE_STORYBOARD', { jobId: storyboardJob.id });
+    const approvedStoryboard = await director.approveStoryboard(project.id, (await director.listStoryboardRevisions(project.id))[0]!.id);
+    const sourcePaths = await Promise.all(
+      ['red', 'green', 'blue'].map(async (color) => {
+        const path = join(root, `${color}.mp4`);
+        await generateFixtureVideo(path, ffmpegPath, color);
+        return assets.importFile({ projectId: project.id, sourcePath: path, kind: 'VIDEO' });
+      }),
+    );
+    const voicePath = join(root, 'voice.wav');
+    await generateFixtureAudio(voicePath, ffmpegPath);
+    const voice = await assets.importFile({ projectId: project.id, sourcePath: voicePath, kind: 'AUDIO' });
+    const video = new VideoService(db, storage, jobs, new AssetCatalogService(db));
+    const bridge = new DirectorVideoService(director, video);
+    const videoAssetIds = sourcePaths.map((asset) => asset.id);
+    const sceneAssetBindings = approvedStoryboard.scenes.map((scene) => ({ sceneIndex: scene.sceneIndex, assetIds: videoAssetIds }));
+    const videoJob = await bridge.createVideoJob(project.id, {
+      videoAssetIds,
+      sceneAssetBindings,
+      voiceAssetId: voice.id,
+      targetDurationMs: 3_000,
+      subtitleText: 'ContentOS Director V1',
+    });
+    videoJobId = videoJob.id;
+    const renderResult = await new JobRunner(jobs, 'video-worker-director-e2e').run(
+      videoJob.id,
+      createVideoJobHandler({ db, storage, assets, jobs, video, ffmpegPath, ffprobePath, fontFile }),
+    );
+    assert.equal(renderResult.state, 'SUCCEEDED');
+    const result = renderResult.result as { manifestId: string; renderId: string; outputAssetId: string };
+    const manifest = await db.query<{ manifest: { metadata?: { briefId: string; scriptRevisionId: string; storyboardRevisionId: string } } }>(
+      'select manifest from edit_manifests where id = $1',
+      [result.manifestId],
+    );
+    assert.equal(manifest.rows[0]?.manifest.metadata?.briefId, brief.id);
+    assert.equal(manifest.rows[0]?.manifest.metadata?.scriptRevisionId, acceptedScript.id);
+    assert.equal(manifest.rows[0]?.manifest.metadata?.storyboardRevisionId, approvedStoryboard.id);
+    const render = await db.query<{ status: string }>('select status from renders where id = $1', [result.renderId]);
+    assert.equal(render.rows[0]?.status, 'SUCCEEDED');
+    const output = await db.query<{ storage_key: string }>('select storage_key from assets where id = $1', [result.outputAssetId]);
+    const probe = await probeMedia(storage.objectPath(output.rows[0]!.storage_key), ffprobePath);
+    assert.equal(probe.width, 1080);
+    assert.equal(probe.height, 1920);
+    assert.equal(probe.format, 'mp4');
+    assert.equal(probe.audio, true);
   } finally {
-    await db.query('delete from renders where project_id = $1', [project.id]); await db.query('delete from edit_manifests where project_id = $1', [project.id]); await db.query('delete from director_project_state where project_id = $1', [project.id]); await db.query('delete from director_storyboard_revisions where project_id = $1', [project.id]); await db.query('delete from director_storyboards where project_id = $1', [project.id]); await db.query('delete from director_script_revisions where project_id = $1', [project.id]); await db.query('delete from director_scripts where project_id = $1', [project.id]); await db.query('delete from director_briefs where project_id = $1', [project.id]); await db.query('delete from ai_runs where project_id = $1', [project.id]); await db.query('delete from job_events where job_id in (select id from jobs where project_id = $1)', [project.id]); await db.query('delete from job_attempts where job_id in (select id from jobs where project_id = $1)', [project.id]); await db.query('delete from jobs where project_id = $1', [project.id]); await db.query('delete from project_assets where project_id = $1', [project.id]); await db.query('delete from assets where project_id = $1', [project.id]); await db.query('delete from content_projects where id = $1', [project.id]); await db.end(); await rm(root, { recursive: true, force: true });
+    await db.query('delete from renders where project_id = $1', [project.id]);
+    await db.query('delete from edit_manifests where project_id = $1', [project.id]);
+    await db.query('delete from director_project_state where project_id = $1', [project.id]);
+    await db.query('delete from director_storyboard_revisions where project_id = $1', [project.id]);
+    await db.query('delete from director_storyboards where project_id = $1', [project.id]);
+    await db.query('delete from director_script_revisions where project_id = $1', [project.id]);
+    await db.query('delete from director_scripts where project_id = $1', [project.id]);
+    await db.query('delete from director_briefs where project_id = $1', [project.id]);
+    await db.query('delete from ai_runs where project_id = $1', [project.id]);
+    await db.query('delete from job_events where job_id in (select id from jobs where project_id = $1)', [project.id]);
+    await db.query('delete from job_attempts where job_id in (select id from jobs where project_id = $1)', [project.id]);
+    await db.query('delete from jobs where project_id = $1', [project.id]);
+    await db.query('delete from project_assets where project_id = $1', [project.id]);
+    await db.query('delete from project_assets where project_id = $1', [project.id]);
+    await db.query('delete from assets where project_id = $1', [project.id]);
+    await db.query('delete from content_projects where id = $1', [project.id]);
+    await db.end();
+    await rm(root, { recursive: true, force: true });
   }
 });

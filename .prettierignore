@@ -1,0 +1,8 @@
+node_modules
+.next
+storage
+artifacts
+.worktrees
+research
+spikes
+*.lock

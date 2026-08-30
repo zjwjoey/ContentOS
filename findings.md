@@ -176,3 +176,44 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 
 - Standalone Quick Edit has two Manifest identities: selected Manifest is the current UI inspection target; current Manifest is `session.currentManifestId` and the sole mutable revision.
 - Primary Voice is part of immutable Planner Configuration after the first Manifest; changing it requires a new Standalone session.
+## Main Hardening V1 Baseline Audit (2026-08-30)
+
+- Branch/worktree: `codex/main-hardening-v1` at `9a6886e` (`Merge PR #4: finalize Operator UI V1`), isolated under `E:\ContentOS\.worktrees\main-hardening-v1`; `main` is untouched.
+- Baseline working tree contains only the planning-file update made for this hardening run.
+- Runtime versions: Node `v24.14.0`, pnpm `10.32.1`.
+- Web dependency baseline: Next `14.2.21` (via `apps/web`); `pnpm audit --prod --audit-level high` reports **33 vulnerabilities** (1 critical, 12 high, 16 moderate, 4 low). The critical advisory includes Next middleware authorization bypass for versions `<14.2.25`; additional high advisories require the supported patched line.
+- No `.github/workflows` directory exists at baseline, so CI required checks are not configured.
+- Root `lint` currently invokes `scripts/lint.ts`, which is the repository secret scanner rather than ESLint. Root `format` invokes `scripts/format-check.ts`. Root `test` is a manually enumerated `tsx --test` file list.
+- Existing migrations are numbered `0001` through `0018`, each with an up/down pair. Approval implementation and tests already exist; concurrency hardening still requires a dedicated regression test.
+
+### Baseline risks confirmed
+
+1. Next.js dependency is below the audited patched range and must be upgraded on the isolated branch with lockfile verification.
+2. Test discovery, lint naming and CI checks do not yet provide the hardening gates requested by the prompt.
+3. Approval, path-containment and Storyboard requirements need source-level audit before changes; no assumptions are made from filenames alone.
+
+## Main Hardening V1 Repair Findings
+
+- Next 15.5.21 requires async dynamic-route params. The six project pages were migrated to React 19 `use(params)` and now build successfully.
+- API launch now reads `CONTENTOS_API_HOST` and defaults to `127.0.0.1`; the operator launcher passes `CONTENTOS_WEB_HOST` (also defaulting to `127.0.0.1`) to Next.
+- Profile directories now use a bounded key format and an allow-list of registered platforms (`fake-platform`, `douyin`, `wechat-channels`).
+- LocalStorage now validates object keys as slash-separated relative keys and resolves them under the configured root; promotion emits portable forward-slash keys.
+- Approval API and contract reject new SCRIPT/STORYBOARD decisions. Existing Director editorial state remains owned by Director and legacy rows may remain readable for historical compatibility.
+- Dependency audit after overrides: `pnpm audit --prod --audit-level high` exits 0 with one moderate advisory; no high or critical runtime advisories remain. Installed Next transitive versions are `postcss@8.5.18` and `sharp@0.35.0`.
+- The existing PostgreSQL service listens on `5432`, but the repository's default test fixtures target `55432`; no test database credentials were available to create or retarget that instance during this run.
+- Storyboard Planner V1 now accepts immutable `sceneAssetBindings` in the Video Job payload, validates every scene binding, emits deterministic clips with `sceneIndex`, and enforces exact per-scene/total duration. The Project Video page exposes manual binding controls; it does not fall back to a random pool when a scene is empty.
+- Approval transitions now re-read the current decision only after acquiring the same transaction-scoped advisory lock used for revision allocation, so concurrent terminal transitions cannot both act on an old PENDING row.
+- Doctor's storage check writes and removes a temporary marker, and its PostgreSQL/migration checks fail closed when the database is not reachable or schema state is not current.
+- PostCSS was upgraded from the remaining vulnerable `8.5.18` override to patched `8.5.23`; low-severity production audit is now clean.
+- The recursive test runner previously executed browser tests without their required isolated environment; those tests now skip outside `test:browser`, while CI/isolated runs still execute them when all fixtures are provided.
+- The local PostgreSQL service listens on `5432`, while most integration fixtures default to `55432` and `.env.example` documents `55433`; this port/credential drift must be resolved before the database acceptance gate can be called green.
+- Independent acceptance review found a browser-blocking mismatch: Project Video now requires per-scene `STORYBOARD_V1` asset bindings, but `test:browser` Scenario A uploads only one video and never binds it to scenes.
+- Independent review also flagged remaining hardening gaps: Project Center Assets status is presence-based rather than import-state-based; Project Director→Video still falls back to `RANDOM_MONTAGE` when bindings are omitted; ApprovalService does not verify target existence/project ownership outside the API resolver; and Approval concurrency coverage is SQL-sequencing-only rather than a real database race.
+- Additional hardening debt: `promote()` does not validate a staged temp path's containment, invalid Publisher profile keys are normalized as retryable failures, ESLint has no substantive rules, format/security scans have incomplete extension coverage, and CI does not configure a Linux subtitle font.
+
+## Main Hardening V1 Repair Closure (2026-08-30)
+
+- The shared-database full-suite blocker was a migration defect, not only a port issue: migration `0016_video_workspaces` copied legacy `project_assets.role` values into a constrained workspace table without translation.
+- Legacy `RENDER` is now translated to workspace `OUTPUT`; unsupported non-video roles are excluded from the video workspace link table. This preserves the video boundary while allowing upgrades from historical project data.
+- Regression coverage reproduces the pre-fix failure and verifies the migrated workspace row, preventing a future silent reintroduction.
+- With explicit local test infrastructure (`DATABASE_URL` on 5432 and FFmpeg 8.1.2), all discovered tests are green except the two intentionally skipped browser tests that require the isolated browser harness.

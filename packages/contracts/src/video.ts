@@ -3,7 +3,13 @@ import type { AssetSummaryV0 } from './asset.js';
 export interface VideoWorkspaceSnapshotV0 {
   schemaVersion: 'VIDEO_WORKSPACE_V0';
   projectId: string;
-  director: { briefId?: string; scriptRevisionId?: string; storyboardRevisionId?: string; ready: boolean };
+  director: {
+    briefId?: string;
+    scriptRevisionId?: string;
+    storyboardRevisionId?: string;
+    ready: boolean;
+    storyboardScenes?: Array<{ sceneIndex: number; voiceoverText: string; durationHintSeconds: number; visualInstruction: string; assetKeywords: string[] }>;
+  };
   sourceAssets: AssetSummaryV0[];
   voiceAssets: AssetSummaryV0[];
   currentRender: { renderId: string; outputAssetId: string; status: string } | null;
@@ -17,7 +23,15 @@ export function validateVideoWorkspaceSnapshotV0(value: VideoWorkspaceSnapshotV0
   for (const asset of [...value.sourceAssets, ...value.voiceAssets]) {
     if ('storageKey' in (asset as object) || 'sourcePath' in (asset as object)) throw new Error('Video workspace exposes a private asset field');
   }
-  if (value.currentRender && value.approval && (value.approval.targetId !== value.currentRender.renderId || value.approval.targetRevisionId !== value.currentRender.outputAssetId)) throw new Error('Video approval target does not match current render');
-  if (value.job && (!Number.isSafeInteger(value.job.attemptCount) || !Number.isSafeInteger(value.job.maxAttempts))) throw new Error('Video workspace job progress is invalid');
+  if (
+    value.currentRender &&
+    value.approval &&
+    (value.approval.targetId !== value.currentRender.renderId || value.approval.targetRevisionId !== value.currentRender.outputAssetId)
+  )
+    throw new Error('Video approval target does not match current render');
+  if (value.director.storyboardScenes?.some((scene) => !Number.isInteger(scene.sceneIndex) || scene.sceneIndex <= 0 || scene.durationHintSeconds <= 0))
+    throw new Error('Video workspace storyboard scene is invalid');
+  if (value.job && (!Number.isSafeInteger(value.job.attemptCount) || !Number.isSafeInteger(value.job.maxAttempts)))
+    throw new Error('Video workspace job progress is invalid');
   if ('storageKey' in (value as object) || 'sourcePath' in (value as object)) throw new Error('Video workspace exposes a private path');
 }

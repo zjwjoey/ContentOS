@@ -1,5 +1,5 @@
 export type ProjectCenterHealthLevel = 'HEALTHY' | 'ATTENTION' | 'BLOCKED' | 'COMPLETE';
-export type ProjectCenterStageKey = 'DIRECTOR' | 'VIDEO' | 'APPROVAL' | 'PUBLISHER';
+export type ProjectCenterStageKey = 'ASSETS' | 'DIRECTOR' | 'VIDEO' | 'APPROVAL' | 'PUBLISHER';
 export type ProjectCenterStageStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'ACTION_REQUIRED' | 'READY' | 'COMPLETE' | 'BLOCKED';
 export type ProjectCenterActionKind = 'APPROVAL' | 'JOB_FAILURE' | 'HUMAN_ACTION' | 'PUBLISH_RETRY' | 'NAVIGATION';
 export type ProjectCenterSeverity = 'INFO' | 'WARNING' | 'BLOCKED';

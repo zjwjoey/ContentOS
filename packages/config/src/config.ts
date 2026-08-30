@@ -2,6 +2,7 @@ export type Environment = 'development' | 'test' | 'staging' | 'production';
 
 export interface AppConfig {
   nodeEnv: Environment;
+  host: string;
   port: number;
   databaseUrl: string;
   storageRoot: string;
@@ -46,9 +47,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   if (!['development', 'test', 'staging', 'production'].includes(nodeEnv)) throw new Error('NODE_ENV is invalid');
   const publisherRealAdaptersEnabled = flag(env, 'PUBLISHER_REAL_ADAPTERS_ENABLED', false);
   const publisherWechatAllowSubmit = flag(env, 'PUBLISHER_WECHAT_ALLOW_SUBMIT', false);
-  if (publisherWechatAllowSubmit && !publisherRealAdaptersEnabled) throw new Error('Real adapters are disabled; PUBLISHER_WECHAT_ALLOW_SUBMIT cannot be enabled');
+  if (publisherWechatAllowSubmit && !publisherRealAdaptersEnabled)
+    throw new Error('Real adapters are disabled; PUBLISHER_WECHAT_ALLOW_SUBMIT cannot be enabled');
   return {
     nodeEnv,
+    host: env.CONTENTOS_API_HOST?.trim() || '127.0.0.1',
     port: integer(env, 'PORT', 3000),
     databaseUrl: required(env, 'DATABASE_URL'),
     storageRoot: required(env, 'STORAGE_ROOT'),

@@ -6,8 +6,8 @@ async function walk(directory: string): Promise<string[]> {
   const files: string[] = [];
   for (const entry of entries) {
     const target = join(directory, entry.name);
-    if (entry.isDirectory() && !['node_modules', 'dist', '.git'].includes(entry.name)) files.push(...await walk(target));
-    else if (entry.isFile() && entry.name.endsWith('.ts')) files.push(target);
+    if (entry.isDirectory() && !['node_modules', 'dist', '.next', '.git', 'storage', 'artifacts'].includes(entry.name)) files.push(...(await walk(target)));
+    else if (entry.isFile() && /\.(ts|tsx|js|mjs|cjs)$/.test(entry.name)) files.push(target);
   }
   return files;
 }

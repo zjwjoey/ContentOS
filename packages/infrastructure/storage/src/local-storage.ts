@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { createWriteStream } from 'node:fs';
 import { Transform, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -24,10 +24,23 @@ export class LocalStorageProvider {
   constructor(readonly root: string) {}
   private stagingRoot(): string { return join(this.root, 'staging'); }
   private objectsRoot(): string { return join(this.root, 'objects'); }
-  objectPath(storageKey: string): string { return join(this.root, storageKey); }
+  objectPath(storageKey: string): string {
+    const key = storageKey.trim();
+    const root = resolve(this.root);
+    if (!key || key.includes('\\') || key.startsWith('/') || /^[A-Za-z]:[\\/]/.test(key) || key.split('/').some((part) => !part || part === '.' || part === '..')) throw new Error('Invalid storage object path');
+    const target = resolve(root, ...key.split('/'));
+    if (target !== root && !target.startsWith(root + sep)) throw new Error('Invalid storage object path');
+    return target;
+  }
   private safeStagedPath(stagedPath: string): string {
     if (!stagedPath.startsWith('staging/') || stagedPath.includes('..') || stagedPath.includes('\\')) throw new Error('Invalid staged storage path');
     return this.objectPath(stagedPath);
+  }
+  private safeStagedTempPath(tempPath: string): string {
+    const stagingRoot = resolve(this.stagingRoot());
+    const resolved = resolve(tempPath);
+    if (resolved !== stagingRoot && !resolved.startsWith(stagingRoot + sep)) throw new Error('Invalid staged temp path');
+    return resolved;
   }
   async stageUpload(originalName: string, input: Readable, maxBytes: number): Promise<StagedUpload> {
     const name = originalName.trim();
@@ -55,13 +68,14 @@ export class LocalStorageProvider {
     return { tempPath, checksum, byteSize: data.byteLength, originalName: sourcePath.split(/[\\/]/).pop() || 'asset' };
   }
   async promote(staged: StagedBlob): Promise<{ storageKey: string; deduped: boolean }> {
+    const stagedTempPath = this.safeStagedTempPath(staged.tempPath);
     const digest = staged.checksum.startsWith('sha256:') ? staged.checksum.slice('sha256:'.length) : staged.checksum;
-    const storageKey = join('objects', digest.slice(0, 2), digest);
+    const storageKey = `objects/${digest.slice(0, 2)}/${digest}`;
     const destination = this.objectPath(storageKey);
     await mkdir(join(this.objectsRoot(), digest.slice(0, 2)), { recursive: true });
-    try { await stat(destination); await rm(staged.tempPath, { force: true }); return { storageKey, deduped: true }; }
+    try { await stat(destination); await rm(stagedTempPath, { force: true }); return { storageKey, deduped: true }; }
     catch { /* destination does not exist */ }
-    await rename(staged.tempPath, destination);
+    await rename(stagedTempPath, destination);
     return { storageKey, deduped: false };
   }
   async exists(storageKey: string): Promise<boolean> { try { await stat(this.objectPath(storageKey)); return true; } catch { return false; } }

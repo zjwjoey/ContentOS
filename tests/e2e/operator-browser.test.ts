@@ -4,8 +4,14 @@ import { chromium, type Page } from 'playwright';
 
 const baseUrl = process.env.CONTENTOS_OPERATOR_URL;
 const fixtureVideo = process.env.CONTENTOS_BROWSER_FIXTURE_VIDEO;
-const fixtureVideos = process.env.CONTENTOS_BROWSER_FIXTURE_VIDEOS ? JSON.parse(process.env.CONTENTOS_BROWSER_FIXTURE_VIDEOS) as string[] : fixtureVideo ? [fixtureVideo] : [];
+const fixtureVideos = process.env.CONTENTOS_BROWSER_FIXTURE_VIDEOS
+  ? (JSON.parse(process.env.CONTENTOS_BROWSER_FIXTURE_VIDEOS) as string[])
+  : fixtureVideo
+    ? [fixtureVideo]
+    : [];
 const fixtureAudio = process.env.CONTENTOS_BROWSER_FIXTURE_AUDIO;
+const publisherBrowserReady = Boolean(baseUrl && fixtureVideo);
+const quickEditBrowserReady = Boolean(baseUrl && fixtureVideos.length === 4 && fixtureAudio);
 
 async function waitForText(page: Page, text: string, timeout = 30_000): Promise<void> {
   await page.getByText(text, { exact: false }).first().waitFor({ state: 'visible', timeout });
@@ -22,7 +28,7 @@ async function createAndApprovePublish(page: Page, title: string, description: s
   return page.getByRole('listitem').filter({ hasText: title });
 }
 
-test('operator browser completes Fake Publisher success, retry, human-action and reconciliation journeys', async () => {
+test('operator browser completes Fake Publisher success, retry, human-action and reconciliation journeys', { skip: !publisherBrowserReady }, async () => {
   assert.ok(baseUrl, 'test:browser must start an isolated operator');
   assert.ok(fixtureVideo, 'test:browser must provide a playable upload fixture');
   const browser = await chromium.launch({ headless: true });
@@ -39,8 +45,11 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('link', { name: /^Assets/ }).click();
     await page.getByLabel('选择文件').setInputFiles(fixtureVideo);
     await waitForText(page, 'source.mp4');
-    try { await page.getByText(/可用 · VIDEO/).waitFor({ state: 'visible', timeout: 30_000 }); }
-    catch { throw new Error(`Asset import did not become usable: ${await page.locator('body').innerText()}`); }
+    try {
+      await page.getByText(/可用 · VIDEO/).waitFor({ state: 'visible', timeout: 30_000 });
+    } catch {
+      throw new Error(`Asset import did not become usable: ${await page.locator('body').innerText()}`);
+    }
 
     await page.getByRole('link', { name: '进入 Director' }).click();
     await page.getByLabel('选题').fill('浏览器验收选题');
@@ -59,6 +68,13 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('button', { name: '批准 Storyboard' }).click();
     await page.getByRole('link', { name: '进入 Video' }).click();
 
+    const sceneFields = page.locator('fieldset');
+    const sceneCount = await sceneFields.count();
+    assert.ok(sceneCount > 0, 'approved Storyboard must expose at least one scene for binding');
+    for (let index = 0; index < sceneCount; index += 1) {
+      await sceneFields.nth(index).getByRole('checkbox').first().check();
+    }
+
     await page.getByRole('button', { name: '创建渲染 Job' }).click();
     await page.locator('video').waitFor({ state: 'visible', timeout: 45_000 });
     await page.getByRole('button', { name: '送往 Approval Gate' }).click();
@@ -66,7 +82,10 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('button', { name: '批准此 Revision' }).click();
     await waitForText(page, 'APPROVED');
 
-    await page.getByRole('link', { name: /^Publisher/ }).first().click();
+    await page
+      .getByRole('link', { name: /^Publisher/ })
+      .first()
+      .click();
     await page.getByRole('button', { name: '创建测试账号' }).click();
     await waitForText(page, '开发模拟结果');
     const success = await createAndApprovePublish(page, '浏览器完整闭环', 'Fake Platform 成功发布');
@@ -77,7 +96,10 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.goto(`${baseUrl}/projects/${projectId}`, { waitUntil: 'networkidle' });
     await waitForText(page, 'PUBLISHED');
 
-    await page.getByRole('link', { name: /^Publisher/ }).first().click();
+    await page
+      .getByRole('link', { name: /^Publisher/ })
+      .first()
+      .click();
     const outcome = page.getByLabel('开发模拟结果');
     await outcome.selectOption('NETWORK');
     await waitForText(page, '开发模拟结果已更新');
@@ -111,7 +133,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
   }
 });
 
-test('operator browser completes Standalone Quick Edit upload, adjustment and render journeys', async () => {
+test('operator browser completes Standalone Quick Edit upload, adjustment and render journeys', { skip: !quickEditBrowserReady }, async () => {
   assert.ok(baseUrl, 'test:browser must start an isolated operator');
   assert.equal(fixtureVideos.length, 4, 'test:browser must provide four playable upload fixtures');
   assert.ok(fixtureAudio, 'test:browser must provide an audio fixture');
@@ -134,7 +156,10 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
     await page.getByLabel('Manifest 时间线').waitFor({ state: 'visible', timeout: 30_000 });
     const timelineButtons = page.getByLabel('Manifest 时间线').getByRole('button');
     const timelineCount = await timelineButtons.count();
-    assert.ok(timelineCount >= 3, `auto voice duration must produce enough clips for all adjustments (got ${timelineCount}: ${await page.getByLabel('Manifest 时间线').innerText()}; body: ${await page.locator('body').innerText()})`);
+    assert.ok(
+      timelineCount >= 3,
+      `auto voice duration must produce enough clips for all adjustments (got ${timelineCount}: ${await page.getByLabel('Manifest 时间线').innerText()}; body: ${await page.locator('body').innerText()})`,
+    );
     assert.equal(await voice.isDisabled(), true, 'voice must lock after planning');
     assert.equal(await durationMode.isDisabled(), true, 'planner settings must lock after planning');
 
@@ -157,17 +182,27 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
     await page.getByRole('button', { name: 'REROLL' }).click();
     revision = await waitForRevision(revision);
     const replacementPicker = page.getByLabel('替换素材');
-    const replacementValues = await replacementPicker.locator('option').evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value).filter(Boolean));
+    const replacementValues = await replacementPicker
+      .locator('option')
+      .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value).filter(Boolean));
     assert.ok(replacementValues.length > 0, 'a replacement READY asset must be available');
     let replacementSucceeded = false;
     for (const replacementAssetId of replacementValues) {
       await replacementPicker.selectOption(replacementAssetId);
-      const replaceResponse = page.waitForResponse((response) => response.url().includes('/api/v1/video/quick-edits/') && response.url().endsWith('/adjustments') && response.request().method() === 'POST', { timeout: 15_000 });
+      const replaceResponse = page.waitForResponse(
+        (response) =>
+          response.url().includes('/api/v1/video/quick-edits/') && response.url().endsWith('/adjustments') && response.request().method() === 'POST',
+        { timeout: 15_000 },
+      );
       await page.getByRole('button', { name: 'REPLACE' }).click();
       const replaceResult = await replaceResponse;
-      if (replaceResult.status() === 201) { replacementSucceeded = true; break; }
+      if (replaceResult.status() === 201) {
+        replacementSucceeded = true;
+        break;
+      }
       const replaceBody = await replaceResult.text();
-      if (replaceResult.status() !== 409 || !replaceBody.includes('Adjacent duplicate clips are not allowed')) throw new Error(`REPLACE failed with ${replaceResult.status()}: ${replaceBody}`);
+      if (replaceResult.status() !== 409 || !replaceBody.includes('Adjacent duplicate clips are not allowed'))
+        throw new Error(`REPLACE failed with ${replaceResult.status()}: ${replaceBody}`);
     }
     assert.equal(replacementSucceeded, true, 'REPLACE must find a valid non-adjacent replacement asset');
     revision = await waitForRevision(revision);
@@ -187,15 +222,17 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
     await revisionPicker.selectOption(historicalManifestValue);
     await page.getByText('历史版本仅供查看，但仍可精确渲染。').waitFor({ state: 'visible', timeout: 15_000 });
     assert.equal(await revisionPicker.inputValue(), historicalManifestValue);
-    for (const name of ['TRIM', 'REMOVE', 'REORDER', 'REPLACE', 'REROLL']) assert.equal(await page.getByRole('button', { name }).isDisabled(), true, `${name} must be disabled for a historical revision`);
+    for (const name of ['TRIM', 'REMOVE', 'REORDER', 'REPLACE', 'REROLL'])
+      assert.equal(await page.getByRole('button', { name }).isDisabled(), true, `${name} must be disabled for a historical revision`);
     assert.equal(await page.getByRole('button', { name: 'Render 成品' }).isDisabled(), false, 'historical revisions must remain renderable');
     await revisionPicker.selectOption(currentManifestValue);
     await page.getByText(`Manifest v${revision}`).waitFor({ state: 'visible', timeout: 15_000 });
-    for (const name of ['TRIM', 'REMOVE', 'REORDER', 'REROLL']) assert.equal(await page.getByRole('button', { name }).isDisabled(), false, `${name} must be enabled for the current revision`);
+    for (const name of ['TRIM', 'REMOVE', 'REORDER', 'REROLL'])
+      assert.equal(await page.getByRole('button', { name }).isDisabled(), false, `${name} must be enabled for the current revision`);
     await page.getByRole('button', { name: 'Render 成品' }).click();
     await page.getByText('Render 状态：SUCCEEDED').waitFor({ state: 'visible', timeout: 60_000 });
     await page.getByText('Render 输出成片').waitFor({ state: 'visible', timeout: 15_000 });
-    assert.equal(await page.locator('video').count() >= 1, true, 'rendered output video should be visible');
+    assert.equal((await page.locator('video').count()) >= 1, true, 'rendered output video should be visible');
   } finally {
     await browser.close();
   }

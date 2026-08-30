@@ -327,3 +327,20 @@ Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-directio
 - [x] Docs Sync
 - [x] Push
 - [x] PR #4 Recheck
+
+## Phase 24: Main Hardening V1 — P0/P1/P2 Full Repair (2026-08-30)
+
+**Objective:** Execute the approved `ContentOS Main Hardening V1` prompt on the isolated branch `codex/main-hardening-v1`, preserving modular-monolith boundaries and leaving `main` untouched until human review.
+
+- [x] Baseline audit and test inventory; record evidence before implementation.
+- [x] P0 security/runtime hardening (Next/package audit, localhost binding, runtime secret safety).
+- [x] P1 Approval target/gate architecture correction and migration compatibility (domain/API resolver, legacy-role migration mapping and full DB gate verified).
+- [x] P2 Approval revision allocation uses transaction advisory locking with regression coverage.
+- [x] P2 Project Center/Assets/Storyboard Planner V1 contract, manual binding UI, exact duration/provenance and UI gaps addressed in this pass.
+- [x] P2 Publisher profile and LocalStorage path containment.
+- [x] P2 tooling: ESLint, Prettier, test discovery and inventory.
+- [x] P1 GitHub Actions CI workflow added; main-branch protection still requires repository permission assessment.
+- [x] Documentation and final audit recorded; full DB/migration gate verified with the local test infrastructure (browser harness skips remain explicit).
+- [ ] Create PR and stop for human merge decision; never auto-merge hardening.
+
+**Current phase:** Local hardening verification complete; awaiting human review before commit/PR/merge.

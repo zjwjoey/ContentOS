@@ -436,3 +436,53 @@
 - Separated selected Manifest from the mutable current Manifest; the picker now reflects the inspected revision.
 - Primary Voice lock is enforced by `StandaloneQuickEditService` after planning.
 - Regression and browser evidence updated; no migration and no scope expansion.
+## 2026-08-30 — Main Hardening V1 baseline and repair start
+
+- Created Phase 24 hardening plan on isolated branch `codex/main-hardening-v1`.
+- Completed baseline repository/package audit and recorded findings.
+- Confirmed Next `14.2.21` with `pnpm audit --prod --audit-level high`: 33 vulnerabilities (1 critical, 12 high, 16 moderate, 4 low).
+- Confirmed no `.github/workflows` directory, manual root test enumeration, and `lint` currently mapped to the secret scanner.
+- Next action: run the complete baseline test/migration/build gate, then begin the first TDD repair (P0 runtime/security).
+- Baseline test first attempt failed before test discovery because the isolated worktree had no `node_modules` (`tsx` not found). This is an environment setup issue; install will use the frozen lockfile and no source changes.
+- After frozen install, baseline `pnpm test` discovered 220 tests: 117 passed, 103 failed. The integration/worker failures are all `ECONNREFUSED 127.0.0.1:55432` because the expected PostgreSQL test instance is not running; one renderer unit also fails against the legacy local FFmpeg because it lacks `libx264`. These are recorded as environment baseline blockers, not silently treated as product regressions.
+- P0 RED/GREEN: added API host configuration with `127.0.0.1` default, explicit Web/API localhost launch binding, and documented host variables.
+- Upgraded Web Next.js to `15.5.21` and React/ReactDOM to `19.1.1`; migrated dynamic project pages to Next 15 Promise params via React `use()`.
+- Web production build now passes on the hardening branch (only pre-existing Autoprefixer warnings); typecheck and host config tests pass.
+- P2 RED/GREEN: added profile-key and LocalStorage traversal regression tests; added bounded `safeProfileKey`/registered platform profile paths and enforced safe object paths in LocalStorage and Publisher Worker.
+- P1 RED/GREEN: Approval contract/API now rejects new SCRIPT/STORYBOARD Approval targets; Director remains the owner of those editorial gates.
+- P1 RED/GREEN: Approval creation now allocates revisions inside a PostgreSQL transaction protected by `pg_advisory_xact_lock`; a unit regression verifies begin/lock/commit sequencing.
+- Project Center now ignores legacy Director Approval rows, routes Video/Approval stages to real pages, and keeps Director readiness derived from Director's own current pair.
+- Replaced the legacy seeded random comparator shuffle with a deterministic Fisher–Yates shuffle; regression coverage prevents reintroduction.
+- Added real ESLint parsing, changed-file Prettier checking, automatic recursive test discovery (`90` test files), `test:inventory`, and renamed the secret scanner entrypoint to `security:scan`.
+- Added `.github/workflows/ci.yml` with quality, database tests, Web build and browser acceptance jobs. Main-branch required-check protection still needs GitHub permission/API verification.
+- Current verified local gates: unit + contract suites **113/113**, `typecheck`, Web build, `format`, `lint`, and `security:scan` pass. Full DB/browser gate remains blocked until a test PostgreSQL instance is available on the configured URL and FFmpeg is supplied with `libx264`.
+- Fresh post-repair verification: unit + contract suites **114/114** (including Planner, Approval, Project Center and path-safety regressions); root build, Web build, format, ESLint, security scan, typecheck and `git diff --check` all pass.
+- Dependency audit now exits 0 at the high-severity threshold; one moderate advisory remains for later review.
+- Main branch protection could not be queried in this environment because `gh` is not on PATH; no remote protection mutation was attempted.
+- Approval transition was tightened after review: lock acquisition, current-state re-read, and terminal decision insert now share one transaction. Focused approval/planner/path suite remains green.
+- Added Storyboard Planner V1 contract and Project Video binding UI. `STORYBOARD_V1` validates one-or-more READY project source assets per scene, rotates deterministically, preserves scene order, writes `sceneIndex`, and fills each scene/total duration exactly. Standalone remains `RANDOM_MONTAGE`.
+- Project Center stage contract is now `ASSETS → DIRECTOR → VIDEO → APPROVAL → PUBLISHER`, with Assets status derived from project asset presence and all five real hrefs.
+- Approval create API is pending-only (optional legacy `status: PENDING` accepted for compatibility), rejects direct terminal statuses, and resolves exact current Render/Publisher targets before creating a gate.
+- Doctor now performs a real storage write/delete and fails closed on missing/unreachable PostgreSQL or stale migration state.
+- Fresh automatic full-suite run discovered 282 tests: 161 passed, 121 failed, with the failures dominated by `ECONNREFUSED 127.0.0.1:55432`; this confirms discovery coverage and preserves the known environment blocker rather than masking it.
+- Fresh unit+contract run with FFmpeg 8.1.2 (`libx264`) passed 117/117. Root build, Web build, typecheck, lint, format, security scan and diff checks passed.
+- Doctor with the known-good FFmpeg/FFprobe paths passes runtime, writable storage, codecs, filters and font checks, then fails closed on missing `DATABASE_URL` for PostgreSQL reachability and migration-current checks; this is the intended hardening behavior.
+- `pnpm run doctor` reproduces the same fail-closed result (exit 1) until a database URL is supplied.
+- Repair pass: Browser Scenario A now binds one READY video asset to every approved Storyboard scene before creating the Project Video render Job; the Director V1 vertical-slice fixture also supplies explicit scene bindings.
+- Repair pass: approved Director V1 Video jobs no longer silently fall back to `RANDOM_MONTAGE`; omitted bindings fail with an explicit Storyboard binding error.
+- Repair pass: Project Center now reads optional project AssetImport records, derives Assets status from import states plus project-owned assets, and maps import/source failures to the Assets stage.
+- Repair pass: LocalStorage promotion validates staged temp-path containment; invalid Publisher profile configuration is terminal instead of retryable; CI installs/configures a Linux subtitle font.
+- Repair pass: `format` now writes, `format:check` checks, both include CSS/YAML, and security scanning covers TS/TSX/JS/MJS/CJS while excluding generated artifacts. ESLint now has substantive equality/debugger rules with generated directories globally ignored.
+- Dependency hardening follow-up: pinned PostCSS to `8.5.23`; frozen install succeeds and `pnpm audit --prod --audit-level low` now reports no known vulnerabilities.
+- Full quality rerun after the dependency patch: root build, Web build, typecheck, ESLint, security scan, Prettier check and diff check pass. Focused unit/contract coverage passes 44/44 with FFmpeg 8.1.2.
+- Test baseline cleanup: Director source assertions now tolerate formatting whitespace, and browser acceptance tests skip when `test:browser` has not injected its isolated operator/fixture environment. The static/e2e source suite passes 6/6 with 2 expected skips.
+- Full automatic discovery remains environment-blocked: 282 tests discovered, 160 pass and 122 fail; the failures are overwhelmingly PostgreSQL connections to `127.0.0.1:55432`. `pnpm run doctor` confirms FFmpeg/storage checks pass but database checks fail closed without `DATABASE_URL`.
+
+## Main Hardening V1 Repair Verification (2026-08-30)
+
+- Added a migration regression for legacy `project_assets.role = 'RENDER'` data.
+- Fixed migration `0016_video_workspaces` to map legacy `RENDER` assets to workspace `OUTPUT` and ignore non-video legacy roles instead of violating the new role check.
+- Migration matrix now passes 5/5, including the legacy-role upgrade path.
+- Full automatic suite now discovers 286 tests: 284 passed, 2 expected browser skips, 0 failed, using PostgreSQL on 5432 and the installed FFmpeg 8.1.2 binary with `libx264`.
+- Final hardening gates pass: `format:check`, ESLint, `security:scan`, typecheck, root build and low-severity production audit.
+- Branch remains isolated and uncommitted pending user review/approval; `main` is untouched.

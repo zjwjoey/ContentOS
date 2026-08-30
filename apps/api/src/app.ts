@@ -5,7 +5,13 @@ import type { Pool } from 'pg';
 import { ProjectService } from '../../../packages/modules/project/src/index.js';
 import { AssetCatalogService, AssetImportService } from '../../../packages/modules/asset/src/index.js';
 import { DirectorService, DirectorProjectReadService } from '../../../packages/modules/director/src/index.js';
-import { DirectorVideoService, VideoProjectReadService, VideoAdjustmentService, StandaloneQuickEditService, VideoService } from '../../../packages/modules/video/src/index.js';
+import {
+  DirectorVideoService,
+  VideoProjectReadService,
+  VideoAdjustmentService,
+  StandaloneQuickEditService,
+  VideoService,
+} from '../../../packages/modules/video/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
 import { ReviewService } from '../../../packages/modules/review/src/index.js';
 import type { DirectorPlanV0 } from '../../../packages/contracts/src/index.js';
@@ -24,14 +30,64 @@ import { registerVideoRoutes } from './video-routes.js';
 import { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 
 const projectInput = z.object({ name: z.string().trim().min(1).max(200), metadata: z.record(z.string(), z.unknown()).optional() });
-const directorInput = z.object({ seed: z.number().int(), brief: z.object({ topic: z.string().trim().min(1), audience: z.string().trim().min(1), objective: z.string().trim().min(1), tone: z.string().trim().min(1) }), storyboard: z.array(z.object({ id: z.string().trim().min(1), title: z.string().trim().min(1), narration: z.string().trim().min(1), visualIntent: z.string().trim().min(1), durationMs: z.number().int().positive(), sourceAssetIds: z.array(z.string()) })).min(1), provenance: z.object({ author: z.string().trim().min(1), source: z.enum(['manual', 'ai-draft']), promptVersion: z.string().optional(), modelProfile: z.string().optional() }) });
-const reviewInput = z.object({ targetType: z.enum(['RENDER', 'PUBLISH']), targetId: z.string().trim().min(1), status: z.enum(['PENDING', 'APPROVED', 'REJECTED']), reviewer: z.string().trim().min(1), reason: z.string().trim().optional(), evidence: z.record(z.string(), z.unknown()).optional() }).superRefine((value, context) => { if (value.status === 'REJECTED' && !value.reason) context.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'], message: 'reason is required for rejected decisions' }); });
+const directorInput = z.object({
+  seed: z.number().int(),
+  brief: z.object({ topic: z.string().trim().min(1), audience: z.string().trim().min(1), objective: z.string().trim().min(1), tone: z.string().trim().min(1) }),
+  storyboard: z
+    .array(
+      z.object({
+        id: z.string().trim().min(1),
+        title: z.string().trim().min(1),
+        narration: z.string().trim().min(1),
+        visualIntent: z.string().trim().min(1),
+        durationMs: z.number().int().positive(),
+        sourceAssetIds: z.array(z.string()),
+      }),
+    )
+    .min(1),
+  provenance: z.object({
+    author: z.string().trim().min(1),
+    source: z.enum(['manual', 'ai-draft']),
+    promptVersion: z.string().optional(),
+    modelProfile: z.string().optional(),
+  }),
+});
+const reviewInput = z
+  .object({
+    targetType: z.enum(['RENDER', 'PUBLISH']),
+    targetId: z.string().trim().min(1),
+    status: z.enum(['PENDING', 'APPROVED', 'REJECTED']),
+    reviewer: z.string().trim().min(1),
+    reason: z.string().trim().optional(),
+    evidence: z.record(z.string(), z.unknown()).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.status === 'REJECTED' && !value.reason)
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'], message: 'reason is required for rejected decisions' });
+  });
 const reviewActionInput = z.object({ reviewer: z.string().trim().min(1), reason: z.string().trim().optional() });
 function directorPlan(projectId: string, input: z.infer<typeof directorInput>): DirectorPlanV0 {
-  return { schemaVersion: 'DIRECTOR_PLAN_V0', projectId, seed: input.seed, brief: input.brief, storyboard: input.storyboard, provenance: { author: input.provenance.author, source: input.provenance.source, ...(input.provenance.promptVersion ? { promptVersion: input.provenance.promptVersion } : {}), ...(input.provenance.modelProfile ? { modelProfile: input.provenance.modelProfile } : {}) } };
+  return {
+    schemaVersion: 'DIRECTOR_PLAN_V0',
+    projectId,
+    seed: input.seed,
+    brief: input.brief,
+    storyboard: input.storyboard,
+    provenance: {
+      author: input.provenance.author,
+      source: input.provenance.source,
+      ...(input.provenance.promptVersion ? { promptVersion: input.provenance.promptVersion } : {}),
+      ...(input.provenance.modelProfile ? { modelProfile: input.provenance.modelProfile } : {}),
+    },
+  };
 }
 
-export interface ApiRuntimeDependencies { db: Pool; storage?: LocalStorageProvider; uploadMaxBytes?: number; allowFakePublisherControls?: boolean; }
+export interface ApiRuntimeDependencies {
+  db: Pool;
+  storage?: LocalStorageProvider;
+  uploadMaxBytes?: number;
+  allowFakePublisherControls?: boolean;
+}
 
 export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<FastifyInstance> {
   const db = 'query' in input ? input : input.db;
@@ -54,10 +110,44 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const standaloneQuickEdit = new StandaloneQuickEditService(db, assets, quickEdit, video);
   registerAssetRoutes(app, { projects, imports: new AssetImportService(db), assets, jobs, storage, maxUploadBytes: uploadMaxBytes });
   const publisher = new PublisherService(db);
-  registerProjectCenterRoutes(app, { center: new ProjectCenterService({ projects, director: directorRead, assets, video: new VideoProjectReadService(db), jobs, approvals, publisher }) });
+  const assetImports = new AssetImportService(db);
+  registerProjectCenterRoutes(app, {
+    center: new ProjectCenterService({
+      projects,
+      director: directorRead,
+      assets,
+      assetImports,
+      video: new VideoProjectReadService(db),
+      jobs,
+      approvals,
+      publisher,
+    }),
+  });
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
-  registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes });
-  registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs, allowFakePublisherControls: runtime.allowFakePublisherControls === true, ...(runtime.allowFakePublisherControls ? { fakeSimulations: new FakePublisherSimulationService(db) } : {}) });
+  registerVideoRoutes(app, {
+    projects,
+    director: directorV1,
+    videoFromDirector,
+    videoRead: new VideoProjectReadService(db),
+    assets,
+    approvals,
+    jobs,
+    video,
+    quickEdit,
+    standaloneQuickEdit,
+    assetImports,
+    storage,
+    maxUploadBytes: uploadMaxBytes,
+  });
+  registerPublisherRoutes(app, {
+    projects,
+    publisher,
+    approvals,
+    assets,
+    jobs,
+    allowFakePublisherControls: runtime.allowFakePublisherControls === true,
+    ...(runtime.allowFakePublisherControls ? { fakeSimulations: new FakePublisherSimulationService(db) } : {}),
+  });
   registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher });
   app.get('/health', async () => ({ status: 'ok' }));
   app.post('/api/v1/projects', async (request, reply) => {
@@ -78,8 +168,13 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
     const parsed = directorInput.safeParse(request.body);
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Director plan', details: parsed.error.issues } });
     const plan = directorPlan(projectId, parsed.data);
-    try { return reply.code(201).send(await director.createDraft(projectId, plan)); }
-    catch (error) { return reply.code(404).send({ error: { code: 'DIRECTOR_PROJECT_NOT_FOUND', message: error instanceof Error ? error.message : 'Project not found', details: [] } }); }
+    try {
+      return reply.code(201).send(await director.createDraft(projectId, plan));
+    } catch (error) {
+      return reply
+        .code(404)
+        .send({ error: { code: 'DIRECTOR_PROJECT_NOT_FOUND', message: error instanceof Error ? error.message : 'Project not found', details: [] } });
+    }
   });
   app.get('/api/v1/projects/:id/director-plans/current', async (request, reply) => {
     const projectId = (request.params as { id: string }).id;
@@ -92,18 +187,33 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
     const parsed = directorInput.safeParse(request.body);
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Director plan', details: parsed.error.issues } });
     const plan = directorPlan(params.id, parsed.data);
-    try { return reply.code(201).send(await director.revise(params.id, Number(params.revision), plan)); }
-    catch (error) { return reply.code(409).send({ error: { code: 'DIRECTOR_REVISION_CONFLICT', message: error instanceof Error ? error.message : 'Revision conflict', details: [] } }); }
+    try {
+      return reply.code(201).send(await director.revise(params.id, Number(params.revision), plan));
+    } catch (error) {
+      return reply
+        .code(409)
+        .send({ error: { code: 'DIRECTOR_REVISION_CONFLICT', message: error instanceof Error ? error.message : 'Revision conflict', details: [] } });
+    }
   });
   app.post('/api/v1/projects/:id/director-plans/:revision/accept', async (request, reply) => {
     const params = request.params as { id: string; revision: string };
-    try { return await director.accept(params.id, Number(params.revision)); }
-    catch (error) { return reply.code(409).send({ error: { code: 'DIRECTOR_REVISION_CONFLICT', message: error instanceof Error ? error.message : 'Revision conflict', details: [] } }); }
+    try {
+      return await director.accept(params.id, Number(params.revision));
+    } catch (error) {
+      return reply
+        .code(409)
+        .send({ error: { code: 'DIRECTOR_REVISION_CONFLICT', message: error instanceof Error ? error.message : 'Revision conflict', details: [] } });
+    }
   });
   app.post('/api/v1/projects/:id/director-plans/:revision/approve', async (request, reply) => {
     const params = request.params as { id: string; revision: string };
-    try { return await director.approveStoryboard(params.id, Number(params.revision)); }
-    catch (error) { return reply.code(409).send({ error: { code: 'DIRECTOR_REVISION_CONFLICT', message: error instanceof Error ? error.message : 'Revision conflict', details: [] } }); }
+    try {
+      return await director.approveStoryboard(params.id, Number(params.revision));
+    } catch (error) {
+      return reply
+        .code(409)
+        .send({ error: { code: 'DIRECTOR_REVISION_CONFLICT', message: error instanceof Error ? error.message : 'Revision conflict', details: [] } });
+    }
   });
   app.post('/api/v1/projects/:id/reviews', async (request, reply) => {
     const projectId = (request.params as { id: string }).id;
@@ -114,7 +224,8 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   app.get('/api/v1/projects/:id/reviews/:targetType/:targetId/current', async (request, reply) => {
     const params = request.params as { id: string; targetType: string; targetId: string };
     const targetType = z.enum(['RENDER', 'PUBLISH']).safeParse(params.targetType);
-    if (!targetType.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid review target type', details: targetType.error.issues } });
+    if (!targetType.success)
+      return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid review target type', details: targetType.error.issues } });
     const current = await reviews.getCurrent(params.id, targetType.data, params.targetId);
     if (!current) return reply.code(404).send({ error: { code: 'REVIEW_NOT_FOUND', message: 'Review decision not found', details: [] } });
     return current;
@@ -123,14 +234,28 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
     const params = request.params as { id: string; targetType: string; targetId: string };
     const targetType = z.enum(['RENDER', 'PUBLISH']).safeParse(params.targetType);
     const parsed = reviewActionInput.safeParse(request.body);
-    if (!targetType.success || !parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid review approval', details: [...(targetType.success ? [] : targetType.error.issues), ...(parsed.success ? [] : parsed.error.issues)] } });
+    if (!targetType.success || !parsed.success)
+      return reply.code(422).send({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid review approval',
+          details: [...(targetType.success ? [] : targetType.error.issues), ...(parsed.success ? [] : parsed.error.issues)],
+        },
+      });
     return reply.code(410).send({ error: { code: 'REVIEW_LEGACY_READ_ONLY', message: 'Pre-publish decisions must use the Approval Gate', details: [] } });
   });
   app.post('/api/v1/projects/:id/reviews/:targetType/:targetId/reject', async (request, reply) => {
     const params = request.params as { id: string; targetType: string; targetId: string };
     const targetType = z.enum(['RENDER', 'PUBLISH']).safeParse(params.targetType);
     const parsed = reviewActionInput.safeParse(request.body);
-    if (!targetType.success || !parsed.success || !parsed.data.reason) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'A rejection reason is required', details: [...(targetType.success ? [] : targetType.error.issues), ...(parsed.success ? [] : parsed.error.issues)] } });
+    if (!targetType.success || !parsed.success || !parsed.data.reason)
+      return reply.code(422).send({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'A rejection reason is required',
+          details: [...(targetType.success ? [] : targetType.error.issues), ...(parsed.success ? [] : parsed.error.issues)],
+        },
+      });
     return reply.code(410).send({ error: { code: 'REVIEW_LEGACY_READ_ONLY', message: 'Pre-publish decisions must use the Approval Gate', details: [] } });
   });
   app.setErrorHandler((error, _request, reply) => reply.code(500).send({ error: serializeError(error, 'InfrastructureError', 'api') }));
