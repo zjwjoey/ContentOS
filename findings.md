@@ -136,3 +136,11 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - Workspace asset listing returns only `AssetSummaryV0` fields and never exposes `storageKey`.
 - Project Video jobs/manifests/renders now carry `workspace-project-{projectId}`; Video and Video Adjustment lazily create the project workspace so newly-created projects satisfy the FK.
 - Standalone Asset Worker→Video Worker E2E passes with real FFmpeg/FFprobe and proves READY imports, exact render, H.264/AAC output and `OUTPUT` ownership.
+
+## Main Merge Finalization Findings (2026-08-30)
+
+- PR #3 is the consolidated main-merge candidate for Stage 2, Video Quick Edit and Video Direction Correction. After it merges, earlier slice PRs should not be merged independently; their history is already included. No prior PR was closed or modified during finalization.
+- PR #3 is open, non-draft and GitHub reports it mergeable/clean against `main`; GitHub has no configured check runs, so the local acceptance gate is the evidence of record.
+- The full local gate is green: migration matrix **4/4**, full suite **211/211**, format, lint, typecheck, root build, Web build, Doctor and diff-check.
+- Real Douyin/WeChat adapters are implemented behind the Publisher boundary but are not live-verified and remain disabled by default. Fake Publisher remains available for deterministic acceptance.
+- Finalization changed documentation only; no business code, migration SQL or runtime behavior changed in the finalization commit.

@@ -267,3 +267,15 @@ Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-directio
 - [x] Run final format/lint/typecheck/build/doctor/diff-check gate and commit; do not push or merge.
 
 **Status:** complete; review repairs implemented, verified and committed as `c0943ff`; no push or merge
+
+## Main Merge Finalization — 2026-08-30
+
+- [x] Verify `codex/video-direction-correction` source head, `origin/main` base head and PR #3 metadata.
+- [x] Confirm Stage 2, Video Quick Edit and Video Direction Correction accepted baselines are ancestors.
+- [x] Recheck migrations `0001`–`0018`, up/down pairs and the `0016` rollback boundary.
+- [x] Run migration matrix **4/4**, full test suite **211/211**, format, lint, typecheck, root/Web builds, Doctor and diff-check.
+- [x] Check secret/artifact safety and real-adapter default-off behavior.
+- [x] Synchronize finalization documentation and prepare one docs-only finalization commit.
+- [x] Push the feature branch and recheck PR #3; do not merge, force-push, delete branches/worktrees or alter `main`.
+
+**Status:** complete; PR #3 ready for human merge into `main`

@@ -370,3 +370,15 @@
 - Added `tests/e2e/video-standalone-quick-edit-vertical-slice.test.ts` covering real Asset Worker import followed by Video Worker render and FFprobe assertions.
 - Fresh verification: `pnpm test` **211/211 passed** using PostgreSQL `contentos_test` on port 5432 and the installed FFmpeg 8.1.2 libx264 build; focused codec/worker tests also passed.
 - Final gate after commit: full suite **211/211**, format, lint, typecheck, root/Web builds, migration matrix, doctor and diff-check all passed. Repair commit: `c0943ff`. No push or merge.
+
+## Session: 2026-08-30 — Main Merge Finalization
+
+- **Status:** complete; PR #3 is ready for human merge, with no merge performed by Codex.
+- Verified source branch `codex/video-direction-correction` and source head `3eff1d2bb7032146bfac39f41403b452de11f83a` before the final docs-only commit; PR #3 targets `main`, is open, non-draft and mergeable/clean.
+- Verified PR base/main head `345a8dde6e4122ec14497c110fed117334bee9b0`; no main change occurred after PR creation.
+- Confirmed accepted Stage 2, Video Quick Edit and Video Direction Correction baselines are present in the source ancestry.
+- Rechecked linear migrations `0001`–`0018`, all up/down pairs and the `0016` rollback constraint behavior with and without standalone rows.
+- Local acceptance gate passed: migration matrix **4/4**, full suite **211/211**, format, lint, typecheck, root build, Web build, Doctor and diff-check all pass.
+- Secret/artifact scan is clean; `.env.example` is the only environment template, no runtime secrets or generated media/artifacts are tracked, and real Publisher adapters remain disabled by default.
+- GitHub reports no configured check runs; local gates are the authoritative acceptance evidence for this PR.
+- Updated the current Video Direction Correction report, `task_plan.md`, `findings.md` and added `docs/superpowers/reports/2026-08-30-main-merge-finalization.md`.

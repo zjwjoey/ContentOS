@@ -84,4 +84,14 @@ STANDALONE QUICK EDIT V1: APPROVED
 
 Final gate evidence: full test suite 211/211, migration matrix 4/4, format, typecheck, lint, root build, Web build, Doctor and diff-check all passed; working tree is clean. A modern FFmpeg/FFprobe run produced MP4 with `videoCodec=h264` and `audioCodec=aac`; the standalone worker E2E also verified the workspace `OUTPUT` relation.
 
-Pushed To Remote: NO (no push authorization was given).
+## Remote / PR Status Update
+
+Pushed To Remote: YES.
+
+Remote Branch: `codex/video-direction-correction`.
+
+Pull Request: [#3](https://github.com/zjwjoey/ContentOS/pull/3).
+
+Target: `main`.
+
+Merge Status: PENDING HUMAN APPROVAL.
