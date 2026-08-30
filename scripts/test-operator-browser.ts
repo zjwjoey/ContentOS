@@ -10,7 +10,8 @@ import { createDatabase, migrateUp } from '../packages/database/src/index.js';
 import { generateFixtureAudio, generateFixtureVideo } from '../packages/infrastructure/ffmpeg/src/index.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL ?? process.env.DATABASE_URL ?? 'postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test';
+const adminUrl =
+  process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL ?? process.env.DATABASE_URL ?? 'postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test';
 
 function pnpmInvocation(args: string[]): { command: string; args: string[] } {
   if (process.platform !== 'win32') return { command: 'pnpm', args };
@@ -32,7 +33,7 @@ async function freePort(): Promise<number> {
     server.listen(0, '127.0.0.1', () => resolvePort());
   });
   const address = server.address();
-  await new Promise<void>((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
+  await new Promise<void>((resolveClose, reject) => server.close((error) => (error ? reject(error) : resolveClose())));
   if (!address || typeof address === 'string') throw new Error('Unable to allocate loopback port');
   return address.port;
 }
@@ -45,7 +46,9 @@ async function waitForHealth(url: string, timeoutMs = 20_000): Promise<void> {
       const response = await fetch(`${url}/health`);
       if (response.ok) return;
       lastError = `health returned ${response.status}`;
-    } catch (error) { lastError = error instanceof Error ? error.message : 'health request failed'; }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : 'health request failed';
+    }
     await new Promise((resolveWait) => setTimeout(resolveWait, 150));
   }
   throw new Error(`Timed out waiting for isolated operator: ${lastError}`);
@@ -55,13 +58,21 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<v
   return new Promise((resolveRun, reject) => {
     const child = spawn(command, args, { cwd: root, env, stdio: 'inherit', windowsHide: true });
     child.once('error', reject);
-    child.once('exit', (code, signal) => code === 0 ? resolveRun() : reject(new Error(`${command} ${args.join(' ')} exited with ${code ?? signal ?? 'unknown'}`)));
+    child.once('exit', (code, signal) =>
+      code === 0 ? resolveRun() : reject(new Error(`${command} ${args.join(' ')} exited with ${code ?? signal ?? 'unknown'}`)),
+    );
   });
 }
 
 function spawnPnpm(args: string[], env: NodeJS.ProcessEnv): ChildProcess {
   const invocation = pnpmInvocation(args);
-  return spawn(invocation.command, invocation.args, { cwd: root, env, stdio: 'inherit', windowsHide: true });
+  return spawn(invocation.command, invocation.args, {
+    cwd: root,
+    env,
+    stdio: 'inherit',
+    windowsHide: true,
+    detached: process.platform !== 'win32',
+  });
 }
 
 async function stopOwnedTree(child: ChildProcess): Promise<void> {
@@ -74,7 +85,30 @@ async function stopOwnedTree(child: ChildProcess): Promise<void> {
     });
     return;
   }
-  child.kill('SIGTERM');
+  const processGroupId = -child.pid;
+  await new Promise<void>((resolveStop) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(forceKillTimer);
+      resolveStop();
+    };
+    const forceKillTimer = setTimeout(() => {
+      try {
+        process.kill(processGroupId, 'SIGKILL');
+      } catch {
+        // The process group may already have exited.
+      }
+      finish();
+    }, 3_000);
+    child.once('exit', finish);
+    try {
+      process.kill(processGroupId, 'SIGTERM');
+    } catch {
+      finish();
+    }
+  });
 }
 
 async function main(): Promise<void> {
@@ -91,9 +125,14 @@ async function main(): Promise<void> {
   try {
     await admin.query(`create schema "${schema}"`);
     const database = await createDatabase(databaseUrl);
-    try { await migrateUp(database); } finally { await database.end(); }
+    try {
+      await migrateUp(database);
+    } finally {
+      await database.end();
+    }
     await mkdir(storageRoot, { recursive: true });
-    for (const [index, path] of fixtureVideos.entries()) await generateFixtureVideo(path, process.env.FFMPEG_PATH ?? 'ffmpeg', ['0x2057d4', '0x3b82f6', '0x16a34a', '0xea580c'][index]!);
+    for (const [index, path] of fixtureVideos.entries())
+      await generateFixtureVideo(path, process.env.FFMPEG_PATH ?? 'ffmpeg', ['0x2057d4', '0x3b82f6', '0x16a34a', '0xea580c'][index]!);
     await generateFixtureAudio(fixtureAudio, process.env.FFMPEG_PATH ?? 'ffmpeg');
 
     const apiUrl = `http://127.0.0.1:${apiPort}`;
@@ -115,9 +154,9 @@ async function main(): Promise<void> {
     await run(invocation.command, invocation.args, {
       ...environment,
       CONTENTOS_OPERATOR_URL: webUrl,
-       CONTENTOS_BROWSER_FIXTURE_VIDEO: fixtureVideos[0]!,
-       CONTENTOS_BROWSER_FIXTURE_VIDEOS: JSON.stringify(fixtureVideos),
-       CONTENTOS_BROWSER_FIXTURE_AUDIO: fixtureAudio,
+      CONTENTOS_BROWSER_FIXTURE_VIDEO: fixtureVideos[0]!,
+      CONTENTOS_BROWSER_FIXTURE_VIDEOS: JSON.stringify(fixtureVideos),
+      CONTENTOS_BROWSER_FIXTURE_AUDIO: fixtureAudio,
     });
   } finally {
     if (operator) await stopOwnedTree(operator);
