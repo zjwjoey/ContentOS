@@ -98,6 +98,17 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.goto(`${baseUrl}/projects/${projectId}`, { waitUntil: 'networkidle' });
     await waitForText(page, 'PUBLISHED');
 
+    await page.getByRole('link', { name: /^Review Analytics/ }).click();
+    await page.getByTestId('review-post').first().waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByTestId('collect-metrics').first().click();
+    await page.getByText(/播放 \d+ · 点赞 \d+/, { exact: false }).waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByTestId('analyze-review').first().click();
+    await page.getByText('最新复盘').waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByText('HIGH · 强化互动钩子', { exact: false }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByTestId('collect-metrics').first().click();
+    await page.waitForTimeout(500);
+    assert.equal(await page.getByTestId('review-post').first().getByText(/播放 \d+ · 点赞 \d+/, { exact: false }).count(), 1, 'idempotent metric collection must keep one latest snapshot view');
+
     await page
       .getByRole('link', { name: /^Publisher/ })
       .first()

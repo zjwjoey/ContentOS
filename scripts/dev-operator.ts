@@ -57,3 +57,4 @@ launch(['--filter', '@contentos/director-worker', 'dev'], { ...commonEnv, PORT: 
 launch(['--filter', '@contentos/asset-worker', 'dev'], { ...commonEnv, PORT: process.env.ASSET_WORKER_PORT ?? '3012' });
 launch(['--filter', '@contentos/worker-video', 'dev'], { ...commonEnv, PORT: process.env.VIDEO_WORKER_PORT ?? '3015' });
 launch(['--filter', '@contentos/worker-publisher', 'dev'], { ...commonEnv, PORT: process.env.PUBLISHER_WORKER_PORT ?? '3020' });
+launch(['--filter', '@contentos/review-worker', 'dev'], { ...commonEnv, PORT: process.env.REVIEW_WORKER_PORT ?? '3025' });
