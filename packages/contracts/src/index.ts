@@ -10,6 +10,16 @@ export { assertPublisherRequestTransition, createPublishSnapshotDigest } from '.
 export type { AuthResult, ExternalStateResult, PlatformCapabilityProfile, PublishResult, PublishSnapshot, PublisherAccount, PublisherAccountStatus, PublisherAdapter, PublisherAttempt, PublisherAttemptOperation, PublisherAttemptStatus, PublisherContext, PublisherCredential, PublisherExternalPost, PublisherFailure, PublisherFailureClassification, PublisherFailureCode, PublisherPlatformId, PublisherRequest, PublisherRequestRevision, PublisherRequestStatus } from './publisher.js';
 export { validateReviewDecision } from './review.js';
 export type { ReviewDecisionV0, ReviewStatus, ReviewTargetType } from './review.js';
+export { validateMetricSnapshotV1, validateReviewAnalysisReportV1 } from './review-analytics.js';
+export type {
+  MetricSnapshotSource,
+  MetricSnapshotV1,
+  MetricValuesV1,
+  ReviewAnalysisReportV1,
+  ReviewInsightV1,
+  ReviewRecommendationPriority,
+  ReviewRecommendationV1,
+} from './review-analytics.js';
 export { validateApprovalDecision } from './approval.js';
 export type { ApprovalDecisionV0, ApprovalStatus, ApprovalTargetType } from './approval.js';
 export type { ProjectCenterAction, ProjectCenterActionKind, ProjectCenterHealthLevel, ProjectCenterJobSummary, ProjectCenterSeverity, ProjectCenterSnapshot, ProjectCenterStage, ProjectCenterStageKey, ProjectCenterStageStatus } from './project-center.js';
