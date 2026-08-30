@@ -15,4 +15,3 @@ Publisher may create a `PUBLISH` Job only when the current `PublishRevision` has
 Approval decisions are append-only. A rejection requires a reason; a later approval is a new decision revision. Approval never renders, publishes, collects metrics or calls an AI provider.
 
 Review is reserved for post-publish `MetricSnapshot`, observations, AI performance analysis and recommendations.
-

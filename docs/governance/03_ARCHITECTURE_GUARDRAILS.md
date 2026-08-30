@@ -57,4 +57,3 @@ Tokens, refresh tokens, cookies, browser session state, passwords, API keys and 
 ## Migration and architecture change
 
 Migrations are ordered and append-only after sharing. Each migration has a safe down companion where feasible and is verified on an isolated database. If a task requires a boundary/invariant change: stop, document the reason and alternatives, add an ADR/ECR, obtain review and only then implement.
-

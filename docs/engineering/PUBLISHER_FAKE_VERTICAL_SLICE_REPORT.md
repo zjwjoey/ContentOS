@@ -60,4 +60,3 @@ The local operator launcher now starts API, Web, Director Worker and Publisher W
 - Video MVP expansion (Slice ④)
 - Metric Snapshot and post-publish AI Review (Slice ⑤)
 - Real Douyin/WeChat adapters or credentials (Slice ⑥)
-

@@ -53,4 +53,3 @@ Next recommended step
 ```
 
 High-risk findings—wrong-account publish, duplicate publish, secret leak, migration loss, approval bypass, false success or broken recovery—must be resolved before merge.
-

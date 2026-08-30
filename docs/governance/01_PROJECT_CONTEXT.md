@@ -63,4 +63,3 @@ These lines must not be described as one integrated product until a combined bra
 ## Current priority
 
 The next major engineering goal is integration closure: converge the existing branches, reconcile migration numbering and prove the combined Project → Director → Video → Review → Publisher path. New platform breadth, analytics and speculative workflow abstractions wait until that baseline is stable.
-

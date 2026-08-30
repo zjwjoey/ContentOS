@@ -186,6 +186,19 @@
 - Final gate: format, lint, typecheck, full **41-test** suite, build and doctor all passed.
 - Pushed as commit `3f89304` to `origin/main`.
 
+## Session: 2026-08-30 - Video Direction Correction
+
+### Read / Verify / Audit gate
+- **Baseline branch:** `codex/video-quick-edit`
+- **Baseline SHA:** `1e8b770cfbae09206c20756120d79fd0749914da`
+- **Correction branch:** `codex/video-direction-correction`
+- **Worktree:** `E:\ContentOS\.worktrees\video-direction-correction`
+- Baseline full suite: **191 passed, 0 failed** after installing the locked workspace dependencies.
+- Audit confirms the old Quick Edit is project-scoped Manifest Adjustment with `TRIM`, `REMOVE`, `REORDER`; immutable Manifest Revision/Digest and Exact Render are reusable and must remain.
+- Audit confirms `edit_manifests` and `renders` currently require `project_id`; `jobs` and `assets` are partially nullable but public services require project ownership. Renderer currently emits `mpeg4` and must be corrected to H.264/libx264.
+- Correction plan saved at `docs/superpowers/plans/2026-08-30-video-direction-correction.md`.
+- **Current phase:** correction plan approved internally; implementation not started before this gate.
+
 ## Session: 2026-08-22 — Director V1 preparation
 
 ### Phase 22: Worktree, baseline and implementation plan
@@ -337,3 +350,35 @@
   **3/3**, full suite **191/191**, browser **1/1**, doctor and diff check passed.
 - Branch: `codex/unified-product-flow`, commits `715155a` and `20b676a`; no
   freeze, push or merge was performed.
+
+## Session: 2026-08-30 — Video Direction Correction + Standalone Quick Edit V1
+
+- Correction baseline recorded from accepted `codex/video-quick-edit@1e8b770`; worktree is `E:\ContentOS\.worktrees\video-direction-correction` on `codex/video-direction-correction`.
+- Reclassified Project Quick Edit as Video Adjustment while preserving TRIM, REMOVE, REORDER, immutable revisions, digest fencing and Exact Render. Added REPLACE and REROLL.
+- Added `video_workspaces`, standalone sessions, workspace asset links and workspace-scoped Asset Import ownership without fake Projects.
+- Added deterministic Random Montage Planner V2, voice-duration planning, source rotation, exact-duration final clip fill and FFprobe codec reporting. Default renderer is H.264/AAC with a legacy mpeg4 fallback only for old local encoders.
+- Added standalone API/UI, including batch workspace uploads through the existing Asset Import/Asset Worker path.
+- Verification so far: full suite **203/204** before correcting the migration inventory assertion; focused standalone API **2/2**, typecheck and lint pass. Final full suite/build/clean-tree gate remains pending.
+
+### Review repair execution — 2026-08-30
+
+- Added RED tests for short-source planner bounds, unsafe REROLL fallback, workspace asset redaction and Project workspace propagation; all focused tests are now GREEN.
+- Removed the planner out-of-bounds path and REROLL insufficient-duration fallback.
+- Enforced Manifest-declared video/audio codecs at render time; explicit legacy MPEG-4 manifests remain supported without silently changing H.264 output.
+- Added `OUTPUT` role propagation for render assets and removed storage keys from standalone asset summaries.
+- Added lazy project workspace creation and workspace propagation for Project Video Jobs, manifests and renders; removed the redundant cross-pool workspace query in Standalone creation.
+- Added `tests/e2e/video-standalone-quick-edit-vertical-slice.test.ts` covering real Asset Worker import followed by Video Worker render and FFprobe assertions.
+- Fresh verification: `pnpm test` **211/211 passed** using PostgreSQL `contentos_test` on port 5432 and the installed FFmpeg 8.1.2 libx264 build; focused codec/worker tests also passed.
+- Final gate after commit: full suite **211/211**, format, lint, typecheck, root/Web builds, migration matrix, doctor and diff-check all passed. Repair commit: `c0943ff`. No push or merge.
+
+## Session: 2026-08-30 — Main Merge Finalization
+
+- **Status:** complete; PR #3 is ready for human merge, with no merge performed by Codex.
+- Verified source branch `codex/video-direction-correction` and source head `3eff1d2bb7032146bfac39f41403b452de11f83a` before the final docs-only commit; PR #3 targets `main`, is open, non-draft and mergeable/clean.
+- Verified PR base/main head `345a8dde6e4122ec14497c110fed117334bee9b0`; no main change occurred after PR creation.
+- Confirmed accepted Stage 2, Video Quick Edit and Video Direction Correction baselines are present in the source ancestry.
+- Rechecked linear migrations `0001`–`0018`, all up/down pairs and the `0016` rollback constraint behavior with and without standalone rows.
+- Local acceptance gate passed: migration matrix **4/4**, full suite **211/211**, format, lint, typecheck, root build, Web build, Doctor and diff-check all pass.
+- Secret/artifact scan is clean; `.env.example` is the only environment template, no runtime secrets or generated media/artifacts are tracked, and real Publisher adapters remain disabled by default.
+- GitHub reports no configured check runs; local gates are the authoritative acceptance evidence for this PR.
+- Updated the current Video Direction Correction report, `task_plan.md`, `findings.md` and added `docs/superpowers/reports/2026-08-30-main-merge-finalization.md`.

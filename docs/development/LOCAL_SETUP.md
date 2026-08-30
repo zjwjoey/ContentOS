@@ -6,7 +6,7 @@
 - pnpm 10.32.1.
 - PostgreSQL 16 development server. The local cluster used by this workspace is `127.0.0.1:55433`.
 - Use separate databases for operator preview (`contentos_operator_dev`) and automated tests (`contentos_test`).
-- FFmpeg and FFprobe on `PATH`, with `drawtext`, `scale`, `crop`, `concat`, `mpeg4` and `aac` capabilities.
+- FFmpeg and FFprobe on `PATH`, with `drawtext`, `scale`, `crop`, `concat`, `libx264` and `aac` capabilities. H.264 manifests require the `libx264` encoder; the renderer validates the actual FFprobe codec and never silently substitutes another codec.
 - Chinese font file at `C:\Windows\Fonts\msyh.ttc` or an explicit `FFMPEG_FONT_FILE`.
 
 ## Install and verify

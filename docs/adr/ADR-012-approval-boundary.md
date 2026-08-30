@@ -26,4 +26,3 @@ The pre-freeze `review_decisions` table remains historical data, and `/reviews` 
 - Approval records can be audited against the exact revision sent to a platform.
 - `Review` can evolve independently around platform metrics and AI recommendations.
 - A later cleanup migration may retire the legacy table/routes after published clients are migrated; that is outside Slice 1.
-

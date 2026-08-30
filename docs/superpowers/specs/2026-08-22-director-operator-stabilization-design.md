@@ -1,7 +1,7 @@
 # Director Operator Stabilization Design
 
-日期：2026-08-22  
-范围：ContentOS Director Operator 本地可运行化  
+日期：2026-08-22
+范围：ContentOS Director Operator 本地可运行化
 分支：`codex/director-v1`
 
 ## 目标

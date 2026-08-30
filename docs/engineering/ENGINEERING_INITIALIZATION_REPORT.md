@@ -62,7 +62,7 @@ All Stage 0–7 gates, the lease-recovery gate, Asset integrity checks, Manifest
 
 - Seeded planner emits deterministic immutable `EDIT_MANIFEST_V0` with source ranges, target duration, no adjacent duplicates, 9:16 1080×1920 canvas, cut/fade transitions, optional Chinese subtitles and explicit MP4/AAC output contract.
 - Renderer is separate from planning and only translates the Manifest to FFmpeg arguments. It writes a temporary `.part.mp4`, probes duration/resolution/container/audio, then atomically promotes the result through AssetService.
-- Doctor checks FFmpeg executable/version surface, required filters (`drawtext`, `scale`, `crop`, `concat`), codecs (`mpeg4`, `aac`) and Chinese font availability.
+- Doctor checks FFmpeg executable/version surface, required filters (`drawtext`, `scale`, `crop`, `concat`), encoders (`libx264`, `aac`) and Chinese font availability.
 - Renderer contract and real FFmpeg output tests pass.
 
 ## J. E2E — PASS

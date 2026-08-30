@@ -195,4 +195,3 @@ Expected: all tests pass, typecheck/lint/build exit 0, diff check is clean, and 
 - [ ] **Step 5: Update the acceptance report and commit**
 
 Document the actual Reconcile, Approval, Asset selection, human-action and concurrent-idempotency evidence in `docs/engineering/PUBLISHER_FAKE_VERTICAL_SLICE_REPORT.md`, then commit the report.
-

@@ -46,6 +46,27 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 | The pasted requirement opened with mojibake in PowerShell | Recovered the UTF-8 content semantically; repository and report paths are explicit in the request. |
 | MoneyPrinterTurbo clone is incomplete | Reports cite the immutable remote SHA and exact verified source paths; no conclusions use incomplete local clone contents. |
 
+## Video Direction Correction Audit (2026-08-30)
+
+1. The accepted `codex/video-quick-edit` branch is clean at `1e8b770`; its “Quick Edit” implementation is actually project-scoped Manifest Adjustment.
+2. Existing `TRIM`, `REMOVE`, `REORDER`, append-only revisions, manifest digest fencing, exact Manifest render and the shared Video Worker are valuable and will be preserved.
+3. `CreateQuickEditVersionInput.projectId`, project-scoped manifest queries and Asset Catalog ownership checks make the current adjustment path project-only.
+4. `edit_manifests.project_id` and `renders.project_id` are NOT NULL; `jobs.project_id` and `assets.project_id` are nullable in the base schema but current services/contract paths still require project context.
+5. The compatibility-safe ownership correction is a `video_workspaces` boundary with PROJECT and STANDALONE scopes, nullable `workspace_id` additions, and workspace asset links. Existing project rows stay query-compatible.
+6. `EDIT_MANIFEST_V0` currently requires `projectId`; standalone requires an ownership-neutral extension accepting `workspaceId` when `projectId` is absent.
+7. Renderer output is currently MP4/AAC but uses `mpeg4` video codec; correction must use H.264/libx264, AAC, yuv420p and prove it with FFprobe.
+8. The current planner shuffles with `sort(() => random() - 0.5)`, does not enforce 2–5 second clip bounds, does not use real voice duration, and only avoids immediate repeats. Random Montage Planner V2 must replace these behaviors deterministically.
+9. No standalone session, standalone API, standalone UI, REPLACE or REROLL exists on the baseline branch.
+
+## Video Direction Correction Implementation Findings (2026-08-30)
+
+1. The ownership correction is implemented with `video_workspaces` and nullable workspace scope on Jobs, manifests, renders and asset imports; standalone rows have no `project_id`.
+2. `VideoAdjustmentService` is the single implementation; `VideoQuickEditService` remains a deprecated compatibility export only.
+3. Standalone uploads enter the existing `ASSET_IMPORT` durable Job path. Workspace AUDIO imports link as VOICE; workspace VIDEO imports link as SOURCE.
+4. Random Montage Planner V2 uses deterministic seeded rotation and exact target-duration fill; the final clip may be shorter than the configured minimum.
+5. FFprobe now reports video/audio codec names. Modern FFmpeg uses libx264/AAC; an old local encoder without libx264 has a narrowly-scoped mpeg4 compatibility fallback for legacy tests.
+6. Known limitation: the Web page queues uploads but does not poll import completion; operators must wait for READY assets before planning.
+
 ## Director V1 implementation findings — 2026-08-22
 
 - The Director worktree is based on `main` and has a clean 41/41 baseline when using the isolated `contentos_director_dev` database.
@@ -105,3 +126,21 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - WeChat manual confirmation uses the frozen application state `REQUIRES_VERIFICATION` because the existing database constraint does not define a separate human-confirmation status.
 - The combined Fake E2E proves exact Render and Publish Revision approvals, durable Jobs, Worker execution, ExternalPost creation and Project Center `PUBLISHED` status. Retry, human action and reconciliation paths are covered in the same file.
 - Stage 1 is ready for final repository gates and branch review; Live Smoke and Unified Product Flow remain closed.
+
+## Video Direction Correction Review Repairs (2026-08-30)
+
+- Random Montage now caps each clip by the actual source duration and still fills the requested target exactly; a source shorter than the 2-second preference is used only for its available duration.
+- REROLL no longer falls back to an insufficiently long asset; it fails with a bounded domain error instead of creating an invalid or adjacent-duplicate Manifest.
+- Renderer selects the encoder declared by the Manifest (`libx264` for H.264, `mpeg4` only for explicit legacy manifests) and rejects FFprobe codec mismatches. The old silent H.264→MPEG-4 fallback was removed.
+- Workspace render output is linked with role `OUTPUT`; project output imports also honor the supplied role.
+- Workspace asset listing returns only `AssetSummaryV0` fields and never exposes `storageKey`.
+- Project Video jobs/manifests/renders now carry `workspace-project-{projectId}`; Video and Video Adjustment lazily create the project workspace so newly-created projects satisfy the FK.
+- Standalone Asset Worker→Video Worker E2E passes with real FFmpeg/FFprobe and proves READY imports, exact render, H.264/AAC output and `OUTPUT` ownership.
+
+## Main Merge Finalization Findings (2026-08-30)
+
+- PR #3 is the consolidated main-merge candidate for Stage 2, Video Quick Edit and Video Direction Correction. After it merges, earlier slice PRs should not be merged independently; their history is already included. No prior PR was closed or modified during finalization.
+- PR #3 is open, non-draft and GitHub reports it mergeable/clean against `main`; GitHub has no configured check runs, so the local acceptance gate is the evidence of record.
+- The full local gate is green: migration matrix **4/4**, full suite **211/211**, format, lint, typecheck, root build, Web build, Doctor and diff-check.
+- Real Douyin/WeChat adapters are implemented behind the Publisher boundary but are not live-verified and remain disabled by default. Fake Publisher remains available for deterministic acceptance.
+- Finalization changed documentation only; no business code, migration SQL or runtime behavior changed in the finalization commit.

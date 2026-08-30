@@ -23,4 +23,3 @@ export function validateApprovalDecision(decision: ApprovalDecisionV0): void {
   if (!['PENDING', 'APPROVED', 'REJECTED'].includes(decision.status)) throw new Error('status is invalid');
   if (decision.status === 'REJECTED' && !decision.reason?.trim()) throw new Error('reason is required for rejected approval');
 }
-

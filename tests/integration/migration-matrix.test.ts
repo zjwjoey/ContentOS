@@ -5,11 +5,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
-import { createDatabase, migrateUp, resolveMigrationsDirectory } from '../../packages/database/src/index.js';
+import { createDatabase, migrateDown, migrateUp, resolveMigrationsDirectory } from '../../packages/database/src/index.js';
 
 const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test';
 const migrationDirectory = resolveMigrationsDirectory();
-const migrationNames = Array.from({ length: 15 }, (_, index) => String(index + 1).padStart(4, '0'));
+const migrationNames = Array.from({ length: 18 }, (_, index) => String(index + 1).padStart(4, '0'));
 
 function schemaUrl(name: string): string {
   const url = new URL(adminUrl);
@@ -47,10 +47,42 @@ for (const [label, subset] of [['clean', 0], ['0001-0005', 5], ['0001-0006', 6]]
       const db = await createDatabase(database.url);
       try {
         const result = await migrateUp(db);
-        assert.equal(result.applied, 15 - subset);
+        assert.equal(result.applied, 18 - subset);
         const rows = await db.query<{ name: string }>('select name from schema_migrations order by name');
         assert.deepEqual(rows.rows.map((row) => row.name.slice(0, 4)), migrationNames);
       } finally { await db.end(); }
     } finally { await database.drop(); }
   });
 }
+
+test('migration 0016 down restores the legacy project ownership constraints', async () => {
+  const database = await createTemporarySchema();
+  const temp = await mkdtemp(join(tmpdir(), 'contentos-migration-0016-down-'));
+  try {
+    const entries = await readdir(migrationDirectory);
+    await Promise.all(Array.from({ length: 16 }, async (_, index) => {
+      const number = String(index + 1).padStart(4, '0');
+      await Promise.all(entries
+        .filter((entry) => entry.startsWith(`${number}_`))
+        .map((entry) => copyFile(join(migrationDirectory, entry), join(temp, entry))));
+    }));
+    const db = await createDatabase(database.url);
+    try {
+      await migrateUp(db, temp);
+      const before = await db.query<{ table_name: string; is_nullable: string }>("select table_name, is_nullable from information_schema.columns where table_schema = current_schema() and table_name in ('edit_manifests', 'renders') and column_name = 'project_id' order by table_name");
+      assert.deepEqual(before.rows, [
+        { table_name: 'edit_manifests', is_nullable: 'YES' },
+        { table_name: 'renders', is_nullable: 'YES' },
+      ]);
+      assert.equal((await migrateDown(db, temp)).removed, 1);
+      const after = await db.query<{ table_name: string; is_nullable: string }>("select table_name, is_nullable from information_schema.columns where table_schema = current_schema() and table_name in ('edit_manifests', 'renders') and column_name = 'project_id' order by table_name");
+      assert.deepEqual(after.rows, [
+        { table_name: 'edit_manifests', is_nullable: 'NO' },
+        { table_name: 'renders', is_nullable: 'NO' },
+      ]);
+    } finally { await db.end(); }
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+    await database.drop();
+  }
+});

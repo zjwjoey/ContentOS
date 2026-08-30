@@ -30,4 +30,4 @@ recoverExpiredLeases(now) -> recovered Job IDs
 
 ## Error and observability contract
 
-Every transition carries `projectId?`, `jobId`, `attemptId`, `correlationId`, worker ID, timestamps and a redacted error/result summary. Lease recovery emits a stable event and metric.
+Every transition carries `projectId?` or `workspaceId?` as its owning scope, plus `jobId`, `attemptId`, `correlationId`, worker ID, timestamps and a redacted error/result summary. Video Jobs must carry exactly one project/workspace owner; Standalone Quick Edit never creates a fake Project. Lease recovery emits a stable event and metric.

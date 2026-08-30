@@ -167,6 +167,19 @@ Architecture V0 — formal design documentation and self-review.
 | MoneyPrinterTurbo shallow clone exceeded the command execution window | 3 | Verify its immutable SHA and selected source tree through read-only GitHub API/raw endpoints; do not use incomplete clone remnants as evidence. |
 | PowerShell interpolation treated a colon after a variable name as a drive qualifier | 2 | Use string concatenation or `${variable}` in validation scripts. |
 
+## Phase 20: Video Direction Correction + Standalone Quick Edit V1
+
+- [x] Record baseline and ownership decision — **DONE (audit and plan recorded 2026-08-30)**
+- [x] Add workspace ownership schema and scope-aware contracts — **DONE**
+- [x] Reclassify Project Quick Edit as Video Adjustment with compatibility alias — **DONE**
+- [x] Add REPLACE and REROLL — **DONE**
+- [x] Upgrade Random Montage Planner V2 and H.264/AAC renderer invariants — **DONE**
+- [x] Implement no-project Standalone Quick Edit session/API — **DONE**
+- [x] Implement Standalone Quick Edit web flow — **DONE**
+- [x] Add full regression tests, docs and correction report — **DONE (206/206 and final build gate passed)**
+
+Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-direction-correction.md`.
+
 
 ## Slice ③ Project Center — 2026-08-22
 
@@ -243,3 +256,26 @@ Architecture V0 — formal design documentation and self-review.
 - [ ] Push `integration/contentos-v1` and wait for user acceptance.
 
 **Status:** implementation and final repository gate complete; push pending
+
+## Phase 23: Video Direction Correction Review Repairs — 2026-08-30
+
+- [x] Add regression tests for planner bounds, REROLL safety, codec enforcement, output ownership, asset API redaction, project workspace propagation and standalone worker coverage.
+- [x] Fix planner and adjustment invariants without changing the frozen product scope.
+- [x] Fix renderer codec contract and workspace output role.
+- [x] Remove storage-key leakage and complete Project workspace propagation.
+- [x] Add standalone upload/import/render worker E2E coverage.
+- [x] Run final format/lint/typecheck/build/doctor/diff-check gate and commit; do not push or merge.
+
+**Status:** complete; review repairs implemented, verified and committed as `c0943ff`; no push or merge
+
+## Main Merge Finalization — 2026-08-30
+
+- [x] Verify `codex/video-direction-correction` source head, `origin/main` base head and PR #3 metadata.
+- [x] Confirm Stage 2, Video Quick Edit and Video Direction Correction accepted baselines are ancestors.
+- [x] Recheck migrations `0001`–`0018`, up/down pairs and the `0016` rollback boundary.
+- [x] Run migration matrix **4/4**, full test suite **211/211**, format, lint, typecheck, root/Web builds, Doctor and diff-check.
+- [x] Check secret/artifact safety and real-adapter default-off behavior.
+- [x] Synchronize finalization documentation and prepare one docs-only finalization commit.
+- [x] Push the feature branch and recheck PR #3; do not merge, force-push, delete branches/worktrees or alter `main`.
+
+**Status:** complete; PR #3 ready for human merge into `main`
