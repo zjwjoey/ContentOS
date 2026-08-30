@@ -22,6 +22,8 @@ Quick Edit begins with a real draft session. The approved layout is a three-colu
 
 The browser emits `QuickEditOperation`; the Video module owns adjustment semantics. Render remains a durable Job and the resulting output is previewed as a playable video when READY.
 
+After the first Manifest is created, planner inputs and the primary voice are immutable for the Standalone session. V1 does not support replanning an existing session; create a new session to change planning inputs.
+
 ## Project workflow
 
 Overview exposes real project health, stage, actions, and Jobs. Assets exposes upload/import/preview. Director shows Brief, complete Script metadata, and Storyboard scenes. Video reuses the standalone timeline and exact-render concepts. Approval is an exact-revision queue with inline rejection reasons. Publisher remains Fake Platform only and presents state-aware next actions.

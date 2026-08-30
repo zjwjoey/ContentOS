@@ -112,3 +112,26 @@ PASS — report, task plan, progress and findings record PR #4, final local evid
 - PR head synchronized: YES
 - Merge: NOT PERFORMED
 - GitHub CI: no configured check runs; local gates are the evidence of record.
+
+## Final Merge Repair
+
+### Selected vs Current Manifest
+PASS — `selectedId` is the inspected revision while `currentId` remains `session.currentManifestId` and the only mutable revision.
+
+### Historical Revision Picker Truth
+PASS — the picker selects the inspected revision, labels only the domain current revision as current, keeps historical revisions read-only, and preserves exact render.
+
+### Primary Voice Domain Lock
+PASS — `StandaloneQuickEditService.setVoiceAsset()` rejects changes after the first Manifest with `STANDALONE_PLANNER_LOCKED`; the API returns HTTP 409 with that message.
+
+### Regression Tests
+PASS — focused regression suite 9/9; full suite 220/220.
+
+### Browser Acceptance
+PASS — Fake Publisher and Standalone Quick Edit scenarios 2/2; historical picker, disabled mutations, exact render, current revision recovery, and all five adjustments are exercised.
+
+### Final Gate
+PASS — migrations 4/4, format, lint, typecheck, root build, Web build, Doctor, diff-check, and secret/artifact checks passed; no migration was added.
+
+### PR Evidence
+PASS — PR #4 remains OPEN/non-Draft, targets `main`, remote head is synchronized, `main` is 0 commits ahead of the feature branch, mergeability is `true/clean`, GitHub CI is `NOT CONFIGURED / NO CHECK RUNS`, and no main merge was performed by Codex.

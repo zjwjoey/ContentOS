@@ -431,3 +431,8 @@
 - Moved project stage navigation into the shared project layout and added explicit loading/error states; removed duplicate ProjectNav markup from Assets and Director.
 - Added format-aware MIME mapping for Standalone media delivery.
 - Verification: targeted UI/integration tests, typecheck, lint, format, Web build, migration matrix, full suite and the new two-scenario isolated browser run passed.
+## Operator UI V1 Final Merge Repair
+
+- Separated selected Manifest from the mutable current Manifest; the picker now reflects the inspected revision.
+- Primary Voice lock is enforced by `StandaloneQuickEditService` after planning.
+- Regression and browser evidence updated; no migration and no scope expansion.

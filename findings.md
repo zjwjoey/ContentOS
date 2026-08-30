@@ -172,3 +172,7 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - Director Web uses the official `durationHintSeconds` field and displays seconds.
 - Standalone planner defaults to optional voice-driven duration with a 2–5 second clip range.
 - Planner and primary Voice settings become immutable after the first Manifest in V1.
+## Operator UI V1 Final Merge Repair
+
+- Standalone Quick Edit has two Manifest identities: selected Manifest is the current UI inspection target; current Manifest is `session.currentManifestId` and the sole mutable revision.
+- Primary Voice is part of immutable Planner Configuration after the first Manifest; changing it requires a new Standalone session.

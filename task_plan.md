@@ -315,3 +315,15 @@ Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-directio
 - [x] Final Gate
 - [x] Push Repair
 - [x] Recheck PR #4
+
+## Operator UI V1 Final Merge Repair
+
+- [x] Selected/current Manifest identity separation
+- [x] Historical picker truth
+- [x] Historical browser regression
+- [x] Domain primary Voice lock
+- [x] Voice lock integration/API regression
+- [x] Full Gate
+- [x] Docs Sync
+- [x] Push
+- [x] PR #4 Recheck
