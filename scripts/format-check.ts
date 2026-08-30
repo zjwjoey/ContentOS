@@ -3,15 +3,24 @@ import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
-async function gitOutput(args: string[], fallback: string[]): Promise<string> {
-  try {
-    return (await run('git', args)).stdout;
-  } catch {
-    return (await run('git', fallback)).stdout;
+async function gitOutput(): Promise<string> {
+  const candidates = [
+    ['diff', '--name-only', 'origin/main'],
+    ['diff', '--name-only', 'HEAD^'],
+    ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', 'HEAD'],
+  ];
+  for (const args of candidates) {
+    try {
+      const output = (await run('git', args)).stdout;
+      if (output.trim()) return output;
+    } catch {
+      // Shallow CI checkouts may not have origin/main or HEAD^; try the next source.
+    }
   }
+  return (await run('git', ['ls-files'])).stdout;
 }
 
-const tracked = (await gitOutput(['diff', '--name-only', 'origin/main'], ['diff', '--name-only', 'HEAD^'])).split(/\r?\n/).filter(Boolean);
+const tracked = (await gitOutput()).split(/\r?\n/).filter(Boolean);
 const untracked = (await run('git', ['ls-files', '--others', '--exclude-standard'])).stdout.split(/\r?\n/).filter(Boolean);
 const files = [...new Set([...tracked, ...untracked])].filter(
   (file) => /\.(ts|tsx|js|mjs|cjs|json|md|css|yaml|yml)$/.test(file) && !/^(task_plan|progress|findings)\.md$/.test(file),
