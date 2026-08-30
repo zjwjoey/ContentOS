@@ -382,3 +382,33 @@
 - Secret/artifact scan is clean; `.env.example` is the only environment template, no runtime secrets or generated media/artifacts are tracked, and real Publisher adapters remain disabled by default.
 - GitHub reports no configured check runs; local gates are the authoritative acceptance evidence for this PR.
 - Updated the current Video Direction Correction report, `task_plan.md`, `findings.md` and added `docs/superpowers/reports/2026-08-30-main-merge-finalization.md`.
+
+## Session: 2026-08-30 — Post-Merge Operator UI V1 Baseline
+
+- PR #3: **MERGED**.
+- Main Merge Commit: `fbf7dadf189355bf55d7b937c08226029556c26c`.
+- Current Development Baseline: `origin/main@fbf7dadf189355bf55d7b937c08226029556c26c`.
+- New worktree: `E:\ContentOS\.worktrees\operator-ui-v1` on `codex/operator-ui-v1`.
+- Next Stage: **Operator UI V1**.
+- Human Acceptance: **DEFERRED UNTIL INITIAL VISUAL UI EXISTS**.
+- Operator UI scope:
+  - Global Product Shell
+  - Standalone Quick Edit Visualization
+  - Project Workflow Visualization
+- Baseline gate: migration matrix **4/4** and full suite **211/211** passed; initial UI audit recorded as SUPPORTED / PARTIAL / MISSING in `findings.md` and `docs/superpowers/reports/2026-08-30-operator-ui-gap-audit.md`.
+
+## Session: 2026-08-30 — Operator UI V1 Design and Implementation Plan
+
+- Approved visual decisions: Shell A (persistent left navigation) and Quick Edit C (three-column editing workspace).
+- Design specification approved: `docs/superpowers/specs/2026-08-30-operator-ui-v1-design.md`.
+- Implementation plan created: `docs/superpowers/plans/2026-08-30-operator-ui-v1.md`.
+- Implementation status: not started; next gate is execution of Task 1 red acceptance contracts.
+
+## Session: 2026-08-30 — Operator UI V1 Implementation
+
+- Implemented persistent Operator Shell, project workspace context, centralized status mapping, shared media/timeline/Inspector components, and responsive dark workbench styling.
+- Standalone Quick Edit now creates a draft session first, supports asset/import polling and native previews, visual Manifest timeline, five Video adjustments, durable render enqueue, and render-state feedback.
+- Added the safe Workspace READY asset content endpoint; no migration was required.
+- Project Director, Video, Approval, and Fake Publisher surfaces were upgraded while preserving existing contracts and real data.
+- Automated browser acceptance passed the isolated Fake Publisher flow. Full regression passed **211/211**; migration matrix **4/4**; typecheck, lint, format, root build, Web build all passed.
+- Ready for final Git commit, push, and PR creation; human acceptance remains deferred.

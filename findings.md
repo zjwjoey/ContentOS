@@ -144,3 +144,15 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - The full local gate is green: migration matrix **4/4**, full suite **211/211**, format, lint, typecheck, root build, Web build, Doctor and diff-check.
 - Real Douyin/WeChat adapters are implemented behind the Publisher boundary but are not live-verified and remain disabled by default. Fake Publisher remains available for deterministic acceptance.
 - Finalization changed documentation only; no business code, migration SQL or runtime behavior changed in the finalization commit.
+
+## Operator UI V1 Baseline and Gap Audit (2026-08-30)
+
+- PR #3 is merged into `main` at `fbf7dadf189355bf55d7b937c08226029556c26c`; the new UI branch baseline is `origin/main` at the same SHA.
+- Baseline install completed with the frozen lockfile. Migration matrix passed **4/4**. The full suite passed **211/211** on the clean baseline after one transient shared-database concurrency failure was reproduced as green in isolation and on a second full run.
+- Supported: real Project Center snapshot, stage cards/health/actions/jobs, project-scoped API routes, Asset Worker upload/import and ready media content, Director Script/Storyboard Jobs, Project Video render/manifest/adjustment contracts, Approval Gate decisions, Fake Publisher flows, and standalone session/upload/plan/render APIs.
+- Partial: RootLayout has no global shell; homepage is a project create/list page; ProjectNav is duplicated by individual pages; status labels are page-local; Assets has upload/import polling and previews but only one-file upload; Director exposes only a compact Script/Storyboard summary; Project Video has adjustment controls but no visual timeline/inspector; Approval rejection uses `window.prompt`; Publisher is functional but log-dense; Standalone Quick Edit requires manual Asset IDs and only shows a text Manifest list.
+- Missing: unified OperatorShell/sidebar/topbar/page primitives, nested Project Workspace layout, shared status mapping, standalone workspace asset list/content endpoint and voice/settings update (if required by audit), reusable media/timeline components, visible REPLACE/REROLL/REMOVE/REORDER/TRIM controls for standalone Quick Edit, output preview/polling closure, and automated browser scenarios for the new visual flows.
+- No Review Analytics page should be added in V1; Review remains deferred. No new migration is justified by the current UI gaps.
+- The implementation must keep Web as a contract client: Video Adjustment operations remain owned by the Video module, and browser-facing APIs must not expose storage keys or private credentials.
+- Visual design decision: the user selected Shell option A, a persistent left navigation with project workspace content.
+- Visual design decision: for standalone Quick Edit, the user selected layout option C, a three-column editing workspace with asset library, preview/timeline center, and inspector panel.

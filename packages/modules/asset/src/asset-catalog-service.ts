@@ -96,6 +96,14 @@ export class AssetCatalogService {
     return result.rows[0] ? mapSourceAsset(result.rows[0] as Record<string, unknown>) : null;
   }
 
+  async getReadyWorkspaceAssetContent(workspaceId: string, assetId: string): Promise<ReadyAssetContent | null> {
+    const result = await this.db.query('select a.* from assets a join video_workspace_assets wa on wa.asset_id = a.id and wa.workspace_id = $1 and wa.asset_id = $2 where a.lifecycle = $3', [workspaceId, assetId, 'READY']);
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {};
+    return { id: String(row.id), kind: String(row.kind) as AssetSummaryV0['kind'], lifecycle: 'READY', byteSize: Number(row.byte_size), checksum: String(row.checksum), originalName: typeof metadata.originalName === 'string' ? metadata.originalName : String(row.storage_key).split('/').pop() || 'asset', metadata: safeMetadata(row), storageKey: String(row.storage_key) };
+  }
+
   async listWorkspaceAssets(workspaceId: string): Promise<AssetSummaryV0[]> {
     const result = await this.db.query('select a.* from assets a join video_workspace_assets wa on wa.asset_id = a.id and wa.workspace_id = $1 order by a.created_at, a.id', [workspaceId]);
     return result.rows.map((row) => {

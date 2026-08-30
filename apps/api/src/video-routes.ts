@@ -140,6 +140,16 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     if (!session) return reply.code(404).send({ error: { code: 'STANDALONE_QUICK_EDIT_NOT_FOUND', message: 'Standalone Quick Edit not found', details: [] } });
     return { items: await assets.listWorkspaceAssets(session.workspaceId), imports: await dependencies.assetImports.listWorkspace(session.workspaceId) };
   });
+  app.get('/api/v1/video/quick-edits/:id/assets/:assetId/content', async (request, reply) => {
+    const { id, assetId } = request.params as { id: string; assetId: string };
+    const session = await standaloneQuickEdit.get(id);
+    if (!session) return reply.code(404).send({ error: { code: 'STANDALONE_QUICK_EDIT_NOT_FOUND', message: 'Standalone Quick Edit not found', details: [] } });
+    const asset = await assets.getReadyWorkspaceAssetContent(session.workspaceId, assetId);
+    if (!asset) return reply.code(404).send({ error: { code: 'ASSET_NOT_FOUND', message: 'Ready workspace asset not found', details: [] } });
+    reply.header('content-type', asset.metadata.format === 'wav' ? 'audio/wav' : asset.kind === 'AUDIO' ? 'audio/mpeg' : asset.kind === 'VIDEO_RENDER' ? 'video/mp4' : 'video/mp4');
+    reply.header('content-length', asset.byteSize); reply.header('accept-ranges', 'bytes'); reply.header('etag', `"${asset.checksum}"`);
+    return reply.send((await import('node:fs')).createReadStream(dependencies.storage.objectPath(asset.storageKey)));
+  });
   app.post('/api/v1/video/quick-edits/:id/manifests/:manifestId/render', async (request, reply) => {
     const { id, manifestId } = request.params as { id: string; manifestId: string };
     const session = await standaloneQuickEdit.get(id);

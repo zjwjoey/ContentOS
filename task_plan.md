@@ -279,3 +279,26 @@ Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-directio
 - [x] Push the feature branch and recheck PR #3; do not merge, force-push, delete branches/worktrees or alter `main`.
 
 **Status:** complete; PR #3 ready for human merge into `main`
+
+## Operator UI V1
+
+- [x] Baseline: fetch `origin/main`, verify PR #3 ancestry, create `codex/operator-ui-v1` worktree.
+- [x] UI Audit: classify current Web capabilities as SUPPORTED / PARTIAL / MISSING.
+- [x] Global Shell
+- [x] Project Workspace Layout
+- [x] Status Mapping
+- [x] Standalone Asset UX
+- [x] Standalone Timeline
+- [x] Five Adjustments
+- [x] Standalone Render Preview
+- [x] Director Visualization
+- [x] Project Video Visualization
+- [x] Approval Visualization
+- [x] Publisher Visualization
+- [x] Browser Acceptance
+- [x] Full Gate
+- [x] Docs
+- [ ] Push
+- [ ] PR
+
+**Status:** implementation and automated acceptance complete; Push and PR remain as the final remote handoff steps.
