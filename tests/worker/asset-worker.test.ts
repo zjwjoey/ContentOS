@@ -122,9 +122,11 @@ test('Asset Worker fails safely for a missing staged file', async () => {
     maxAttempts: 1,
   });
   await imports.attachJob(project.id, record.id, job.id);
-  const worker = createAssetWorker({ db, storage, imports, jobs, assets, ffprobePath, workerId: 'asset-worker-missing', pollIntervalMs: 60_000 });
+  const worker = createAssetWorker({ db, storage, imports, jobs, assets, ffprobePath, workerId: 'asset-worker-missing', autoConsume: false });
   await worker.start();
   try {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal((await jobs.get(job.id))?.state, 'QUEUED');
     const result = (await worker.execute('asset.import', { jobId: job.id })) as { state: string };
     assert.equal(result.state, 'FAILED');
     assert.equal((await imports.get(project.id, record.id))?.state, 'FAILED');
