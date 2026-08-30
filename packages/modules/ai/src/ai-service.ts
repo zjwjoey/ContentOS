@@ -4,7 +4,7 @@ import { validateModelProfile, type AIRequest, type AIResult, type ModelProfile 
 import { AIProviderError, normalizeProviderError, type AIProvider } from './ai-provider.js';
 import { PromptRegistry } from './prompt-registry.js';
 
-export type AIOperation = 'DIRECTOR_GENERATE_SCRIPT' | 'DIRECTOR_GENERATE_STORYBOARD';
+export type AIOperation = 'DIRECTOR_GENERATE_SCRIPT' | 'DIRECTOR_GENERATE_STORYBOARD' | 'REVIEW_GENERATE_ANALYSIS';
 export interface AIGenerationInput {
   projectId: string;
   jobId: string;

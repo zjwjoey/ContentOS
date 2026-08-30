@@ -68,3 +68,24 @@ test('AIService rejects invalid structured output and records a failed AI Run', 
     assert.equal((rows.rows[0]?.error as Record<string, unknown>).code, 'INVALID_STRUCTURED_OUTPUT');
   } finally { await cleanupFixture(db, projectId, jobId, attemptId); await db.end(); }
 });
+
+test('AIService persists Review analysis operation provenance', async () => {
+  const db = await createDatabase(databaseUrl);
+  const projectId = 'project-ai-run-review-001'; const jobId = 'job-ai-run-review-001'; const attemptId = 'attempt-ai-run-review-001';
+  try {
+    await migrateUp(db);
+    await db.query('delete from ai_runs where project_id = $1', [projectId]);
+    await db.query('delete from job_attempts where id = $1', [attemptId]);
+    await db.query('delete from jobs where id = $1', [jobId]);
+    await db.query('delete from content_projects where id = $1', [projectId]);
+    await db.query('insert into content_projects (id, status, metadata) values ($1, $2, $3)', [projectId, 'DRAFT', '{}']);
+    await db.query('insert into jobs (id, project_id, type, state, idempotency_key, payload) values ($1, $2, $3, $4, $5, $6)', [jobId, projectId, 'REVIEW_GENERATE_ANALYSIS', 'RUNNING', `${projectId}:review:1`, '{}']);
+    await db.query('insert into job_attempts (id, job_id, attempt_number, worker_id, status) values ($1, $2, 1, $3, $4)', [attemptId, jobId, 'review-test-worker', 'RUNNING']);
+    const service = new AIService(db, new FakeAIProvider(), new PromptRegistry(), profile);
+    const result = await service.generateStructured({ projectId, jobId, attemptId, correlationId: 'corr-review-ai', operation: 'REVIEW_GENERATE_ANALYSIS', promptKey: 'review.analysis.v1', variables: { platformId: 'fake-platform', publishedAt: '2026-08-30T12:00:00.000Z', metrics: '{"plays":100}', history: '[]' } }, (value) => value);
+    assert.ok(result.aiRunId);
+    const row = await db.query<{ operation: string; prompt_version_id: string }>('select operation, prompt_version_id from ai_runs where id = $1', [result.aiRunId]);
+    assert.equal(row.rows[0]?.operation, 'REVIEW_GENERATE_ANALYSIS');
+    assert.ok(row.rows[0]?.prompt_version_id);
+  } finally { await cleanupFixture(db, projectId, jobId, attemptId); await db.end(); }
+});

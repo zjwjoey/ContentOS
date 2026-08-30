@@ -20,6 +20,10 @@ const defaultPrompts: RegisteredPrompt[] = [
     promptVersion: { id: 'prompt-director-storyboard-v1', key: 'director.storyboard.v1', version: 1, templateHash: 'sha256:director-storyboard-v1', requiredVariables: ['topic', 'coreThesis'] },
     template: '你是短视频 Director。选题：{{topic}}\n核心观点：{{coreThesis}}\n请输出绑定脚本的中文分镜结构。',
   },
+  {
+    promptVersion: { id: 'prompt-review-analysis-v1', key: 'review.analysis.v1', version: 1, templateHash: 'sha256:review-analysis-v1', requiredVariables: ['platformId', 'publishedAt', 'metrics', 'history'] },
+    template: '你是内容运营分析师。平台：{{platformId}}\n发布时间：{{publishedAt}}\n当前指标：{{metrics}}\n历史指标：{{history}}\n请输出克制、可执行的复盘建议。',
+  },
 ];
 
 export class PromptRegistry {
