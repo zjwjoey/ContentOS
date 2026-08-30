@@ -124,6 +124,8 @@ TRIM · REMOVE · REORDER · REPLACE · REROLL
 
 Every successful adjustment refreshes the current manifest pointer and visibly increments/selects a new revision. Failed operations show a user-readable message with the domain code available in details.
 
+V1 does not support branching from historical Manifest revisions. Historical revisions are inspectable and exactly renderable, but only the session current Manifest is mutable through Video Adjustment.
+
 ### Render closure
 
 The page renders the selected Manifest through the existing durable Job flow, polls the Job to a terminal state, and then shows a playable output video when the output Asset is READY. It must distinguish queued, processing, failed, and completed states and retain a link to the active Manifest revision.

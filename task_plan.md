@@ -298,7 +298,20 @@ Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-directio
 - [x] Browser Acceptance
 - [x] Full Gate
 - [x] Docs
-- [ ] Push
-- [ ] PR
+- [x] Push
+- [x] PR
 
-**Status:** review repairs and two-scenario isolated Playwright acceptance implemented; final full gates, Push and PR remain before human acceptance.
+**Status:** PR #4 acceptance repair is implemented; final local gates and browser acceptance are green, and human visual acceptance remains pending.
+
+## Operator UI V1 Acceptance Repair
+
+- [x] Historical Manifest read-only semantics
+- [x] Formal Project Video adjustment route
+- [x] Storyboard duration contract correction
+- [x] Five-operation browser acceptance
+- [x] Voice-driven planner defaults
+- [x] Plan-time settings lock
+- [x] Docs / PR truth sync
+- [x] Final Gate
+- [x] Push Repair
+- [x] Recheck PR #4

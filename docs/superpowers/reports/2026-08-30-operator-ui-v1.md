@@ -4,7 +4,7 @@
 
 - Branch: `codex/operator-ui-v1`
 - Base: `origin/main@fbf7dadf189355bf55d7b937c08226029556c26c`
-- PR #3 is included in the base.
+- PR #4 targets `main` and remains open.
 
 ## UI Audit
 
@@ -36,17 +36,18 @@ The new content route returns media bytes only after session and workspace membe
 
 ## Tests
 
-- Baseline/full suite: 213/213 passed with the configured PostgreSQL and FFmpeg environment (211 baseline tests plus 2 Operator UI V1 contract tests).
-- UI-focused source tests: 9/9 passed.
-- Typecheck, lint, format check, and Web build passed during implementation.
+- Final full suite: 220/220 passed with the configured PostgreSQL and FFmpeg environment.
+- Migration matrix: 4/4 passed.
+- UI-focused and acceptance source tests: 16/16 passed.
+- Typecheck, lint, format check, root build, Web build and Doctor passed during final verification.
 
 ## Browser Acceptance
 
-The isolated operator browser harness passed both the Fake Product Flow (success, retry, human-action, reconciliation, duplicate-click idempotency) and the Standalone Quick Edit Flow (four uploads, READY imports, explicit voice, plan, consecutive adjustments, Render polling and playable output). Structural UI contract coverage remains in `tests/e2e/operator-ui-v1-browser.test.ts`.
+The isolated operator browser harness passed both the Fake Product Flow (success, retry, human-action, reconciliation, duplicate-click idempotency) and the Standalone Quick Edit Flow (four uploads, READY imports, explicit voice, voice-driven plan, all five adjustments with strictly increasing revisions, Render polling and playable output). Structural UI contract coverage remains in `tests/e2e/operator-ui-v1-browser.test.ts`.
 
 ## Git Evidence
 
-Final SHA, commit list, push, and PR URL are filled only after the final gate and remote operations succeed.
+Repair changes are committed on `codex/operator-ui-v1`; the final remote head is verified against PR #4 after push.
 
 ## Documentation
 
@@ -58,7 +59,10 @@ Design, implementation plan, product scope, findings, progress, and task plan ar
 - Inspector now emits complete reorder permutations and selected replacement Asset IDs, and resets clip-local fields when the selected clip changes.
 - Standalone Render polls Job status, resolves `outputAssetId`, and displays a playable output preview when READY.
 - Project stage navigation is supplied by the shared project layout for every project route, with explicit loading/error states.
-- Standalone supports explicit primary voice selection and revision switching.
+- Standalone supports explicit primary voice selection and revision switching; historical revisions are read/render-only while only `session.currentManifestId` is editable.
+- Project Video now uses the formal `/video/adjustments` route; the deprecated compatibility route remains available only for historical callers.
+- Director Storyboard UI consumes official `durationHintSeconds` and displays seconds.
+- Standalone planner defaults to optional voice-driven duration and 2–5 second clips; seed, duration mode, clip bounds and primary voice lock after the first Manifest.
 
 ## Known Limitations
 
@@ -70,4 +74,39 @@ The isolated Playwright harness now exercises both Fake Publisher and Standalone
 
 ## Final Verdict
 
-**READY FOR HUMAN ACCEPTANCE** after the final local gate; remote push and PR creation remain the final handoff actions, and manual visual acceptance is still pending.
+**PR #4 READY FOR HUMAN ACCEPTANCE AND MAIN MERGE REVIEW**; remote branch and PR head are synchronized, merge has not been performed, and manual visual acceptance is still pending.
+
+## Acceptance Repair
+
+### Historical Manifest
+PASS — historical revisions are inspectable and exactly renderable; mutations are disabled.
+
+### Formal Project Adjustment Route
+PASS — new Project Video UI posts to `/video/adjustments`.
+
+### Storyboard Duration Contract
+PASS — Director Web uses `durationHintSeconds` and seconds-based display.
+
+### Five Adjustment Browser Flow
+PASS — real browser flow executes REROLL, REPLACE, TRIM, REORDER and REMOVE with revision growth.
+
+### Voice-driven Planner Settings
+PASS — AUTO duration omits `targetDurationMs` on create and follows the selected voice.
+
+### Planner Lock After Plan
+PASS — planner settings and primary voice are disabled after the first Manifest.
+
+### Documentation Truth
+PASS — report, task plan, progress and findings record PR #4, final local evidence and pending human acceptance.
+
+## Git Evidence
+
+- Branch: `codex/operator-ui-v1`
+- Repair code commit: `f19f55f` (`fix: close Operator UI V1 acceptance gaps`)
+- Documentation finalization commit: follows on the same branch after this report update.
+- Remote push: YES
+- PR: #4
+- PR state: OPEN
+- PR head synchronized: YES
+- Merge: NOT PERFORMED
+- GitHub CI: no configured check runs; local gates are the evidence of record.

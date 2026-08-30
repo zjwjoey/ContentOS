@@ -164,3 +164,11 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - Root cause: Standalone UI only retained the initial Render Job response. Added Job polling, output Asset resolution and native output preview, plus explicit voice selection and Manifest revision loading.
 - Root cause: project layout rendered the shared stage rail only on Overview. The layout now resolves the active stage for every project route and child pages no longer own duplicate stage navigation.
 - The isolated Playwright harness now covers both the existing Fake Publisher journey and Standalone Quick Edit upload/adjust/render/output closure; human visual acceptance remains a separate manual gate.
+
+## Operator UI V1 Acceptance Repair (2026-08-30)
+
+- Standalone historical Manifest revisions are view/render-only in V1; mutations always apply only to `session.currentManifestId`.
+- Project Video new UI uses `POST /api/v1/projects/:projectId/video/adjustments`; the deprecated compatibility route remains for historical callers.
+- Director Web uses the official `durationHintSeconds` field and displays seconds.
+- Standalone planner defaults to optional voice-driven duration with a 2–5 second clip range.
+- Planner and primary Voice settings become immutable after the first Manifest in V1.

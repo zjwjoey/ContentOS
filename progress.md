@@ -417,6 +417,16 @@
 
 - Added regression coverage for standalone consecutive Manifest adjustments and shared Inspector operation payloads.
 - Fixed Standalone Quick Edit current Manifest pointer advancement, real REPLACE asset selection, complete REORDER permutations, and clip-field reset when selection changes.
+
+## Session: Operator UI V1 Acceptance Repair (2026-08-30)
+
+- Identified and fixed the historical Manifest selection/edit mismatch; historical revisions are read/render-only.
+- Project Video now uses the formal Video Adjustment route.
+- Director Web now uses `durationHintSeconds` and seconds-based display.
+- The real browser flow executes all five adjustments: REROLL, REPLACE, TRIM, REORDER and REMOVE.
+- Standalone target duration defaults to Auto/follows the primary Voice; planner clip defaults are 2–5 seconds.
+- Planner and primary Voice settings lock after the first Manifest.
+- Documentation was synchronized with PR #4 and the final local acceptance evidence.
 - Added Standalone Manifest revision selection, explicit primary voice selection, Render Job polling, output Asset resolution, and playable output preview.
 - Moved project stage navigation into the shared project layout and added explicit loading/error states; removed duplicate ProjectNav markup from Assets and Director.
 - Added format-aware MIME mapping for Standalone media delivery.
