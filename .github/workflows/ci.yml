@@ -125,7 +125,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          timeout --signal=TERM 5m pnpm test:browser 2>&1 | tee browser-output.log
+          timeout --signal=TERM --kill-after=30s 5m pnpm test:browser 2>&1 | tee browser-output.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             summary=$(tail -c 6000 browser-output.log | tr '\n' ' ')
