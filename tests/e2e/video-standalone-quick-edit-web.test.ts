@@ -19,7 +19,7 @@ test('Standalone historical Manifest revisions are read-only while the current r
   assert.match(page, /历史版本仅供查看/);
   assert.match(page, /refreshSession/);
   assert.match(inspector, /editable/);
-  assert.match(inspector, /disabled=\{!editable\}/);
+  assert.match(inspector, /disabled=\{!editable(?: \|\| busy)?\}/);
   assert.match(picker, /isCurrentManifest\(item\.id, currentId\)/);
 });
 
