@@ -68,7 +68,17 @@ jobs:
       - run: /usr/bin/ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])libx264([[:space:]]|$)' && /usr/bin/ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])aac([[:space:]]|$)'
       - run: pnpm install --frozen-lockfile
       - run: pnpm test:migrations
-      - run: pnpm test
+      - name: pnpm test
+        shell: bash
+        run: |
+          set +e
+          pnpm test 2>&1 | tee test-output.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            summary=$(awk '/✖ failing tests:/{capture=1; next} capture {print}' test-output.log | head -c 6000 | tr '\n' ' ')
+            echo "::error title=ContentOS test failures::$summary"
+          fi
+          exit "$status"
 
   web-build:
     runs-on: ubuntu-latest
