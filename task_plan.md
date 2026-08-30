@@ -344,3 +344,16 @@ Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-directio
 - [ ] Create PR and stop for human merge decision; never auto-merge hardening.
 
 **Current phase:** Local hardening verification complete; awaiting human review before commit/PR/merge.
+
+## Phase 25: Review Analytics V1 (2026-08-30)
+
+**Objective:** Build the approved Fake/Import post-publish analytics slice on `codex/review-analytics-v1`, preserving Approval/Publisher boundaries and leaving `main` untouched.
+
+- [x] Audit existing ExternalPost, Job, AI Provider and legacy Review boundaries.
+- [x] Approve and commit Review Analytics V1 design.
+- [x] Write implementation plan with contract, migration, service, worker, API, UI and acceptance gates.
+- [ ] Implement Review Analytics V1 in the isolated worktree.
+- [ ] Run focused RED/GREEN tests, full regression and browser acceptance.
+- [ ] Update reports/ADR status and push the feature branch for human review.
+
+**Status:** design approved and implementation plan written; code implementation not started.

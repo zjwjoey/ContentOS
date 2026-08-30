@@ -486,3 +486,11 @@
 - Full automatic suite now discovers 286 tests: 284 passed, 2 expected browser skips, 0 failed, using PostgreSQL on 5432 and the installed FFmpeg 8.1.2 binary with `libx264`.
 - Final hardening gates pass: `format:check`, ESLint, `security:scan`, typecheck, root build and low-severity production audit.
 - Branch remains isolated and uncommitted pending user review/approval; `main` is untouched.
+
+## Session: 2026-08-30 — Review Analytics V1 design and plan
+
+- Created isolated worktree `E:\ContentOS\.worktrees\review-analytics-v1` on branch `codex/review-analytics-v1` from `38b1c28`.
+- Audited the public Publisher ExternalPost contract, Job service, AI Provider/AIService, migration sequence and legacy Review decision routes.
+- Wrote and committed `docs/superpowers/specs/2026-08-30-review-analytics-v1-design.md` as commit `4eda244`.
+- User approved the Fake/Import MetricSnapshot plus AI analysis direction and requested the implementation plan.
+- Implementation plan is being written next; no Review business code has changed.

@@ -217,3 +217,12 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 - Legacy `RENDER` is now translated to workspace `OUTPUT`; unsupported non-video roles are excluded from the video workspace link table. This preserves the video boundary while allowing upgrades from historical project data.
 - Regression coverage reproduces the pre-fix failure and verifies the migrated workspace row, preventing a future silent reintroduction.
 - With explicit local test infrastructure (`DATABASE_URL` on 5432 and FFmpeg 8.1.2), all discovered tests are green except the two intentionally skipped browser tests that require the isolated browser harness.
+
+## Review Analytics V1 design findings (2026-08-30)
+
+- `review_decisions` is the historical pre-publish decision table and must remain separate from post-publish Review Analytics.
+- `publisher_external_posts` is the only confirmed publication identity available to Review; Review must consume it through a public Publisher read port and never query Publisher private tables.
+- Existing Job types are string-based and support idempotency, lease recovery, cancellation and attempt fencing; Review collection and analysis use the same contract.
+- Existing `AIService` persists provenance but types operations as Director-only; the plan extends the operation union and Fake Provider with `review.analysis.v1`.
+- There is no Review Worker package today. The design adds one rather than putting Review persistence or AI calls in HTTP handlers or Publisher private code.
+- Existing migration sequence ends at `0018`; Review Analytics uses `0019` with an explicit down migration and migration-matrix coverage.
