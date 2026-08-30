@@ -39,8 +39,19 @@ export interface PublisherExternalPostReader {
   } | null>;
 }
 
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonical(nested)]),
+    );
+  return value;
+}
+
 function samePayload(actual: unknown, expected: unknown): boolean {
-  return JSON.stringify(actual) === JSON.stringify(expected);
+  return JSON.stringify(canonical(actual)) === JSON.stringify(canonical(expected));
 }
 
 export class ReviewJobService {

@@ -82,7 +82,7 @@ export default function ProjectLayout({ children, params }: { children: ReactNod
         </div>
         {project.status && <StatusBadge status={project.status} />}
       </header>
-      <ProjectNav projectId={id} currentStage={currentStage} />
+      <ProjectNav projectId={id} currentStage={currentStage} reviewActive={pathname === `/projects/${id}/review`} />
       <div className="project-workspace-content">{children}</div>
     </div>
   );
