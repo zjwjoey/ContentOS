@@ -10,3 +10,25 @@ test('Standalone Quick Edit UI exposes upload, planner, manifest and exact rende
   assert.doesNotMatch(page, /projects\/\$\{projectId\}/);
   assert.doesNotMatch(page, /READY 视频 Asset ID（逗号或换行分隔/);
 });
+
+test('Standalone historical Manifest revisions are read-only while the current revision remains editable', async () => {
+  const page = await readFile('apps/web/app/video/quick-edit/page.tsx', 'utf8');
+  const inspector = await readFile('apps/web/components/video/clip-inspector.tsx', 'utf8');
+  const picker = await readFile('apps/web/components/video/manifest-revision-picker.tsx', 'utf8');
+  assert.match(page, /isCurrentManifest/);
+  assert.match(page, /历史版本仅供查看/);
+  assert.match(page, /refreshSession/);
+  assert.match(inspector, /editable/);
+  assert.match(inspector, /disabled=\{!editable\}/);
+  assert.match(picker, /isCurrentManifest\(item\.id, currentId\)/);
+});
+
+test('Standalone planner uses optional voice-driven duration and locks settings after planning', async () => {
+  const page = await readFile('apps/web/app/video/quick-edit/page.tsx', 'utf8');
+  assert.match(page, /durationMode/);
+  assert.match(page, /AUTO/);
+  assert.match(page, /targetDurationMs: targetDurationSeconds \* 1000/);
+  assert.match(page, /maxClipDurationSeconds.*5/);
+  assert.match(page, /plannerLocked/);
+  assert.match(page, /需要选择主配音/);
+});

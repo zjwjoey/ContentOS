@@ -123,13 +123,50 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
     await page.getByLabel('上传视频 / 配音').setInputFiles([...fixtureVideos, fixtureAudio]);
     await page.getByText('source.mp4', { exact: false }).first().waitFor({ state: 'visible', timeout: 30_000 });
     await page.getByText('已就绪', { exact: false }).first().waitFor({ state: 'visible', timeout: 45_000 });
-    await page.getByRole('combobox', { name: '主配音' }).selectOption({ label: 'voice.wav' });
+    const voice = page.getByRole('combobox', { name: '主配音' });
+    const durationMode = page.getByRole('combobox', { name: '目标时长' });
+    assert.equal(await voice.isDisabled(), false, 'voice must be selectable before planning');
+    assert.equal(await durationMode.isDisabled(), false, 'planner settings must be editable before planning');
+    await voice.selectOption({ label: 'voice.wav' });
+    await page.getByText('主配音已选择。').waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByRole('button', { name: 'Generate Plan' }).click();
+    await page.getByText('Manifest 计划已生成，规划设置已锁定。').waitFor({ state: 'visible', timeout: 30_000 });
     await page.getByLabel('Manifest 时间线').waitFor({ state: 'visible', timeout: 30_000 });
+    const timelineButtons = page.getByLabel('Manifest 时间线').getByRole('button');
+    const timelineCount = await timelineButtons.count();
+    assert.ok(timelineCount >= 3, `auto voice duration must produce enough clips for all adjustments (got ${timelineCount}: ${await page.getByLabel('Manifest 时间线').innerText()}; body: ${await page.locator('body').innerText()})`);
+    assert.equal(await voice.isDisabled(), true, 'voice must lock after planning');
+    assert.equal(await durationMode.isDisabled(), true, 'planner settings must lock after planning');
+
+    const currentRevision = async (): Promise<number> => {
+      const selected = await page.getByLabel('Manifest Revision').locator('option:checked').textContent();
+      const match = selected?.match(/v(\d+)/);
+      if (!match) throw new Error(`Unable to read selected Manifest revision: ${selected}`);
+      return Number(match[1]);
+    };
+    const waitForRevision = async (previous: number): Promise<number> => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const next = await currentRevision();
+        if (next > previous) return next;
+        await page.waitForTimeout(100);
+      }
+      throw new Error(`Manifest revision did not advance beyond v${previous}`);
+    };
+
+    let revision = await currentRevision();
     await page.getByRole('button', { name: 'REROLL' }).click();
-    await page.getByText('已创建新的 Manifest Revision。').waitFor({ state: 'visible', timeout: 30_000 });
+    revision = await waitForRevision(revision);
+    await page.getByLabel('替换素材').selectOption({ index: 1 });
+    await page.getByRole('button', { name: 'REPLACE' }).click();
+    revision = await waitForRevision(revision);
     await page.getByRole('button', { name: 'TRIM' }).click();
-    await page.getByText('已创建新的 Manifest Revision。').waitFor({ state: 'visible', timeout: 30_000 });
+    revision = await waitForRevision(revision);
+    await page.getByLabel('Manifest 时间线').getByRole('button').nth(1).click();
+    await page.getByRole('button', { name: 'REORDER' }).click();
+    revision = await waitForRevision(revision);
+    await page.getByRole('button', { name: 'REMOVE' }).click();
+    revision = await waitForRevision(revision);
+    assert.ok(revision >= 6, `all five adjustments must create revisions, got v${revision}`);
     await page.getByRole('button', { name: 'Render 成品' }).click();
     await page.getByText('Render 状态：SUCCEEDED').waitFor({ state: 'visible', timeout: 60_000 });
     await page.getByText('Render 输出成片').waitFor({ state: 'visible', timeout: 15_000 });

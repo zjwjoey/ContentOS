@@ -23,6 +23,7 @@ const quickEditInput = z.object({ parentManifestId: z.string().trim().min(1), op
 const standaloneCreateInput = z.object({ sourceAssetIds: z.array(z.string().trim().min(1)).max(128).default([]), voiceAssetId: z.string().trim().min(1).optional(), seed: z.number().int().optional(), targetDurationMs: z.number().int().positive().optional(), minClipDurationMs: z.number().int().positive().optional(), maxClipDurationMs: z.number().int().positive().optional() });
 const standaloneAdjustmentInput = z.object({ operations: z.array(z.record(z.string(), z.unknown())).min(1).max(128), createdBy: z.string().trim().min(1).max(200).optional() });
 const standaloneVoiceInput = z.object({ assetId: z.string().trim().min(1) });
+const standaloneSettingsInput = z.object({ seed: z.number().int().optional(), targetDurationMs: z.number().int().positive().nullable().optional(), minClipDurationMs: z.number().int().positive().optional(), maxClipDurationMs: z.number().int().positive().optional() });
 
 export interface VideoRouteDependencies {
   projects: ProjectService;
@@ -100,6 +101,15 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid voice asset input', details: parsed.error.issues } });
     try { return reply.code(200).send(await standaloneQuickEdit.setVoiceAsset((request.params as { id: string }).id, parsed.data.assetId)); }
     catch (error) { return reply.code(409).send({ error: { code: 'STANDALONE_VOICE_CONFLICT', message: error instanceof Error ? error.message : 'Voice asset selection rejected', details: [] } }); }
+  });
+  app.patch('/api/v1/video/quick-edits/:id/settings', async (request, reply) => {
+    const parsed = standaloneSettingsInput.safeParse(request.body || {});
+    if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid planner settings', details: parsed.error.issues } });
+    try {
+      const settings = { ...(parsed.data.seed !== undefined ? { seed: parsed.data.seed } : {}), ...(parsed.data.targetDurationMs !== undefined ? { targetDurationMs: parsed.data.targetDurationMs } : {}), ...(parsed.data.minClipDurationMs !== undefined ? { minClipDurationMs: parsed.data.minClipDurationMs } : {}), ...(parsed.data.maxClipDurationMs !== undefined ? { maxClipDurationMs: parsed.data.maxClipDurationMs } : {}) };
+      return reply.code(200).send(await standaloneQuickEdit.updateSettings((request.params as { id: string }).id, settings));
+    }
+    catch (error) { return reply.code(409).send({ error: { code: 'STANDALONE_SETTINGS_CONFLICT', message: error instanceof Error ? error.message : 'Planner settings update rejected', details: [] } }); }
   });
   app.post('/api/v1/video/quick-edits/:id/plan', async (request, reply) => {
     try { return reply.code(201).send(safeManifestRecord(await standaloneQuickEdit.plan((request.params as { id: string }).id))); }
