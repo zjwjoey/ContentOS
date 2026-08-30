@@ -67,8 +67,10 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('button', { name: '批准 Storyboard' }).waitFor({ state: 'visible', timeout: 30_000 });
     await page.getByRole('button', { name: '批准 Storyboard' }).click();
     await page.getByRole('link', { name: '进入 Video' }).click();
+    await page.waitForURL(new RegExp(`/projects/${projectId}/video$`));
 
-    const sceneFields = page.locator('fieldset');
+    const storyboardSection = page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Storyboard Planning' }) });
+    const sceneFields = storyboardSection.locator('fieldset');
     const sceneCount = await sceneFields.count();
     assert.ok(sceneCount > 0, 'approved Storyboard must expose at least one scene for binding');
     for (let index = 0; index < sceneCount; index += 1) {
