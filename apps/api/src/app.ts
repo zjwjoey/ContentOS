@@ -13,7 +13,7 @@ import {
   VideoService,
 } from '../../../packages/modules/video/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
-import { ReviewService } from '../../../packages/modules/review/src/index.js';
+import { ReviewAnalyticsService, ReviewService } from '../../../packages/modules/review/src/index.js';
 import type { DirectorPlanV0 } from '../../../packages/contracts/src/index.js';
 import { serializeError } from '../../../packages/shared/src/errors.js';
 import { DirectorV1Service } from '../../../packages/modules/director/src/index.js';
@@ -28,6 +28,7 @@ import { registerProjectCenterRoutes } from './project-center-routes.js';
 import { registerAssetRoutes } from './asset-routes.js';
 import { registerVideoRoutes } from './video-routes.js';
 import { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
+import { registerReviewAnalyticsRoutes } from './review-analytics-routes.js';
 
 const projectInput = z.object({ name: z.string().trim().min(1).max(200), metadata: z.record(z.string(), z.unknown()).optional() });
 const directorInput = z.object({
@@ -110,6 +111,8 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const standaloneQuickEdit = new StandaloneQuickEditService(db, assets, quickEdit, video);
   registerAssetRoutes(app, { projects, imports: new AssetImportService(db), assets, jobs, storage, maxUploadBytes: uploadMaxBytes });
   const publisher = new PublisherService(db);
+  const reviewAnalytics = new ReviewAnalyticsService(db, jobs, publisher);
+  registerReviewAnalyticsRoutes(app, { projects, publisher, analytics: reviewAnalytics });
   const assetImports = new AssetImportService(db);
   registerProjectCenterRoutes(app, {
     center: new ProjectCenterService({
