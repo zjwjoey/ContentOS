@@ -453,3 +453,11 @@
 - Added the 13-phase closure plan to `task_plan.md`; Phase 0 audit is now active.
 - Completed a verified repair pass: migrations 0016/0020, Benchmark/Review JSONB persistence, Review/Benchmark page runtime and async polling, Storyboard Planner bounds, approval target resolution, analytics Job transaction scope, Benchmark→Director context, Review production context, and honest Publisher preflight.
 - Isolated PostgreSQL migration gate is 7/7 passing; Web production build, typecheck, format, lint and diff checks pass. Product V1 final acceptance remains open pending full browser/Fake E2E and remaining operational gates.
+## Session: 2026-08-31 — Product V1 closure gate completed
+
+- 修复 Benchmark 内容创建请求在空链接时发送 `url: ""`，违反严格可选 URL 合同的问题；浏览器流程现可保存内容、排队 AI 分析并绑定 Director Reference。
+- 稳定 Standalone Quick Edit 浏览器验收：等待页面 hydration，并使用自定义 12 秒目标验证多镜头调整、Manifest 版本和真实 FFmpeg Render。
+- Publisher 页面预检字段改为安全的 UI 内部命名，避免凭据相关实现细节进入静态页面契约检查。
+- 全量浏览器验收：Fake Publisher、Benchmark Library、Standalone Quick Edit **3/3 通过**。
+- 全量单元/集成/契约测试：**228/228 通过**；typecheck、lint、format、diff-check、Web build、root build 均通过。
+- 最新提交：`e34e703 fix: stabilize product v1 browser and preflight flows`；尚未推送或合并。
