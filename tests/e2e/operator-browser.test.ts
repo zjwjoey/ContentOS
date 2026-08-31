@@ -194,6 +194,8 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
     const durationMode = page.getByRole('combobox', { name: '目标时长' });
     assert.equal(await voice.isDisabled(), false, 'voice must be selectable before planning');
     assert.equal(await durationMode.isDisabled(), false, 'planner settings must be editable before planning');
+    await durationMode.selectOption('CUSTOM');
+    await page.getByLabel('自定义目标时长（秒）').fill('12');
     await voice.selectOption({ label: 'voice.wav' });
     await page.getByText('主配音已选择。').waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByRole('button', { name: 'Generate Plan' }).click();
