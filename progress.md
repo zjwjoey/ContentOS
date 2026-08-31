@@ -468,3 +468,4 @@
 - Contract、API、Publisher Service、Worker snapshot、Douyin/WeChat Adapter 文案和 Operator UI 已同步支持这些字段。
 - 迁移矩阵 7/7、Publisher API 集成 7/7、全量测试 228/228、浏览器 3/3、Web/root build、doctor 全部通过。
 - 最新提交：`762bdb3 test: include publisher metadata migration`；尚未推送或合并。
+- 封面 Asset 引用增加项目归属与 READY 状态校验，Publisher API/Asset 回归测试通过；最新提交：`4575757`。
