@@ -24,7 +24,7 @@ export class FakeAIProvider implements AIProvider {
 
   async generateStructured<T>(request: AIRequest): Promise<AIResult<T>> {
     this.check(request);
-    if (request.promptKey === 'director.storyboard.v1') {
+    if (request.promptKey === 'director.storyboard.v1' || request.promptKey === 'director.storyboard.v2') {
       return { requestId: request.requestId, providerId: this.providerId, modelId: 'fake-zh-v1', output: { scenes: [
         { sceneIndex: 1, voiceoverText: '很多人第一步就做错了。', durationHintSeconds: 3, visualInstruction: '人物面对账本犹豫', assetKeywords: ['账本'] },
         { sceneIndex: 2, voiceoverText: '先验证真实需求，再扩大投入。', durationHintSeconds: 5, visualInstruction: '展示小规模测试', assetKeywords: ['测试', '门店'] },

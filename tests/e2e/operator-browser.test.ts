@@ -61,7 +61,8 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('button', { name: '接受 Script' }).waitFor({ state: 'visible', timeout: 30_000 });
     await page.getByRole('button', { name: '接受 Script' }).click();
     await page.getByRole('button', { name: '生成 Storyboard Job' }).click();
-    await page.getByRole('button', { name: '批准 Storyboard' }).waitFor({ state: 'visible', timeout: 30_000 });
+    try { await page.getByRole('button', { name: '批准 Storyboard' }).waitFor({ state: 'visible', timeout: 30_000 }); }
+    catch (error) { throw new Error(`Storyboard generation did not become actionable: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     await page.getByRole('button', { name: '批准 Storyboard' }).click();
     await page.getByRole('link', { name: '进入 Video' }).click();
 
