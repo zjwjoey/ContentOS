@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, rename, rm } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { EditManifestV0 } from '../../../contracts/src/index.js';
 
@@ -9,15 +9,20 @@ export interface RenderResult { outputPath: string; durationMs: number; width: n
 export interface ProbeResult { format: string; durationMs: number; width: number; height: number; audio: boolean; videoCodec?: string; audioCodec?: string; }
 
 function run(binary: string, args: string[], signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
+  const execute = (executable: string): Promise<{ stdout: string; stderr: string }> => new Promise((resolve, reject) => {
     signal?.throwIfAborted();
-    const child = spawn(binary, args, signal ? { windowsHide: true, signal } : { windowsHide: true });
+    const child = spawn(executable, args, signal ? { windowsHide: true, signal } : { windowsHide: true });
     let stdout = ''; let stderr = '';
     let processError: Error | null = null;
     child.stdout?.on('data', (chunk) => { stdout += String(chunk); });
     child.stderr?.on('data', (chunk) => { stderr += String(chunk); });
     child.on('error', (error) => { processError = error; });
     child.on('close', (code) => processError ? reject(processError) : code === 0 ? resolve({ stdout, stderr }) : reject(new Error(`FFmpeg exited ${code}: ${stderr.slice(-1200)}`)));
+  });
+  return execute(binary).catch((error: unknown) => {
+    const code = error && typeof error === 'object' && 'code' in error ? (error as { code?: string }).code : undefined;
+    if (process.platform !== 'win32' || code !== 'ENOENT' || !binary.includes('\\')) throw error;
+    return execute(basename(binary));
   });
 }
 
