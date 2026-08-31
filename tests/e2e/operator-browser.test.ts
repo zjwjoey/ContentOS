@@ -66,6 +66,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('button', { name: '批准 Storyboard' }).click();
     await page.getByRole('link', { name: '进入 Video' }).click();
 
+    for (const checkbox of await page.getByRole('checkbox').all()) await checkbox.check();
     await page.getByLabel('视频规划器').selectOption('STORYBOARD');
     await page.getByRole('button', { name: '创建渲染 Job' }).click();
     try { await page.locator('video').waitFor({ state: 'visible', timeout: 45_000 }); }
