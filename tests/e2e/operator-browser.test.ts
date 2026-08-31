@@ -68,6 +68,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('link', { name: '进入 Video' }).click();
 
     const sourceCheckboxes = page.locator('fieldset input[type="checkbox"]');
+    await sourceCheckboxes.nth(1).waitFor({ state: 'attached', timeout: 30_000 });
     for (let index = 0; index < await sourceCheckboxes.count(); index += 1) await sourceCheckboxes.nth(index).check();
     await page.getByLabel('视频规划器').selectOption('STORYBOARD');
     await page.getByRole('button', { name: '创建渲染 Job' }).click();
