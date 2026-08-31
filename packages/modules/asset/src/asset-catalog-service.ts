@@ -23,6 +23,7 @@ export interface ReadySourceAsset {
 }
 
 export interface ReadyAssetContent extends AssetSummaryV0 { storageKey: string; }
+export interface ProjectAssetReference { id: string; projectId: string; kind: string; lifecycle: string; storageKey: string; }
 
 function mapAsset(row: Record<string, unknown>): PublishableAsset {
   return {
@@ -62,6 +63,12 @@ function safeMetadata(row: Record<string, unknown>): AssetSummaryV0['metadata'] 
 
 export class AssetCatalogService {
   constructor(private readonly db: Pool) {}
+
+  async getProjectAsset(projectId: string, assetId: string): Promise<ProjectAssetReference | null> {
+    const result = await this.db.query('select id, project_id, kind, lifecycle, storage_key from assets where project_id = $1 and id = $2', [projectId, assetId]);
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    return row ? { id: String(row.id), projectId: String(row.project_id), kind: String(row.kind), lifecycle: String(row.lifecycle), storageKey: String(row.storage_key) } : null;
+  }
 
   async listPublishable(projectId: string): Promise<PublishableAsset[]> {
     const result = await this.db.query('select * from assets where project_id = $1 and kind = $2 and lifecycle = $3 order by created_at desc, id desc', [projectId, 'VIDEO_RENDER', 'READY']);

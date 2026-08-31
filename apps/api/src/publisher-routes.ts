@@ -164,6 +164,7 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Publisher request input', details: parsed.error.issues } });
     const asset = await assets.getPublishableAsset(projectId, parsed.data.revision.assetId);
     if (!asset || asset.checksum !== parsed.data.revision.assetChecksum) return reply.code(422).send({ error: { code: 'PUBLISHER_ASSET_INVALID', message: 'A READY VIDEO_RENDER Asset owned by this project and matching the checksum is required', details: [] } });
+    if (parsed.data.revision.coverAssetId) { const cover = await assets.getProjectAsset(projectId, parsed.data.revision.coverAssetId); if (!cover || cover.lifecycle !== 'READY') return reply.code(422).send({ error: { code: 'PUBLISHER_COVER_ASSET_INVALID', message: '封面 Asset 必须属于当前项目且处于 READY 状态', details: [] } }); }
     try {
       const revision = parsed.data.revision;
       const result = await publisher.createRequest({ projectId, accountId: parsed.data.accountId, idempotencyKey: parsed.data.idempotencyKey, correlationId: parsed.data.correlationId, revision: { assetId: revision.assetId, assetChecksum: revision.assetChecksum, title: revision.title, description: revision.description, hashtags: revision.hashtags || [], ...(revision.coverAssetId ? { coverAssetId: revision.coverAssetId } : {}), desiredPublishAt: revision.desiredPublishAt, createdBy: revision.createdBy } });
@@ -180,6 +181,7 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid project Publisher handoff input', details: parsed.error.issues } });
     const asset = await assets.getPublishableAsset(projectId, parsed.data.assetId);
     if (!asset) return reply.code(422).send({ error: { code: 'PUBLISHER_ASSET_INVALID', message: 'A READY VIDEO_RENDER Asset owned by this project is required', details: [] } });
+    if (parsed.data.coverAssetId) { const cover = await assets.getProjectAsset(projectId, parsed.data.coverAssetId); if (!cover || cover.lifecycle !== 'READY') return reply.code(422).send({ error: { code: 'PUBLISHER_COVER_ASSET_INVALID', message: '封面 Asset 必须属于当前项目且处于 READY 状态', details: [] } }); }
     const accounts = await Promise.all(parsed.data.accountIds.map((accountId) => publisher.getAccount(projectId, accountId)));
     if (accounts.some((account) => !account)) return reply.code(422).send({ error: { code: 'PUBLISHER_ACCOUNT_INVALID', message: 'Every Publisher account must belong to this project', details: [] } });
     try {
