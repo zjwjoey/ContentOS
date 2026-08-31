@@ -31,7 +31,7 @@ export interface ProjectCenterJobSummary {
 }
 
 export interface ProjectCenterSnapshot {
-  project: { id: string; name: string; status: string; updatedAt: string };
+  project: { id: string; name: string; status: string; updatedAt: string; metadata?: Record<string, unknown> };
   health: { level: ProjectCenterHealthLevel; reasons: string[] };
   stages: ProjectCenterStage[];
   currentStage: ProjectCenterStageKey | null;

@@ -58,6 +58,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('button', { name: '批准 Storyboard' }).click();
     await page.getByRole('link', { name: '进入 Video' }).click();
 
+    await page.getByLabel('视频规划器').selectOption('STORYBOARD');
     await page.getByRole('button', { name: '创建渲染 Job' }).click();
     await page.locator('video').waitFor({ state: 'visible', timeout: 45_000 });
     await page.getByRole('button', { name: '送往 Approval Gate' }).click();
@@ -122,6 +123,37 @@ test('operator browser completes Fake Publisher success, retry, human-action and
   } finally {
     await browser.close();
   }
+});
+
+test('operator browser completes the Benchmark Library flow', async () => {
+  assert.ok(baseUrl, 'test:browser must start an isolated operator');
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('textbox', { name: /项目名称/ }).fill(`Benchmark browser ${Date.now()}`);
+    await page.locator('form').evaluate((form) => (form as HTMLFormElement).requestSubmit());
+    await page.getByTestId('project-center').waitFor({ timeout: 10_000 });
+    const projectId = new URL(page.url()).pathname.split('/')[2];
+    await page.getByRole('link', { name: 'Benchmark', exact: true }).click();
+    await page.getByLabel('账号名称').fill('对标账号');
+    await page.getByLabel('定位').fill('效率工具');
+    await page.getByLabel('分类').fill('科技');
+    await page.getByLabel('关键词').fill('效率,工具');
+    await page.getByRole('button', { name: '保存账号' }).click();
+    await page.getByText('对标账号', { exact: true }).first().waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByLabel('对标账号').selectOption({ index: 1 });
+    await page.getByLabel('标题').fill('可复用的开场结构');
+    await page.getByLabel('文案 / 内容').fill('先给结论，再解释三步方法。');
+    await page.getByRole('button', { name: '保存内容' }).click();
+    const content = page.getByRole('listitem').filter({ hasText: '可复用的开场结构' });
+    await content.getByRole('button', { name: 'AI 分析' }).click();
+    await content.getByText('分析 Job：SUCCEEDED').waitFor({ state: 'visible', timeout: 30_000 });
+    await content.getByText('最新分析').waitFor({ state: 'visible', timeout: 15_000 });
+    await content.getByRole('button', { name: '作为 Director Reference' }).click();
+    await waitForText(page, '已作为 Director Reference 绑定到项目');
+    assert.ok(projectId, 'benchmark flow remains project scoped');
+  } finally { await browser.close(); }
 });
 
 test('operator browser completes Standalone Quick Edit upload, adjustment and render journeys', async () => {

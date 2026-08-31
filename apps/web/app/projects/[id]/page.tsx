@@ -12,7 +12,7 @@ type Stage = {
   summary: string;
 };
 type Snapshot = {
-  project: { id: string; name: string; status: string; updatedAt: string };
+  project: { id: string; name: string; status: string; updatedAt: string; metadata?: { topic?: string; targetPlatform?: string; targetAccount?: string; plannedDate?: string } };
   health: { level: string; reasons: string[] };
   stages: Stage[];
   currentStage: string | null;
@@ -79,7 +79,7 @@ export default function ProjectCenterPage() {
 
   return <main className="shell project-center" data-testid="project-center">
     <header className="project-center-header">
-      <div><p className="eyebrow">ContentOS / Project Center</p><h1>{snapshot.project.name}</h1><p className="muted">{snapshot.project.status} · 更新于 {new Date(snapshot.project.updatedAt).toLocaleString('zh-CN')}</p></div>
+      <div><p className="eyebrow">ContentOS / Project Center</p><h1>{snapshot.project.name}</h1><p className="muted">{snapshot.project.status} · 更新于 {new Date(snapshot.project.updatedAt).toLocaleString('zh-CN')}</p><p className="muted">选题：{snapshot.project.metadata?.topic || '未填写'} · 平台：{snapshot.project.metadata?.targetPlatform || '未指定'} · 账号：{snapshot.project.metadata?.targetAccount || '未指定'} · 排期：{snapshot.project.metadata?.plannedDate || '未排期'}</p></div>
       <button type="button" onClick={() => void refresh()}>刷新</button>
     </header>
     {message && snapshot && <section className="card form-error" role="alert">当前显示的是上一次成功读取的数据：{message} <button type="button" onClick={() => void refresh()}>重试</button></section>}

@@ -108,6 +108,15 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     return publisher.getProjectSummary(projectId);
   });
 
+  app.get('/api/v1/projects/:projectId/publisher/preflight', async (request, reply) => {
+    const projectId = projectIdOf(request);
+    if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    const accounts = await publisher.listAccounts(projectId);
+    const realAdaptersEnabled = process.env.PUBLISHER_REAL_ADAPTERS_ENABLED === '1' || process.env.PUBLISHER_REAL_ADAPTERS_ENABLED === 'true';
+    const accountChecks = accounts.map((account) => ({ id: account.id, platformId: account.platformId, displayName: account.displayName, status: account.status, ready: account.status === 'READY', requiresHumanAction: account.status === 'REAUTH_REQUIRED' || account.status === 'SUSPENDED' }));
+    return { realAdaptersEnabled, publishMode: realAdaptersEnabled ? 'REAL_OR_FAKE_BY_ACCOUNT' : 'FAKE_ONLY', accounts: accountChecks, checks: { adapterRuntime: realAdaptersEnabled ? 'READY' : 'DISABLED', credentials: accountChecks.every((account) => account.status !== 'REAUTH_REQUIRED'), accountReady: accountChecks.length > 0 && accountChecks.every((account) => account.ready), humanActionRequired: accountChecks.some((account) => account.requiresHumanAction) } };
+  });
+
   app.get('/api/v1/projects/:projectId/publisher/requests', async (request, reply) => {
     const projectId = projectIdOf(request);
     if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });

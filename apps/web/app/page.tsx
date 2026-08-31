@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 type Project = { id: string; name: string; status: string; metadata?: { topic?: string; targetPlatform?: string; targetAccount?: string; plannedDate?: string } };
 type ApiError = { error?: { message?: string } };
+type Dashboard = { counts: { total: number; active: number; attention: number; blocked: number; complete: number; pendingActions: number; runningJobs: number } };
 
 async function responseMessage(response: Response, fallback: string): Promise<string> {
   try {
@@ -23,14 +24,16 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState('');
+  const [dashboard, setDashboard] = useState<Dashboard | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams(); if (query.trim()) params.set('q', query.trim()); if (statusFilter) params.set('status', statusFilter); const response = await fetch(`/api/v1/projects?${params}`);
+      const params = new URLSearchParams(); if (query.trim()) params.set('q', query.trim()); if (statusFilter) params.set('status', statusFilter); const [response, dashboardResponse] = await Promise.all([fetch(`/api/v1/projects?${params}`), fetch('/api/v1/dashboard')]);
       if (!response.ok) throw new Error(await responseMessage(response, '项目列表加载失败。'));
       const data = await response.json() as { items: Project[] };
       setProjects(data.items);
+      if (dashboardResponse.ok) setDashboard(await dashboardResponse.json() as Dashboard);
       setMessage('');
     } catch (error) { setMessage(error instanceof Error ? error.message : '项目列表加载失败。'); }
     finally { setLoading(false); }
@@ -59,6 +62,7 @@ export default function HomePage() {
         <button type="submit" disabled={creating}>{creating ? '创建中…' : '创建并进入项目总控'}</button>
       </form>
     </section>
+    {dashboard && <section className="card" data-testid="dashboard-summary"><div className="section-title"><h2>运营总览</h2><span>实时汇总</span></div><div className="grid"><p><strong>{dashboard.counts.active}</strong><br /><small>活跃项目</small></p><p><strong>{dashboard.counts.attention}</strong><br /><small>需要关注</small></p><p><strong>{dashboard.counts.blocked}</strong><br /><small>存在阻塞</small></p><p><strong>{dashboard.counts.pendingActions}</strong><br /><small>待处理事项</small></p><p><strong>{dashboard.counts.runningJobs}</strong><br /><small>运行中 Job</small></p><p><strong>{dashboard.counts.complete}</strong><br /><small>已完成项目</small></p></div></section>}
     <section className="card">
       <div className="section-title"><h2>项目列表</h2><span>{loading ? '加载中…' : `${projects.length} 个项目`}</span></div><div className="grid"><label>搜索项目 / 选题<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="输入关键词" /></label><label>状态<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">全部状态</option><option>DRAFT</option><option>IN_PRODUCTION</option><option>READY_TO_PUBLISH</option><option>PUBLISHED</option><option>ARCHIVED</option></select></label></div>
       {message && <p className="form-error">{message}</p>}

@@ -19,6 +19,7 @@ import { registerApprovalRoutes } from './approval-routes.js';
 import { ApprovalService } from '../../../packages/modules/approval/src/index.js';
 import { ProjectCenterService } from './project-center.js';
 import { registerProjectCenterRoutes } from './project-center-routes.js';
+import { registerDashboardRoutes } from './dashboard-routes.js';
 import { registerAssetRoutes } from './asset-routes.js';
 import { registerVideoRoutes } from './video-routes.js';
 import { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
@@ -62,11 +63,13 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const reviewAnalytics = new ReviewAnalyticsService(db, jobs, publisher);
   registerReviewAnalyticsRoutes(app, { projects, publisher, analytics: reviewAnalytics });
   registerBenchmarkRoutes(app, { projects, benchmark });
-  registerProjectCenterRoutes(app, { center: new ProjectCenterService({ projects, director: directorRead, assets, video: new VideoProjectReadService(db), jobs, approvals, publisher }) });
+  const projectCenter = new ProjectCenterService({ projects, director: directorRead, assets, video: new VideoProjectReadService(db), jobs, approvals, publisher });
+  registerProjectCenterRoutes(app, { center: projectCenter });
+  registerDashboardRoutes(app, { projects, center: projectCenter });
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
   registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes });
   registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs, allowFakePublisherControls: runtime.allowFakePublisherControls === true, ...(runtime.allowFakePublisherControls ? { fakeSimulations: new FakePublisherSimulationService(db) } : {}) });
-  registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher });
+  registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher, director: directorV1 });
   app.get('/health', async () => ({ status: 'ok' }));
   app.get('/api/v1/runtime/status', async () => {
     let postgres: 'HEALTHY' | 'UNAVAILABLE' = 'HEALTHY';

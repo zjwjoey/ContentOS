@@ -16,6 +16,7 @@
 - Storyboard Video Planner with deterministic score, no adjacent duplicate, fallback and planner selector.
 - Review Analytics persistence/API/UI reuse, append-only manual snapshots, trend display and AI Review history.
 - Director Brief fields, manual Script revision editor, manual Storyboard revision editor and exact Approval surfaces.
+- Project Center now exposes safe planning metadata; Dashboard API/UI aggregates live project health, actions and running Jobs; Publisher preflight exposes adapter/account readiness without secrets.
 
 ## Migrations
 
@@ -23,7 +24,7 @@
 
 ## Tests and quality gates
 
-Focused contract/unit tests cover Benchmark validators, OpenAI-compatible Provider configuration/request redaction and Storyboard Planner determinism/fallback. Full commands are recorded at final acceptance; database-backed tests require a running isolated PostgreSQL instance.
+Focused contract/unit tests cover Benchmark validators, OpenAI-compatible Provider configuration/request redaction and Storyboard Planner determinism/fallback. `pnpm typecheck`, `pnpm format`, `pnpm lint`, `pnpm --dir apps/web build` and `git diff --check` pass on the closure branch. Database-backed tests require a running isolated PostgreSQL instance with schema-create privileges; the configured test role currently lacks that permission.
 
 ## Deferred
 
@@ -40,3 +41,9 @@ Real AI quality requires a user-provided credential and human review. Douyin/WeC
 ## Human acceptance checklist
 
 Follow `docs/product/CONTENTOS_PRODUCT_V1_USER_FLOW.md` from project creation through Review. Confirm each async state, historical revision, failure/human-action state, and the visible “真实平台发布未启用” guard.
+
+## Final acceptance state
+
+- Final SHA: recorded after the final closure commit.
+- Branch is intentionally not merged to `main`; push and merge remain an explicit release decision.
+- Status: `PASS WITH EXTERNAL GATES` until PostgreSQL/FFmpeg/Playwright and real platform credentials are available for browser and live-adapter acceptance.

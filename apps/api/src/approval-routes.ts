@@ -4,6 +4,7 @@ import type { ApprovalService } from '../../../packages/modules/approval/src/ind
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
 import type { VideoProjectReadService } from '../../../packages/modules/video/src/index.js';
 import type { PublisherService } from '../../../packages/modules/publisher/src/index.js';
+import type { DirectorV1Service } from '../../../packages/modules/director/src/index.js';
 
 const approvalInput = z.object({
   targetType: z.enum(['SCRIPT', 'STORYBOARD', 'RENDER', 'PUBLISH']),
@@ -16,7 +17,7 @@ const approvalInput = z.object({
 }).superRefine((value, context) => { if (value.status === 'REJECTED' && !value.reason) context.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'], message: 'reason is required for rejected approvals' }); });
 const approvalActionInput = z.object({ approver: z.string().trim().min(1), reason: z.string().trim().optional() });
 
-export interface ApprovalRouteDependencies { projects: ProjectService; approvals: ApprovalService; video?: VideoProjectReadService; publisher?: PublisherService; }
+export interface ApprovalRouteDependencies { projects: ProjectService; approvals: ApprovalService; video?: VideoProjectReadService; publisher?: PublisherService; director?: DirectorV1Service; }
 function paramsOf(request: { params: unknown }): { projectId: string; targetType: string; targetId: string; targetRevisionId: string } { return request.params as { projectId: string; targetType: string; targetId: string; targetRevisionId: string }; }
 
 export function registerApprovalRoutes(app: FastifyInstance, dependencies: ApprovalRouteDependencies): void {
@@ -63,7 +64,7 @@ export function registerApprovalRoutes(app: FastifyInstance, dependencies: Appro
     const targetType = z.enum(['SCRIPT', 'STORYBOARD', 'RENDER', 'PUBLISH']).safeParse(params.targetType);
     const parsed = approvalActionInput.safeParse(request.body);
     if (!targetType.success || !parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid approval action', details: [...(targetType.success ? [] : targetType.error.issues), ...(parsed.success ? [] : parsed.error.issues)] } });
-    try { return await approvals.approve(params.projectId, targetType.data, params.targetId, params.targetRevisionId, parsed.data.approver); }
+    try { const result = await approvals.approve(params.projectId, targetType.data, params.targetId, params.targetRevisionId, parsed.data.approver); if (dependencies.director && targetType.data === 'SCRIPT') await dependencies.director.acceptScript(params.projectId, params.targetRevisionId); if (dependencies.director && targetType.data === 'STORYBOARD') await dependencies.director.approveStoryboard(params.projectId, params.targetRevisionId); return result; }
     catch (error) { return reply.code(409).send({ error: { code: 'APPROVAL_TRANSITION_CONFLICT', message: error instanceof Error ? error.message : 'Approval transition conflict', details: [] } }); }
   });
 
