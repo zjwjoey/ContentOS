@@ -33,14 +33,16 @@ export default function PublisherPage({ params }: { params: { id: string } }) {
   const [fakeOutcomes, setFakeOutcomes] = useState<Record<string, FakeOutcome>>({});
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [realAdaptersEnabled, setRealAdaptersEnabled] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [accountResponse, assetResponse, requestResponse, summaryResponse, approvalResponse] = await Promise.all([
+    const [accountResponse, assetResponse, requestResponse, summaryResponse, approvalResponse, runtimeResponse] = await Promise.all([
       fetch(`/api/v1/projects/${projectId}/publisher/accounts`),
       fetch(`/api/v1/projects/${projectId}/publisher/assets`),
       fetch(`/api/v1/projects/${projectId}/publisher/requests`),
       fetch(`/api/v1/projects/${projectId}/publisher/summary`),
       fetch(`/api/v1/projects/${projectId}/approvals`),
+      fetch('/api/v1/runtime/status'),
     ]);
     if (accountResponse.ok) {
       const nextAccounts = ((await accountResponse.json()) as { items: Account[] }).items;
@@ -70,6 +72,7 @@ export default function PublisherPage({ params }: { params: { id: string } }) {
       setRequests(aggregates);
     }
     if (summaryResponse.ok) setSummary(await summaryResponse.json() as ProjectPublishSummary);
+    if (runtimeResponse.ok) setRealAdaptersEnabled(((await runtimeResponse.json()) as { publisher: { realAdaptersEnabled: boolean } }).publisher.realAdaptersEnabled);
   }, [projectId]);
 
   useEffect(() => { void refresh(); }, [refresh]);
@@ -123,11 +126,11 @@ export default function PublisherPage({ params }: { params: { id: string } }) {
   };
 
   return <main className="shell">
-    <header><p className="eyebrow">Project / {projectId}</p><h1>Publisher 工作台</h1><p className="muted">当前只连接 Fake Platform，用于验证项目交接、Approval Gate、入队、Worker 执行和发布记录。</p><nav className="module-nav"><Link href={`/projects/${projectId}/director`}>Director</Link><Link href={`/projects/${projectId}/approvals`}>Approval Gate</Link></nav></header>
+    <header><p className="eyebrow">Project / {projectId}</p><h1>Publisher 工作台</h1><p className="muted">当前只连接 Fake Platform，用于验证项目交接、Approval Gate、入队、Worker 执行和发布记录。</p>{!realAdaptersEnabled && <p className="status">真实平台发布未启用（PUBLISHER_REAL_ADAPTERS_ENABLED=false）</p>}<nav className="module-nav"><Link href={`/projects/${projectId}/director`}>Director</Link><Link href={`/projects/${projectId}/approvals`}>Approval Gate</Link></nav></header>
     {summary && <section className="card"><div className="section-title"><h2>项目发布摘要</h2><span>{summary.requestCount} 条请求</span></div><p className="muted">账号 {summary.accountCount} 个 · 已确认外部内容 {summary.confirmedExternalPostCount} 条 · 待人工处理 {summary.needsHumanActionCount} 条 · 已发布 {summary.statusCounts.PUBLISHED || 0} 条</p></section>}
     <section className="grid">
       <form className="card" onSubmit={createFakeAccount}><div className="section-title"><h2>Fake Platform 账号</h2><span>{accounts.length} 个</span></div><label>显示名称<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></label><button disabled={busy}>创建测试账号</button><ul className="revision-list">{accounts.map((account) => <li key={account.id}><strong>{account.displayName}</strong><span>{account.platformId} · {account.status}</span>{account.platformId === 'fake-platform' && fakeOutcomes[account.id] && <label>开发模拟结果<select value={fakeOutcomes[account.id]} disabled={busy} onChange={(event) => void setFakeOutcome(account.id, event.target.value as FakeOutcome)}>{fakeOutcomeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>}</li>)}</ul></form>
-      <form className="card" onSubmit={createRequest}><div className="section-title"><h2>项目发布交接</h2><span>{selectedAccountIds.length} 个账号</span></div><fieldset><legend>目标账号</legend>{accounts.map((account) => <label key={account.id}><input type="checkbox" checked={selectedAccountIds.includes(account.id)} onChange={(event) => setSelectedAccountIds((current) => event.target.checked ? [...current, account.id] : current.filter((id) => id !== account.id))} />{account.displayName} · {account.platformId} · {account.status}</label>)}</fieldset><label>成片 Render Asset<select value={assetId} onChange={(event) => setAssetId(event.target.value)} required><option value="">请选择可发布成片</option>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.id} · {asset.byteSize} bytes</option>)}</select></label><label>标题<input value={title} onChange={(event) => setTitle(event.target.value)} required maxLength={200} /></label><label>描述<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><button disabled={busy || !selectedAccountIds.length || !assetId}>创建项目发布草稿</button></form>
+      <form className="card" onSubmit={createRequest}><div className="section-title"><h2>项目发布交接</h2><span>{selectedAccountIds.length} 个账号</span></div><fieldset><legend>目标账号</legend>{accounts.map((account) => <label key={account.id}><input type="checkbox" checked={selectedAccountIds.includes(account.id)} onChange={(event) => setSelectedAccountIds((current) => event.target.checked ? [...current, account.id] : current.filter((id) => id !== account.id))} />{account.displayName} · {account.platformId} · {account.status}</label>)}</fieldset><label>成片 Render Asset<select value={assetId} onChange={(event) => setAssetId(event.target.value)} required><option value="">请选择可发布成片</option>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.kind} · {asset.byteSize} bytes</option>)}</select></label><label>标题<input value={title} onChange={(event) => setTitle(event.target.value)} required maxLength={200} /></label><label>描述<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><button disabled={busy || !selectedAccountIds.length || !assetId}>创建项目发布草稿</button></form>
     </section>
     <section className="card"><div className="section-title"><h2>发布请求</h2><span>{requests.length} 条</span></div>{message && <p className="status">{message}</p>}<ul className="revision-list">{requests.map(({ request, revision, attempts, externalPosts, nextAction, approval }) => <li key={request.id}><strong>{revision.title}</strong><span>{request.status} · Asset {revision.assetId} · Revision {revision.id}</span><small>Approval：{approval?.status || '未创建'}{approval && ` · ${approval.targetRevisionId}`}</small>{attempts.map((attempt) => <small key={attempt.id}>PublishAttempt #{attempt.attemptNumber} · {attempt.status}{attempt.failureCode ? ` · ${attempt.failureCode}` : ''}</small>)}{externalPosts.map((post) => <small key={post.id}>ExternalPost {post.externalPostId}{post.externalUrl ? ` · ${post.externalUrl}` : ''}</small>)}{request.failureMessage && <small>{request.failureMessage}</small>}{nextAction === 'NEEDS_HUMAN_ACTION' && <small>NEEDS_HUMAN_ACTION · 需要人工处理后再继续</small>}{request.status === 'DRAFT' && <p><Link className="module-nav-link" href={`/projects/${projectId}/approvals`}>前往 Approval Gate</Link>{approval?.status === 'APPROVED' && approval.targetRevisionId === revision.id && <button type="button" disabled={busy} onClick={() => void queueRequest(request.id)}>进入发布队列</button>}</p>}{request.status === 'PUBLISHED' && <small>PUBLISHED · 已生成 Fake Platform 发布记录</small>}</li>)}</ul></section>
   </main>;

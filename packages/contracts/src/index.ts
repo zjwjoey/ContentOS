@@ -27,3 +27,5 @@ export { validateAssetImportV0, validateAssetSummaryV0 } from './asset.js';
 export type { AssetImportKind, AssetImportState, AssetImportV0, AssetSummaryV0 } from './asset.js';
 export { validateVideoWorkspaceSnapshotV0 } from './video.js';
 export type { VideoWorkspaceSnapshotV0 } from './video.js';
+export { validateBenchmarkAccountV1, validateBenchmarkContentV1, validateBenchmarkAnalysisV1 } from './benchmark.js';
+export type { BenchmarkAccountV1, BenchmarkContentV1, BenchmarkAnalysisV1 } from './benchmark.js';

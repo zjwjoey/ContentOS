@@ -80,10 +80,12 @@ export class ReviewAnalyticsService {
     };
     validateMetricSnapshotV1(snapshot);
     const result = await this.db.query(
-      'insert into review_metric_snapshots (id, project_id, external_post_id, platform_id, captured_at, published_at, metrics, source, source_reference, schema_version, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict (external_post_id, source, captured_at) do update set id = review_metric_snapshots.id returning *',
+      'insert into review_metric_snapshots (id, project_id, external_post_id, platform_id, captured_at, published_at, metrics, source, source_reference, schema_version, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict (external_post_id, source, captured_at) do nothing returning *',
       [snapshot.id, snapshot.projectId, snapshot.externalPostId, snapshot.platformId, snapshot.capturedAt, snapshot.publishedAt, snapshot.metrics, snapshot.source, snapshot.sourceReference, snapshot.schemaVersion, snapshot.createdAt],
     );
-    return mapSnapshot(result.rows[0] as Record<string, unknown>);
+    if (result.rows[0]) return mapSnapshot(result.rows[0] as Record<string, unknown>);
+    const existing = await this.db.query('select * from review_metric_snapshots where external_post_id = $1 and source = $2 and captured_at = $3', [snapshot.externalPostId, snapshot.source, snapshot.capturedAt]);
+    return mapSnapshot(existing.rows[0] as Record<string, unknown>);
   }
 
   async listMetricSnapshots(projectId: string, externalPostId: string): Promise<MetricSnapshotV1[]> {

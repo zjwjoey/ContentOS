@@ -5,9 +5,9 @@ import { createDatabase, migrateDown, migrateUp, resolveMigrationsDirectory } fr
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55432/contentos_dev';
 
-test('migration files form a complete ordered 0001 through 0019 chain', async () => {
+test('migration files form a complete ordered 0001 through 0020 chain', async () => {
   const names = (await readdir(resolveMigrationsDirectory())).filter((file) => /^\d+_.+\.sql$/.test(file) && !file.endsWith('.down.sql')).sort();
-  assert.deepEqual(names.map((file) => file.slice(0, 4)), Array.from({ length: 19 }, (_, index) => String(index + 1).padStart(4, '0')));
+  assert.deepEqual(names.map((file) => file.slice(0, 4)), Array.from({ length: 20 }, (_, index) => String(index + 1).padStart(4, '0')));
 });
 
 test('migration directory resolution is independent of the process working directory', () => {

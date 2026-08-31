@@ -1,4 +1,4 @@
-export { buildRandomMontageManifest, buildVideoManifest } from './planner.js';
+export { buildRandomMontageManifest, buildStoryboardVideoManifest, buildVideoManifest } from './planner.js';
 export { validateEditManifest } from '../../../contracts/src/index.js';
 export { VideoService } from './video-service.js';
 export { DirectorVideoService } from './director-video-service.js';
@@ -7,6 +7,7 @@ export type { DirectorVideoOptions } from './director-video-service.js';
 export { VideoProjectReadService } from './video-project-read-service.js';
 export type { CurrentRenderSummary, RenderHistorySummary, VideoJobProgressSummary } from './video-project-read-service.js';
 export type { BuildManifestInput, PlannerAsset, RandomMontageInput } from './planner.js';
+export type { StoryboardPlannerAsset, StoryboardPlannerDecision, StoryboardPlannerInput, StoryboardPlannerResult, StoryboardPlannerScene } from './planner.js';
 export type { EditManifestV0, ManifestClip } from '../../../contracts/src/index.js';
 export { applyQuickEditOperations, digestEditManifest, parseQuickEditOperations } from './quick-edit.js';
 export type { QuickEditOperation } from './quick-edit.js';

@@ -54,6 +54,9 @@ function safeMetadata(row: Record<string, unknown>): AssetSummaryV0['metadata'] 
     ...(typeof metadata.width === 'number' ? { width: metadata.width } : {}),
     ...(typeof metadata.height === 'number' ? { height: metadata.height } : {}),
     ...(typeof metadata.format === 'string' ? { format: metadata.format } : {}),
+    ...(Array.isArray(metadata.tags) ? { tags: metadata.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 64) } : {}),
+    ...(typeof metadata.category === 'string' ? { category: metadata.category } : {}),
+    ...(typeof metadata.notes === 'string' ? { notes: metadata.notes.slice(0, 20_000) } : {}),
   };
 }
 
@@ -118,12 +121,29 @@ export class AssetCatalogService {
     if (!result.rowCount) throw new Error('VIDEO_WORKSPACE_ASSET_NOT_READY');
   }
 
-  async listProjectAssets(projectId: string): Promise<AssetSummaryV0[]> {
-    const result = await this.db.query('select a.* from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 order by a.created_at', [projectId]);
+  async listProjectAssets(projectId: string, filters: { kind?: string; tag?: string; query?: string } = {}): Promise<AssetSummaryV0[]> {
+    const values: unknown[] = [projectId]; const clauses = ['pa.project_id = $1'];
+    if (filters.kind) { values.push(filters.kind); clauses.push(`a.kind = $${values.length}`); }
+    if (filters.tag) { values.push(filters.tag); clauses.push(`coalesce(a.metadata->'tags','[]'::jsonb) ? $${values.length}`); }
+    if (filters.query) { values.push(`%${filters.query}%`); clauses.push(`coalesce(a.metadata->>'originalName','') ilike $${values.length}`); }
+    const result = await this.db.query(`select a.* from assets a join project_assets pa on pa.asset_id = a.id where ${clauses.join(' and ')} order by a.created_at`, values);
     return result.rows.map((row) => {
       const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {};
       return { id: String(row.id), kind: String(row.kind) as AssetSummaryV0['kind'], lifecycle: String(row.lifecycle) as AssetSummaryV0['lifecycle'], byteSize: Number(row.byte_size), checksum: String(row.checksum), originalName: typeof metadata.originalName === 'string' ? metadata.originalName : String(row.storage_key).split('/').pop() || 'asset', metadata: safeMetadata(row) };
     });
+  }
+
+  async updateTags(projectId: string, assetId: string, input: { tags?: string[]; category?: string; notes?: string }): Promise<AssetSummaryV0 | null> {
+    const current = await this.db.query('select a.* from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 where a.id = $2', [projectId, assetId]);
+    const row = current.rows[0] as Record<string, unknown> | undefined; if (!row) return null;
+    const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? { ...(row.metadata as Record<string, unknown>) } : {};
+    if (input.tags !== undefined) metadata.tags = [...new Set(input.tags.map((tag) => tag.trim()).filter(Boolean))].slice(0, 64);
+    if (input.category !== undefined) metadata.category = input.category.trim().slice(0, 200);
+    if (input.notes !== undefined) metadata.notes = input.notes.slice(0, 20_000);
+    const updated = await this.db.query('update assets set metadata = $1 where id = $2 returning *', [metadata, assetId]);
+    const value = updated.rows[0] as Record<string, unknown>;
+    const safe = safeMetadata(value);
+    return { id: String(value.id), kind: String(value.kind) as AssetSummaryV0['kind'], lifecycle: String(value.lifecycle) as AssetSummaryV0['lifecycle'], byteSize: Number(value.byte_size), checksum: String(value.checksum), originalName: typeof metadata.originalName === 'string' ? metadata.originalName : String(value.storage_key).split('/').pop() || 'asset', metadata: safe };
   }
 
   async getReadyAssetContent(projectId: string, assetId: string): Promise<ReadyAssetContent | null> {

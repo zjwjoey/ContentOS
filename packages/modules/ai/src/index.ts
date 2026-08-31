@@ -4,5 +4,8 @@ export { AIService } from './ai-service.js';
 export type { AIGenerationInput, AIOperation, AIServiceResult } from './ai-service.js';
 export { FakeAIProvider } from './fake-provider.js';
 export type { FakeProviderOutcome } from './fake-provider.js';
+export { OpenAICompatibleProvider, createConfiguredAIProvider, readAIProviderConfig } from './openai-compatible-provider.js';
+export type { AIProviderConfig, AIProviderConfigurationStatus, OpenAICompatibleProviderOptions } from './openai-compatible-provider.js';
+export { createRuntimeAI } from './runtime.js';
 export { PromptRegistry } from './prompt-registry.js';
 export type { RenderedPrompt } from './prompt-registry.js';

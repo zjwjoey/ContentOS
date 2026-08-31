@@ -1,2 +1,2 @@
 import Link from 'next/link';
-export function OperatorSidebar() { return <aside className="operator-sidebar"><div className="brand-mark">ContentOS <span>Operator</span></div><nav aria-label="全局导航"><Link href="/">项目中心</Link><Link href="/video/quick-edit">快速剪辑</Link></nav><div className="sidebar-foot">V1 · Desktop workspace</div></aside>; }
+export function OperatorSidebar() { return <aside className="operator-sidebar"><div className="brand-mark">ContentOS <span>Operator</span></div><nav aria-label="全局导航"><Link href="/">项目中心</Link><Link href="/plan">内容计划</Link><Link href="/video/quick-edit">快速剪辑</Link><Link href="/settings">设置</Link></nav><div className="sidebar-foot">V1 · Desktop workspace</div></aside>; }

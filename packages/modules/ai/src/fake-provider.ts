@@ -38,6 +38,9 @@ export class FakeAIProvider implements AIProvider {
         recommendations: [{ priority: 'HIGH', title: '强化互动钩子', detail: '在结尾加入明确问题，引导评论。' }],
       } as T, usage: { inputTokens: request.input.length, outputTokens: 48, totalTokens: request.input.length + 48 } };
     }
+    if (request.promptKey === 'benchmark.analysis.v1') {
+      return { requestId: request.requestId, providerId: this.providerId, modelId: 'fake-zh-v1', output: { hook: '问题开场', openingStructure: '先抛结论再解释', contentStructure: '问题-方法-行动', informationDensity: '中高', rhythm: '快慢交替', emotionalChange: '疑惑到清晰', evidenceUsage: '案例与数据', storyOpinionStructure: '观点+证据', endingCta: '总结并引导收藏', titlePattern: '结果型标题', reusableStructure: '3秒钩子→三步方法→行动号召', successReasons: ['开场明确', '结构清楚'], lessons: ['强化前3秒信息密度', '保留具体案例'], doNotCopy: ['不要照搬原文', '不要复刻账号口吻'] } as T, usage: { inputTokens: request.input.length, outputTokens: 80, totalTokens: request.input.length + 80 } };
+    }
     return { requestId: request.requestId, providerId: this.providerId, modelId: 'fake-zh-v1', output: { title: '先验证，再增长', titleCandidates: ['先验证，再增长'], coverText: '先验证', topicKeywords: ['经营', '验证需求'], hook: '很多人第一步就做错了。', body: '先用小成本验证真实需求，再决定是否扩大投入。', cta: '收藏这条建议。' } as T, usage: { inputTokens: request.input.length, outputTokens: 40, totalTokens: request.input.length + 40 } };
   }
 }

@@ -6,6 +6,9 @@ export interface MetricValuesV1 {
   comments: number;
   saves: number;
   shares: number;
+  followersDelta?: number;
+  completionRate?: number;
+  averageWatchTimeSeconds?: number;
 }
 
 export interface MetricSnapshotV1 {
@@ -72,6 +75,9 @@ function assertMetricValues(value: unknown): asserts value is MetricValuesV1 {
       throw new Error(`metrics.${key} must be a non-negative integer`);
     }
   }
+  if (value.followersDelta !== undefined && (!Number.isSafeInteger(value.followersDelta))) throw new Error('metrics.followersDelta must be an integer');
+  if (value.completionRate !== undefined && (typeof value.completionRate !== 'number' || value.completionRate < 0 || value.completionRate > 1)) throw new Error('metrics.completionRate must be between 0 and 1');
+  if (value.averageWatchTimeSeconds !== undefined && (typeof value.averageWatchTimeSeconds !== 'number' || value.averageWatchTimeSeconds < 0)) throw new Error('metrics.averageWatchTimeSeconds must be non-negative');
 }
 
 function assertInsight(value: unknown, label: string, recommendation = false): void {

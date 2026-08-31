@@ -16,6 +16,7 @@ const videoJobInput = z.object({
   voiceAssetId: z.string().trim().min(1).optional(),
   subtitleText: z.string().max(20_000).optional(),
   seed: z.number().int().optional(),
+  plannerType: z.enum(['RANDOM', 'STORYBOARD']).optional(),
   videoAssetIds: z.array(z.string().trim().min(1)).min(1).max(64),
 });
 const legacyVideoJobInput = videoJobInput.partial();
@@ -43,22 +44,24 @@ export interface VideoRouteDependencies {
 
 function projectIdOf(request: { params: unknown }): string { return (request.params as { projectId: string }).projectId; }
 function safeAsset(asset: AssetSummaryV0): AssetSummaryV0 { return asset; }
-function videoOptions(input: z.infer<typeof videoJobInput>): { videoAssetIds: string[]; targetDurationMs?: number; voiceAssetId?: string; subtitleText?: string; seed?: number } {
+function videoOptions(input: z.infer<typeof videoJobInput>): { videoAssetIds: string[]; targetDurationMs?: number; voiceAssetId?: string; subtitleText?: string; seed?: number; plannerType?: 'RANDOM' | 'STORYBOARD' } {
   return {
     videoAssetIds: input.videoAssetIds,
     ...(input.targetDurationMs !== undefined ? { targetDurationMs: input.targetDurationMs } : {}),
     ...(input.voiceAssetId !== undefined ? { voiceAssetId: input.voiceAssetId } : {}),
     ...(input.subtitleText !== undefined ? { subtitleText: input.subtitleText } : {}),
     ...(input.seed !== undefined ? { seed: input.seed } : {}),
+    ...(input.plannerType !== undefined ? { plannerType: input.plannerType } : {}),
   };
 }
-function legacyVideoOptions(input: z.infer<typeof legacyVideoJobInput>): { videoAssetIds?: string[]; targetDurationMs?: number; voiceAssetId?: string; subtitleText?: string; seed?: number } {
+function legacyVideoOptions(input: z.infer<typeof legacyVideoJobInput>): { videoAssetIds?: string[]; targetDurationMs?: number; voiceAssetId?: string; subtitleText?: string; seed?: number; plannerType?: 'RANDOM' | 'STORYBOARD' } {
   return {
     ...(input.videoAssetIds !== undefined ? { videoAssetIds: input.videoAssetIds } : {}),
     ...(input.targetDurationMs !== undefined ? { targetDurationMs: input.targetDurationMs } : {}),
     ...(input.voiceAssetId !== undefined ? { voiceAssetId: input.voiceAssetId } : {}),
     ...(input.subtitleText !== undefined ? { subtitleText: input.subtitleText } : {}),
     ...(input.seed !== undefined ? { seed: input.seed } : {}),
+    ...(input.plannerType !== undefined ? { plannerType: input.plannerType } : {}),
   };
 }
 function safeManifest(manifest: Record<string, unknown>): Record<string, unknown> {

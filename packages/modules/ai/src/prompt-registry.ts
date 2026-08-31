@@ -24,6 +24,10 @@ const defaultPrompts: RegisteredPrompt[] = [
     promptVersion: { id: 'prompt-review-analysis-v1', key: 'review.analysis.v1', version: 1, templateHash: 'sha256:review-analysis-v1', requiredVariables: ['platformId', 'publishedAt', 'metrics', 'history'] },
     template: '你是内容运营分析师。平台：{{platformId}}\n发布时间：{{publishedAt}}\n当前指标：{{metrics}}\n历史指标：{{history}}\n请输出克制、可执行的复盘建议。',
   },
+  {
+    promptVersion: { id: 'prompt-benchmark-analysis-v1', key: 'benchmark.analysis.v1', version: 1, templateHash: 'sha256:benchmark-analysis-v1', requiredVariables: ['platform', 'title', 'copy'] },
+    template: '你是短视频对标分析师。平台：{{platform}}\n标题：{{title}}\n文案：{{copy}}\n请输出结构化分析，并明确可借鉴与不可复制的部分。',
+  },
 ];
 
 export class PromptRegistry {

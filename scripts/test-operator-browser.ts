@@ -61,7 +61,13 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<v
 
 function spawnPnpm(args: string[], env: NodeJS.ProcessEnv): ChildProcess {
   const invocation = pnpmInvocation(args);
-  return spawn(invocation.command, invocation.args, { cwd: root, env, stdio: 'inherit', windowsHide: true });
+  return spawn(invocation.command, invocation.args, {
+    cwd: root,
+    env,
+    stdio: 'inherit',
+    windowsHide: true,
+    detached: process.platform !== 'win32',
+  });
 }
 
 async function stopOwnedTree(child: ChildProcess): Promise<void> {
@@ -74,7 +80,30 @@ async function stopOwnedTree(child: ChildProcess): Promise<void> {
     });
     return;
   }
-  child.kill('SIGTERM');
+  const processGroupId = -child.pid;
+  await new Promise<void>((resolveStop) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(forceKillTimer);
+      resolveStop();
+    };
+    const forceKillTimer = setTimeout(() => {
+      try {
+        process.kill(processGroupId, 'SIGKILL');
+      } catch {
+        // The process group may already have exited.
+      }
+      finish();
+    }, 3_000);
+    child.once('exit', finish);
+    try {
+      process.kill(processGroupId, 'SIGTERM');
+    } catch {
+      finish();
+    }
+  });
 }
 
 async function main(): Promise<void> {

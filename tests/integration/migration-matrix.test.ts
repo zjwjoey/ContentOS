@@ -9,7 +9,7 @@ import { createDatabase, migrateDown, migrateUp, resolveMigrationsDirectory } fr
 
 const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test';
 const migrationDirectory = resolveMigrationsDirectory();
-const migrationNames = Array.from({ length: 19 }, (_, index) => String(index + 1).padStart(4, '0'));
+const migrationNames = Array.from({ length: 20 }, (_, index) => String(index + 1).padStart(4, '0'));
 
 function schemaUrl(name: string): string {
   const url = new URL(adminUrl);
@@ -47,7 +47,7 @@ for (const [label, subset] of [['clean', 0], ['0001-0005', 5], ['0001-0006', 6]]
       const db = await createDatabase(database.url);
       try {
         const result = await migrateUp(db);
-        assert.equal(result.applied, 19 - subset);
+        assert.equal(result.applied, 20 - subset);
         const rows = await db.query<{ name: string }>('select name from schema_migrations order by name');
         assert.deepEqual(rows.rows.map((row) => row.name.slice(0, 4)), migrationNames);
       } finally { await db.end(); }
@@ -112,6 +112,18 @@ test('migration 0019 creates review analytics tables with ownership and uniquene
   } finally {
     await database.drop();
   }
+});
+
+test('migration 0020 creates benchmark library tables with project ownership', async () => {
+  const database = await createTemporarySchema();
+  try {
+    const db = await createDatabase(database.url);
+    try {
+      await migrateUp(db);
+      const tables = await db.query<{ table_name: string }>("select table_name from information_schema.tables where table_schema = current_schema() and table_name in ('benchmark_accounts', 'benchmark_contents', 'benchmark_analyses', 'benchmark_references') order by table_name");
+      assert.deepEqual(tables.rows.map((row) => row.table_name), ['benchmark_accounts', 'benchmark_analyses', 'benchmark_contents', 'benchmark_references']);
+    } finally { await db.end(); }
+  } finally { await database.drop(); }
 });
 
 test('migration 0016 maps legacy render asset roles into video workspace outputs', async () => {

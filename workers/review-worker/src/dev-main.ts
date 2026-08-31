@@ -5,7 +5,7 @@ import { PublisherService } from '../../../packages/modules/publisher/src/index.
 import { ReviewAnalyticsService, REVIEW_COLLECT_METRICS } from '../../../packages/modules/review/src/index.js';
 import { REVIEW_GENERATE_ANALYSIS } from '../../../packages/modules/review/src/index.js';
 import { FakeMetricsSource } from '../../../packages/modules/review/src/fake-metrics-source.js';
-import { AIService, FakeAIProvider, PromptRegistry } from '../../../packages/modules/ai/src/index.js';
+import { AIService, PromptRegistry, createRuntimeAI } from '../../../packages/modules/ai/src/index.js';
 import { createReviewWorker } from './main.js';
 
 async function startLocalWorker(): Promise<void> {
@@ -15,7 +15,8 @@ async function startLocalWorker(): Promise<void> {
   const jobs = new JobService(db);
   const publisher = new PublisherService(db);
   const analytics = new ReviewAnalyticsService(db, jobs, publisher);
-  const ai = new AIService(db, new FakeAIProvider(), new PromptRegistry(), { id: 'review-fake-profile', providerId: 'fake', modelId: 'fake-zh-v1', displayName: 'Fake Chinese V1', capabilities: ['TEXT', 'STRUCTURED'], maxInputCharacters: 20_000, maxOutputTokens: 2_000, enabled: true });
+  const aiRuntime = createRuntimeAI();
+  const ai = new AIService(db, aiRuntime.provider, new PromptRegistry(), aiRuntime.profile);
   const worker = createReviewWorker({ jobs, analytics, posts: publisher, metricsSource: new FakeMetricsSource(), ai, workerId: 'review-worker-dev' });
   await worker.start();
   const poll = async () => {

@@ -24,7 +24,7 @@ export interface AssetSummaryV0 {
   byteSize: number;
   checksum: string;
   originalName: string;
-  metadata: { durationMs?: number; width?: number; height?: number; format?: string };
+  metadata: { durationMs?: number; width?: number; height?: number; format?: string; tags?: string[]; category?: string; notes?: string };
 }
 
 const importStates: AssetImportState[] = ['STAGED', 'QUEUED', 'PROCESSING', 'READY', 'DEDUPED', 'FAILED', 'CANCELLED'];
