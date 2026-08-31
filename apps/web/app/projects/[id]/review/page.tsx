@@ -31,7 +31,7 @@ export default function ReviewAnalyticsPage({ params }: { params: { id: string }
   const collect = async (postId: string) => {
     setBusy(true); setMessage('正在排队采集指标…');
     const response = await fetch(`/api/v1/projects/${projectId}/reviews/analytics/posts/${postId}/collect`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ source: 'FAKE', idempotencyKey: `review-collect-${projectId}-${postId}`, correlationId: `review-${projectId}` }) });
-    if (response.ok) { setJobs((current) => ({ ...current, [postId]: await response.json() as Job })); setMessage('指标采集 Job 已排队，完成后会自动刷新。'); }
+    if (response.ok) { const job = await response.json() as Job; setJobs((current) => ({ ...current, [postId]: job })); setMessage('指标采集 Job 已排队，完成后会自动刷新。'); }
     else setMessage('指标采集排队失败。');
     setBusy(false);
   };
@@ -39,7 +39,7 @@ export default function ReviewAnalyticsPage({ params }: { params: { id: string }
     if (!item.snapshots.length) return;
     setBusy(true); setMessage('正在排队生成 AI 复盘…');
     const response = await fetch(`/api/v1/projects/${projectId}/reviews/analytics/posts/${item.post.id}/analyze`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ metricSnapshotIds: item.snapshots.map((snapshot) => snapshot.id), idempotencyKey: `review-analyze-${projectId}-${item.post.id}-${item.snapshots.map((snapshot) => snapshot.id).join('-')}`, correlationId: `review-${projectId}` }) });
-    if (response.ok) { setJobs((current) => ({ ...current, [item.post.id]: await response.json() as Job })); setMessage('AI 复盘 Job 已排队，完成后会自动刷新。'); }
+    if (response.ok) { const job = await response.json() as Job; setJobs((current) => ({ ...current, [item.post.id]: job })); setMessage('AI 复盘 Job 已排队，完成后会自动刷新。'); }
     else setMessage('AI 复盘排队失败。');
     setBusy(false);
   };
