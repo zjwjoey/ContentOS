@@ -30,7 +30,7 @@ create table video_workspace_assets (
 );
 
 insert into video_workspace_assets (workspace_id, asset_id, role)
-select 'workspace-project-' || project_id, asset_id, role from project_assets
+select 'workspace-project-' || project_id, asset_id, case when role = 'RENDER' then 'OUTPUT' else role end from project_assets
 on conflict do nothing;
 
 create index jobs_workspace_idx on jobs (workspace_id, created_at);
