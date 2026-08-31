@@ -9,6 +9,7 @@ import type { ExternalStateResult, PublishResult, PublisherContext, PublisherFai
 import { WorkerRuntime, type JobHandler } from '../../../packages/shared/src/worker-runtime.js';
 
 export const PUBLISH_RECONCILE_JOB_TYPE = 'PUBLISH_RECONCILE';
+export const PUBLISH_VALIDATE_ACCOUNT_JOB_TYPE = 'PUBLISH_VALIDATE_ACCOUNT';
 
 export interface PublisherWorkerOptions {
   service: PublisherService;
@@ -86,6 +87,23 @@ async function executeAdapterReconcile(options: PublisherWorkerOptions, account:
 async function syncProjectPublishingStatus(service: PublisherService, projects: ProjectService, assets: AssetCatalogService, projectId: string): Promise<void> {
   const [summary, publishableAssets] = await Promise.all([service.getProjectSummary(projectId), assets.listPublishable(projectId)]);
   await projects.syncPublishingStatus(projectId, { hasPublishableAsset: publishableAssets.length > 0, publishedRequestCount: summary.statusCounts.PUBLISHED });
+}
+
+async function executeValidateAccount(options: PublisherWorkerOptions, job: JobRecord): Promise<unknown> {
+  const payload = job.payload as { projectId?: unknown; accountId?: unknown };
+  if (typeof payload.projectId !== 'string' || typeof payload.accountId !== 'string' || payload.projectId !== job.projectId) throw new PublisherHandlerError('INVALID_ACCOUNT_VALIDATION_PAYLOAD', 'Publisher account validation payload is invalid', false);
+  const account = await options.service.getAccount(payload.projectId, payload.accountId);
+  if (!account) throw new PublisherHandlerError('PUBLISH_ACCOUNT_NOT_FOUND', 'Publisher account is not available', false);
+  if (account.platformId === 'fake-platform') { await options.service.updateAccountStatus(payload.projectId, account.id, 'READY'); return { status: 'VALIDATED', accountId: account.id, platformId: account.platformId }; }
+  if (!options.realAdaptersEnabled || !options.adapterRegistry || !options.credentials) { await options.service.updateAccountStatus(payload.projectId, account.id, 'UNVERIFIED'); throw new PublisherHandlerError('PUBLISH_ADAPTER_UNAVAILABLE', 'Real publisher adapter is disabled or not composed', false); }
+  let credential;
+  try { credential = await options.credentials.resolve(account.credentialRef); } catch { await options.service.updateAccountStatus(payload.projectId, account.id, 'REAUTH_REQUIRED'); throw new PublisherHandlerError('PUBLISH_AUTH_REQUIRED', 'Publisher credentials require human attention', false); }
+  const profileDir = join(options.profileRoot || join(process.cwd(), 'storage', 'publisher-profiles'), account.platformId, account.profileKey);
+  await mkdir(profileDir, { recursive: true });
+  const auth = await options.adapterRegistry.get(account.platformId as PublisherPlatformId).authenticate({ profileDir, accountId: account.id, credentialRef: account.credentialRef, credential });
+  if (auth.status === 'AUTHENTICATED') { await options.service.updateAccountStatus(payload.projectId, account.id, 'READY'); return { status: 'VALIDATED', accountId: account.id, platformId: account.platformId }; }
+  await options.service.updateAccountStatus(payload.projectId, account.id, auth.failure?.classification === 'HUMAN_ACTION_REQUIRED' ? 'REAUTH_REQUIRED' : 'UNVERIFIED');
+  throw new PublisherHandlerError('PUBLISH_AUTH_FAILED', auth.failure?.message || 'Publisher authentication failed', false);
 }
 
 async function ensureReconcileJob(service: PublisherService, jobs: JobService, payload: PublisherPublishJobPayload): Promise<JobRecord> {
@@ -210,6 +228,11 @@ export function createPublisherWorker(options?: PublisherWorkerOptions | JobHand
     const jobId = (payload as { jobId?: unknown })?.jobId;
     if (typeof jobId !== 'string' || !jobId) throw new PublisherHandlerError('INVALID_RECONCILE_JOB_REFERENCE', 'Publisher reconciliation requires a Job id', false);
     return runner.run(jobId, (job, attemptId) => executeReconcile(options, job, attemptId));
+  });
+  runtime.register(PUBLISH_VALIDATE_ACCOUNT_JOB_TYPE, async (payload) => {
+    const jobId = (payload as { jobId?: unknown })?.jobId;
+    if (typeof jobId !== 'string' || !jobId) throw new PublisherHandlerError('INVALID_ACCOUNT_VALIDATION_JOB_REFERENCE', 'Publisher account validation requires a Job id', false);
+    return runner.run(jobId, (job) => executeValidateAccount(options, job));
   });
   return runtime;
 }

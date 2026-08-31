@@ -7,7 +7,7 @@ import { AssetCatalogService } from '../../../packages/modules/asset/src/index.j
 import { DouyinOpenApiAdapter, EnvironmentCredentialProvider, FakePublisherService, FakePublisherSimulationService, PublisherAdapterRegistry, PublisherService, PostgresPublishStateStore, WeChatChannelsPlaywrightAdapter } from '../../../packages/modules/publisher/src/index.js';
 import { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import { PlaywrightBrowserSessionFactory } from '../../../packages/infrastructure/playwright/src/index.js';
-import { createPublisherWorker, PUBLISH_RECONCILE_JOB_TYPE, type PublisherWorkerOptions } from './main.js';
+import { createPublisherWorker, PUBLISH_RECONCILE_JOB_TYPE, PUBLISH_VALIDATE_ACCOUNT_JOB_TYPE, type PublisherWorkerOptions } from './main.js';
 
 export interface PublisherDevRunnerOptions { pollIntervalMs?: number; batchSize?: number; }
 export interface PublisherDevRunner { start(): Promise<void>; stop(signal?: string): Promise<void>; pollOnce(): Promise<void>; }
@@ -26,7 +26,7 @@ export function createPublisherDevRunner(dependencies: PublisherWorkerOptions, o
     if (polling) return;
     polling = true;
     try {
-      const jobs = await dependencies.jobs.listRunnable(['PUBLISH', PUBLISH_RECONCILE_JOB_TYPE], batchSize);
+      const jobs = await dependencies.jobs.listRunnable(['PUBLISH', PUBLISH_RECONCILE_JOB_TYPE, PUBLISH_VALIDATE_ACCOUNT_JOB_TYPE], batchSize);
       for (const job of jobs) await runtime.execute(job.type, { jobId: job.id });
     } finally { polling = false; }
   };

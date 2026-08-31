@@ -117,6 +117,16 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     return { realAdaptersEnabled, publishMode: realAdaptersEnabled ? 'REAL_OR_FAKE_BY_ACCOUNT' : 'FAKE_ONLY', accounts: accountChecks, checks: { adapterRuntime: realAdaptersEnabled ? 'ENABLED_NOT_VALIDATED' : 'DISABLED', credentials: accountChecks.length > 0 && accountChecks.every((account) => account.credentialReferenceConfigured), accountReady: accountChecks.length > 0 && accountChecks.every((account) => account.ready && account.sessionValidation === 'VALIDATED'), humanActionRequired: accountChecks.some((account) => account.requiresHumanAction) } };
   });
 
+  app.post('/api/v1/projects/:projectId/publisher/accounts/:accountId/validate', async (request, reply) => {
+    const projectId = projectIdOf(request); const accountId = (request.params as { accountId: string }).accountId;
+    if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    const account = await publisher.getAccount(projectId, accountId);
+    if (!account) return reply.code(404).send({ error: { code: 'PUBLISH_ACCOUNT_NOT_FOUND', message: 'Publisher account is not available', details: [] } });
+    const idempotencyKey = `publisher:validate:${projectId}:${accountId}`;
+    const job = await jobs.createIdempotent({ id: `job-publisher-validate-${accountId}`, type: 'PUBLISH_VALIDATE_ACCOUNT', projectId, payload: { schemaVersion: 'PUBLISH_VALIDATE_ACCOUNT_JOB_V1', projectId, accountId }, idempotencyKey, maxAttempts: 2 });
+    return reply.code(202).send({ jobId: job.id, state: job.state, accountId, projectId });
+  });
+
   app.get('/api/v1/projects/:projectId/publisher/requests', async (request, reply) => {
     const projectId = projectIdOf(request);
     if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });

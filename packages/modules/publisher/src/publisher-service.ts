@@ -167,6 +167,12 @@ export class PublisherService {
     return result.rows.map((row) => mapAccount(row as Record<string, unknown>));
   }
 
+  async updateAccountStatus(projectId: string, accountId: string, status: PublisherAccountStatus): Promise<PublisherAccount> {
+    const result = await this.db.query('update publisher_accounts set status = $3, updated_at = now() where project_id = $1 and id = $2 returning *', [projectId, accountId, status]);
+    if (!result.rows[0]) throw new Error('Publisher account not found for project');
+    return mapAccount(result.rows[0] as Record<string, unknown>);
+  }
+
   async createRequest(input: CreatePublisherRequestInput): Promise<PublisherRequestAggregate> {
     const client = await this.db.connect();
     try {
