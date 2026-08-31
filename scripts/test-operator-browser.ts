@@ -140,7 +140,10 @@ async function main(): Promise<void> {
     };
     operator = spawnPnpm(['dev:operator'], environment);
     await waitForHealth(apiUrl);
-    const invocation = pnpmInvocation(['tsx', '--test', '--test-concurrency=1', 'tests/e2e/operator-browser.test.ts']);
+    const testArgs = ['tsx', '--test', '--test-concurrency=1'];
+    if (process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN) testArgs.push('--test-name-pattern', process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN);
+    testArgs.push('tests/e2e/operator-browser.test.ts');
+    const invocation = pnpmInvocation(testArgs);
     await run(invocation.command, invocation.args, {
       ...environment,
       CONTENTOS_OPERATOR_URL: webUrl,
