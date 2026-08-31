@@ -344,4 +344,4 @@ Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-directio
 - [ ] Phase 11: product polish, accessibility/status/error review and bug fixing.
 - [ ] Phase 12: final quality gate, documentation, push and final report; stop before V2.
 
-**Status:** in progress; baseline audit pending
+**Status:** repair in progress; baseline audit complete. Phases 0–2 and the persistence/Planner/Review-context repair checkpoints have evidence in the 2026-08-31 review report; final Product V1 acceptance remains open.

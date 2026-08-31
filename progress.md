@@ -444,3 +444,5 @@
 - Created isolated worktree `E:\ContentOS\.worktrees\contentos-product-v1-closure` on branch `feature/contentos-product-v1-closure`.
 - Installed dependencies with `pnpm install --frozen-lockfile` successfully.
 - Added the 13-phase closure plan to `task_plan.md`; Phase 0 audit is now active.
+- Completed a verified repair pass: migrations 0016/0020, Benchmark/Review JSONB persistence, Review/Benchmark page runtime and async polling, Storyboard Planner bounds, approval target resolution, analytics Job transaction scope, Benchmark→Director context, Review production context, and honest Publisher preflight.
+- Isolated PostgreSQL migration gate is 7/7 passing; Web production build, typecheck, format, lint and diff checks pass. Product V1 final acceptance remains open pending full browser/Fake E2E and remaining operational gates.
