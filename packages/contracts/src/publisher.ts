@@ -32,7 +32,7 @@ export function createPublishSnapshotDigest(input: { platformId: PublisherPlatfo
   const canonical = JSON.stringify({
     schemaVersion: 'PUBLISH_SNAPSHOT_V1', platformId, accountId, assetId: snapshot.assetId,
     assetSha256: snapshot.assetSha256 || null, coverSha256: snapshot.coverSha256 || null,
-    title: snapshot.title, description: snapshot.description,
+    title: snapshot.title, description: snapshot.description, hashtags: snapshot.hashtags || [],
   });
   return createHash('sha256').update(canonical).digest('hex');
 }

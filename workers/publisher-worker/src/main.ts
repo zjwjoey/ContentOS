@@ -132,6 +132,8 @@ async function executePublish(options: PublisherWorkerOptions, job: JobRecord, j
   if (account.status !== 'READY') throw new PublisherHandlerError('PUBLISH_ACCOUNT_NOT_READY', `Publisher account is ${account.status}`, false);
   const asset = await assets.getPublishableAsset(payload.projectId, aggregate.revision.assetId);
   if (!asset || asset.checksum !== aggregate.revision.assetChecksum) throw new PublisherHandlerError('PUBLISH_ASSET_NOT_READY', 'Publisher Asset is not a current READY render for this project', false);
+  const cover = aggregate.revision.coverAssetId ? await assets.getProjectAsset(payload.projectId, aggregate.revision.coverAssetId) : null;
+  if (aggregate.revision.coverAssetId && (!cover || cover.lifecycle !== 'READY')) throw new PublisherHandlerError('PUBLISH_COVER_ASSET_NOT_READY', 'Publisher cover Asset is not a current READY asset for this project', false);
 
   if (aggregate.request.status === 'FAILED') await service.transitionRequest(payload.requestId, 'QUEUED');
   const current = await service.getRequest(payload.requestId);
@@ -139,7 +141,7 @@ async function executePublish(options: PublisherWorkerOptions, job: JobRecord, j
   else if (current?.status !== 'PUBLISHING') throw new PublisherHandlerError('PUBLISH_REQUEST_NOT_QUEUEABLE', `Publisher request is ${current?.status || 'missing'}`, false);
 
   const attempt = await service.startAttempt({ requestId: payload.requestId, revisionId: payload.revisionId, operation: 'PUBLISH', jobId: job.id, jobAttemptId });
-  const snapshot = { requestId: payload.requestId, idempotencyKey: aggregate.request.idempotencyKey, assetId: aggregate.revision.assetId, assetSha256: asset.checksum, ...(options.storage ? { mediaPath: options.storage.objectPath(asset.storageKey) } : {}), title: aggregate.revision.title, description: aggregate.revision.description, ...(aggregate.revision.hashtags.length ? { hashtags: aggregate.revision.hashtags } : {}) };
+  const snapshot = { requestId: payload.requestId, idempotencyKey: aggregate.request.idempotencyKey, assetId: aggregate.revision.assetId, assetSha256: asset.checksum, ...(options.storage ? { mediaPath: options.storage.objectPath(asset.storageKey) } : {}), ...(cover && options.storage ? { coverPath: options.storage.objectPath(cover.storageKey), coverSha256: cover.checksum } : {}), title: aggregate.revision.title, description: aggregate.revision.description, ...(aggregate.revision.hashtags.length ? { hashtags: aggregate.revision.hashtags } : {}) };
   let result: PublishResult;
   try { result = await executeAdapterPublish(options, account, asset, snapshot); }
   catch (error) {

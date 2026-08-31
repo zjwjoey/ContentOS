@@ -470,6 +470,12 @@
 - 最新提交：`9247d6c docs: record cover asset validation`；尚未推送或合并。
 - 封面 Asset 引用增加项目归属与 READY 状态校验，Publisher API/Asset 回归测试通过；最新提交：`4575757`。
 
+## Session: 2026-09-01 — Publisher cover snapshot repair
+
+- 复核发现 Worker 先前只持久化 `coverAssetId`，没有向 Adapter 提供可上传的封面路径；已通过 `AssetCatalogService.getProjectAsset` 读取项目归属、READY 状态、storage key 和 checksum，并构造 `coverPath/coverSha256`。
+- `createPublishSnapshotDigest` 现在也纳入 hashtags，避免同一媒体内容在文案变更后复用旧快照摘要。
+- 新增 Publisher Worker 回归测试验证 READY 封面解析；定向 Worker 测试 **11/11**，全量测试 **229/229** 通过。工作树已通过 format/lint/typecheck/diff-check。
+
 ## Session: 2026-09-01 — Product V1 final quality gate recheck
 
 - 恢复暂停任务后核对工作树与测试进程：工作树干净，暂停前完整测试日志确认 `228/228` 通过，未发现遗留运行中的测试进程。

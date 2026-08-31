@@ -18,6 +18,7 @@ const failureMap: Record<Exclude<FakeOutcome, 'SUCCESS'>, PublisherFailure> = {
 
 export class FakePublisherAdapter implements PublisherAdapter {
   public outcome: FakeOutcome;
+  public lastSnapshot: PublishSnapshot | null = null;
   private readonly published = new Map<string, string>();
   constructor(outcome: FakeOutcome = 'SUCCESS') { this.outcome = outcome; }
   setOutcome(outcome: FakeOutcome): void { this.outcome = outcome; }
@@ -27,6 +28,7 @@ export class FakePublisherAdapter implements PublisherAdapter {
     return { status: 'AUTHENTICATED' };
   }
   async publish(_context: PublisherContext, snapshot: PublishSnapshot): Promise<PublishResult> {
+    this.lastSnapshot = snapshot;
     if (this.outcome !== 'SUCCESS') {
       const failure = failureMap[this.outcome];
       if (this.outcome === 'BROWSER_CRASH' || this.outcome === 'UNKNOWN_SIDE_EFFECT') this.published.set(snapshot.idempotencyKey, this.externalPostId(snapshot.idempotencyKey));
