@@ -1,6 +1,6 @@
 # ContentOS Product V1 代码审查与规划完成度核查
 
-> 修复进度：2026-08-31 已完成迁移 0016/0020、Benchmark/Review JSONB、页面参数、异步 Job 刷新、Planner 边界、审批目标解析及分析 Worker 事务范围修复；下列原始问题中已修复项保留作为审计证据，最终验收仍需重新执行完整浏览器流程及剩余业务项。
+> 修复进度：2026-08-31 已完成迁移 0016/0020、Benchmark/Review JSONB、页面参数、异步 Job 刷新、Planner 边界、审批目标解析、分析 Worker 事务范围、Benchmark→Director/Review 上下文、Review 历史、Publisher 账号验证 Job 和运行时探针修复；下列原始问题中已修复项保留作为审计证据，最终验收仍需重新执行完整浏览器流程及剩余业务项。
 
 日期：2026-08-31（Asia/Shanghai）
 
