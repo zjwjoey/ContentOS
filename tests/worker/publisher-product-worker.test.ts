@@ -72,7 +72,7 @@ test('Publisher Worker durably publishes and records external post', async () =>
     projectId = data.projectId; root = data.root;
     const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, projects: data.projects, assets: data.assets, fakePublisher: data.fake, workerId: 'publisher-worker-test' });
     await worker.start();
-    assert.deepEqual(worker.handlerTypes(), ['PUBLISH', 'PUBLISH_RECONCILE']);
+    assert.deepEqual(worker.handlerTypes(), ['PUBLISH', 'PUBLISH_RECONCILE', 'PUBLISH_VALIDATE_ACCOUNT']);
     const result = await worker.execute('PUBLISH', { jobId: data.job.id });
     assert.equal((result as { state: string }).state, 'SUCCEEDED');
     assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'PUBLISHED');
