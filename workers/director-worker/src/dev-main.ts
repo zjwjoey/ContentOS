@@ -5,6 +5,7 @@ import { DIRECTOR_GENERATE_SCRIPT, DIRECTOR_GENERATE_STORYBOARD } from '../../..
 import { DirectorV1Service } from '../../../packages/modules/director/src/director-v1-service.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
 import { createDirectorWorker, type DirectorWorkerDependencies } from './main.js';
+import { BenchmarkService } from '../../../packages/modules/benchmark/src/index.js';
 
 const directorJobTypes = [DIRECTOR_GENERATE_SCRIPT, DIRECTOR_GENERATE_STORYBOARD];
 
@@ -57,12 +58,14 @@ async function startLocalWorker(): Promise<void> {
   const db = await createDatabase(config.databaseUrl);
   await migrateUp(db);
   const jobs = new JobService(db);
+  const benchmark = new BenchmarkService(db, jobs);
   const aiRuntime = createRuntimeAI();
   const dependencies: DirectorWorkerDependencies = {
     jobs,
     director: new DirectorV1Service(db),
     ai: new AIService(db, aiRuntime.provider, new PromptRegistry(), aiRuntime.profile),
     modelProfile: aiRuntime.profile,
+    benchmark,
   };
   const runner = createDirectorDevRunner(dependencies);
   await runner.start();
