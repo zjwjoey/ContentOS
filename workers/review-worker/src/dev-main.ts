@@ -2,6 +2,8 @@ import { createDatabase, migrateUp } from '../../../packages/database/src/index.
 import { loadConfig } from '../../../packages/config/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
 import { PublisherService } from '../../../packages/modules/publisher/src/index.js';
+import { DirectorV1Service } from '../../../packages/modules/director/src/index.js';
+import { VideoProjectReadService } from '../../../packages/modules/video/src/index.js';
 import { ReviewAnalyticsService, REVIEW_COLLECT_METRICS } from '../../../packages/modules/review/src/index.js';
 import { REVIEW_GENERATE_ANALYSIS } from '../../../packages/modules/review/src/index.js';
 import { FakeMetricsSource } from '../../../packages/modules/review/src/fake-metrics-source.js';
@@ -14,10 +16,12 @@ async function startLocalWorker(): Promise<void> {
   await migrateUp(db);
   const jobs = new JobService(db);
   const publisher = new PublisherService(db);
+  const director = new DirectorV1Service(db);
+  const video = new VideoProjectReadService(db);
   const analytics = new ReviewAnalyticsService(db, jobs, publisher);
   const aiRuntime = createRuntimeAI();
   const ai = new AIService(db, aiRuntime.provider, new PromptRegistry(), aiRuntime.profile);
-  const worker = createReviewWorker({ jobs, analytics, posts: publisher, metricsSource: new FakeMetricsSource(), ai, workerId: 'review-worker-dev' });
+  const worker = createReviewWorker({ jobs, analytics, posts: publisher, metricsSource: new FakeMetricsSource(), ai, context: { async get(projectId, externalPostId) { const pair = await director.getCurrentPair(projectId); const render = await video.getCurrentRender(projectId); const aggregate = await publisher.getProjectSummary(projectId); return { projectId, externalPostId, brief: pair.brief, script: pair.script, storyboard: pair.storyboard, render, publisher: aggregate }; } }, workerId: 'review-worker-dev' });
   await worker.start();
   const poll = async () => {
     const runnable = await jobs.listRunnable([REVIEW_COLLECT_METRICS, REVIEW_GENERATE_ANALYSIS], 10);

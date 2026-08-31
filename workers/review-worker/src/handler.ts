@@ -13,7 +13,9 @@ export interface ReviewWorkerDependencies {
   posts: PublisherExternalPostReader;
   metricsSource: ReviewMetricsSource;
   ai?: AIService;
+  context?: ReviewAnalysisContextReader;
 }
+export interface ReviewAnalysisContextReader { get(projectId: string, externalPostId: string): Promise<Record<string, unknown>>; }
 
 function invalid(message: string): Error { return Object.assign(new Error(message), { code: 'REVIEW_PAYLOAD_INVALID', retryable: false }); }
 
@@ -30,7 +32,7 @@ export function createReviewJobHandler(deps: ReviewWorkerDependencies): (job: Jo
       const latest = snapshots.at(-1)!;
       const aiResult = await deps.ai.generateStructured({
         projectId: String(payload.projectId), jobId: job.id, attemptId, correlationId: String(payload.correlationId || ''), operation: 'REVIEW_GENERATE_ANALYSIS', promptKey: 'review.analysis.v1',
-        variables: { platformId: latest.platformId, publishedAt: latest.publishedAt || latest.capturedAt, metrics: JSON.stringify(latest.metrics), history: JSON.stringify(snapshots.map((snapshot) => ({ capturedAt: snapshot.capturedAt, metrics: snapshot.metrics }))) },
+        variables: { platformId: latest.platformId, publishedAt: latest.publishedAt || latest.capturedAt, metrics: JSON.stringify(latest.metrics), history: JSON.stringify({ snapshots: snapshots.map((snapshot) => ({ capturedAt: snapshot.capturedAt, metrics: snapshot.metrics })), context: deps.context ? await deps.context.get(String(payload.projectId), String(payload.externalPostId)) : {} }) },
       }, (value) => {
         if (!value || typeof value !== 'object') throw new Error('Review analysis output must be an object');
         const candidate = value as Record<string, unknown>;
