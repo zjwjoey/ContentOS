@@ -33,6 +33,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
   assert.ok(fixtureVideo, 'test:browser must provide a playable upload fixture');
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+  page.on('request', (request) => { if (request.url().includes('/video/jobs')) console.log(`VIDEO_JOB_REQUEST ${request.postData() || ''}`); });
   try {
     await openOperatorHome(page, baseUrl);
     await page.getByRole('textbox', { name: /项目名称/ }).fill(`Browser flow ${Date.now()}`);
@@ -66,7 +67,8 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('button', { name: '批准 Storyboard' }).click();
     await page.getByRole('link', { name: '进入 Video' }).click();
 
-    for (const checkbox of await page.getByRole('checkbox').all()) await checkbox.check();
+    const sourceCheckboxes = page.locator('fieldset input[type="checkbox"]');
+    for (let index = 0; index < await sourceCheckboxes.count(); index += 1) await sourceCheckboxes.nth(index).check();
     await page.getByLabel('视频规划器').selectOption('STORYBOARD');
     await page.getByRole('button', { name: '创建渲染 Job' }).click();
     try { await page.locator('video').waitFor({ state: 'visible', timeout: 45_000 }); }
