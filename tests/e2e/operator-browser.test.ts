@@ -33,7 +33,6 @@ test('operator browser completes Fake Publisher success, retry, human-action and
   assert.ok(fixtureVideo, 'test:browser must provide a playable upload fixture');
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
-  page.on('request', (request) => { if (request.url().includes('/video/jobs')) console.log(`VIDEO_JOB_REQUEST ${request.postData() || ''}`); });
   try {
     await openOperatorHome(page, baseUrl);
     await page.getByRole('textbox', { name: /项目名称/ }).fill(`Browser flow ${Date.now()}`);
@@ -157,11 +156,16 @@ test('operator browser completes the Benchmark Library flow', async () => {
     await page.getByLabel('关键词').fill('效率,工具');
     await page.getByRole('button', { name: '保存账号' }).click();
     await page.getByText('对标账号', { exact: true }).first().waitFor({ state: 'visible', timeout: 15_000 });
-    await page.getByLabel('对标账号').selectOption({ index: 1 });
+    const accountSelect = page.locator('form').filter({ hasText: '添加对标内容' }).locator('select').first();
+    await accountSelect.selectOption({ label: '对标账号 · DOUYIN' });
+    assert.notEqual(await accountSelect.inputValue(), '', 'benchmark account must be selected before saving content');
     await page.getByLabel('标题').fill('可复用的开场结构');
     await page.getByLabel('文案 / 内容').fill('先给结论，再解释三步方法。');
     await page.getByRole('button', { name: '保存内容' }).click();
+    try { await page.getByText('对标内容已保存。', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 }); }
+    catch (error) { throw new Error(`Benchmark content save did not succeed: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     const content = page.getByRole('listitem').filter({ hasText: '可复用的开场结构' });
+    await content.waitFor({ state: 'visible', timeout: 15_000 });
     await content.getByRole('button', { name: 'AI 分析' }).click();
     await content.getByText('分析 Job：SUCCEEDED').waitFor({ state: 'visible', timeout: 30_000 });
     await content.getByText('最新分析').waitFor({ state: 'visible', timeout: 15_000 });
@@ -179,6 +183,8 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
   const page = await browser.newPage();
   try {
     await page.goto(`${baseUrl}/video/quick-edit`, { waitUntil: 'domcontentloaded' });
+    await page.waitForLoadState('networkidle');
+    await page.getByRole('button', { name: '创建草稿会话' }).waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByRole('button', { name: '创建草稿会话' }).click();
     await page.getByLabel('上传视频 / 配音').waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByLabel('上传视频 / 配音').setInputFiles([...fixtureVideos, fixtureAudio]);
