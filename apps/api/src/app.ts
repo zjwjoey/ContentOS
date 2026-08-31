@@ -27,6 +27,11 @@ import { registerReviewAnalyticsRoutes } from './review-analytics-routes.js';
 import { BenchmarkService } from '../../../packages/modules/benchmark/src/index.js';
 import { registerBenchmarkRoutes } from './benchmark-routes.js';
 import { readAIProviderConfig } from '../../../packages/modules/ai/src/index.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { access } from 'node:fs/promises';
+
+const execFileAsync = promisify(execFile);
 
 const projectInput = z.object({ name: z.string().trim().min(1).max(200), metadata: z.record(z.string(), z.unknown()).optional() });
 const directorInput = z.object({ seed: z.number().int(), brief: z.object({ topic: z.string().trim().min(1), audience: z.string().trim().min(1), objective: z.string().trim().min(1), tone: z.string().trim().min(1) }), storyboard: z.array(z.object({ id: z.string().trim().min(1), title: z.string().trim().min(1), narration: z.string().trim().min(1), visualIntent: z.string().trim().min(1), durationMs: z.number().int().positive(), sourceAssetIds: z.array(z.string()) })).min(1), provenance: z.object({ author: z.string().trim().min(1), source: z.enum(['manual', 'ai-draft']), promptVersion: z.string().optional(), modelProfile: z.string().optional() }) });
@@ -75,7 +80,11 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
     let postgres: 'HEALTHY' | 'UNAVAILABLE' = 'HEALTHY';
     try { await db.query('select 1'); } catch { postgres = 'UNAVAILABLE'; }
     const publisherEnabled = process.env.PUBLISHER_REAL_ADAPTERS_ENABLED === '1' || process.env.PUBLISHER_REAL_ADAPTERS_ENABLED === 'true';
-    return { ai: readAIProviderConfig(), publisher: { fakeEnabled: true, realAdaptersEnabled: publisherEnabled }, runtime: { postgres, ffmpeg: process.env.FFMPEG_PATH ? 'CONFIGURED' : 'DEFAULT', assetStorage: storage ? 'CONFIGURED' : 'UNAVAILABLE', videoWorker: 'EXTERNAL', publisherWorker: 'EXTERNAL', reviewWorker: 'EXTERNAL', benchmarkWorker: 'EXTERNAL' } };
+    let ffmpeg: 'HEALTHY' | 'UNAVAILABLE' = 'UNAVAILABLE';
+    try { const binary = process.env.FFMPEG_PATH || 'ffmpeg'; const result = await execFileAsync(binary, ['-encoders'], { timeout: 5000 }); ffmpeg = `${result.stdout}\n${result.stderr}`.includes('libx264') ? 'HEALTHY' : 'UNAVAILABLE'; } catch { ffmpeg = 'UNAVAILABLE'; }
+    let assetStorage: 'HEALTHY' | 'UNAVAILABLE' = 'UNAVAILABLE';
+    try { await access(process.env.STORAGE_ROOT || 'storage'); assetStorage = 'HEALTHY'; } catch { assetStorage = 'UNAVAILABLE'; }
+    return { ai: readAIProviderConfig(), publisher: { fakeEnabled: true, realAdaptersEnabled: publisherEnabled }, runtime: { postgres, ffmpeg, assetStorage, videoWorker: 'UNKNOWN', publisherWorker: 'UNKNOWN', reviewWorker: 'UNKNOWN', benchmarkWorker: 'UNKNOWN' } };
   });
   app.post('/api/v1/projects', async (request, reply) => {
     const parsed = projectInput.safeParse(request.body);
