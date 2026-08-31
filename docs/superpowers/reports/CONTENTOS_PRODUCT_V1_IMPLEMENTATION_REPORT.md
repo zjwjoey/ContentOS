@@ -42,8 +42,8 @@ Real AI quality requires a user-provided credential and human review. Douyin/WeC
 
 Follow `docs/product/CONTENTOS_PRODUCT_V1_USER_FLOW.md` from project creation through Review. Confirm each async state, historical revision, failure/human-action state, and the visible “真实平台发布未启用” guard.
 
-## Final acceptance state
+## Final acceptance state (superseded by 2026-08-31 repair audit)
 
 - Final SHA: `de5b772` (plus the preceding closure commit `955f3fe`).
 - Branch is intentionally not merged to `main`; push and merge remain an explicit release decision.
-- Status: `PASS WITH EXTERNAL GATES` until PostgreSQL/FFmpeg/Playwright and real platform credentials are available for browser and live-adapter acceptance.
+- Status: `REPAIR IN PROGRESS`; the earlier `PASS WITH EXTERNAL GATES` statement is superseded. See `CONTENTOS_PRODUCT_V1_REVIEW_2026-08-31.md` for the verified gaps and repair checkpoints.
