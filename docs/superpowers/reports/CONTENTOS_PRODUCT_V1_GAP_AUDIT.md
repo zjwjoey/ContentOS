@@ -50,3 +50,15 @@ AI Vision、Embedding、Vector DB、大规模平台抓取、复杂社交爬虫�
 3. 统一 Approval/Publisher/Review UI，并补 Dashboard、Content Plan、Settings。
 4. 最后用隔离 Fake E2E 覆盖完整链路、失败状态和历史版本，再执行最终 Gate。
 
+## 复审更新（2026-08-31）
+
+上表记录的是本轮开始时的审计基线，不应继续被当作当前实现状态。复审后已确认以下项目已经落地并有当前证据：
+
+- Project Center、Content Plan、Benchmark、Review Analytics、Settings 已有 project-scoped/API-backed 页面。
+- Director V1 的 Brief、Script/Storyboard Job、revision、审批和 Benchmark reference 已接通；Storyboard Planner 已具备 deterministic 关键词评分与 fallback。
+- Assets 支持多文件视频/音频导入、READY/FAILED、预览、标签编辑以及类型/标签筛选。
+- Publisher Fake 闭环覆盖成功、重试、人工处理和未知外部状态 reconcile；真实 Adapter 默认受 feature flag 保护。
+- Benchmark 空 URL 严格校验、Quick Edit 多镜头浏览器路径和 Publisher 页面安全字段已在 `770d4ae`、`e34e703` 修复。
+- 当前验证证据：浏览器 3/3、单元/集成/契约 228/228、迁移矩阵 7/7、doctor 全部 PASS，typecheck/lint/format/build 全部 PASS。
+
+仍需在产品级收口前单独复核的范围：Publisher 的 hashtags/cover/schedule 字段是否完整进入公开 Contract 与持久化；Project 的编辑/归档入口；Storyboard 场景人工编辑与历史选择；以及真实 Provider 在配置凭证后的人工 preflight。Fake、迁移、FFmpeg 和本地构建门禁已不再是当前阻塞项。
