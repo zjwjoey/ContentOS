@@ -31,6 +31,8 @@ export interface PublisherRevisionInput {
   assetChecksum: string;
   title: string;
   description: string;
+  hashtags?: string[];
+  coverAssetId?: string;
   desiredPublishAt: string | null;
   createdBy: string;
 }
@@ -122,7 +124,7 @@ function mapRequest(row: Record<string, unknown>): PublisherRequest {
 function mapRevision(row: Record<string, unknown>): PublisherRequestRevision {
   return {
     id: String(row.id), requestId: String(row.request_id), revision: Number(row.revision), assetId: String(row.asset_id),
-    assetChecksum: String(row.asset_checksum), title: String(row.title), description: String(row.description),
+    assetChecksum: String(row.asset_checksum), title: String(row.title), description: String(row.description), hashtags: Array.isArray(row.hashtags) ? row.hashtags.map(String) : [], ...(row.cover_asset_id ? { coverAssetId: String(row.cover_asset_id) } : {}),
     desiredPublishAt: nullableTimestamp(row.desired_publish_at), createdBy: String(row.created_by), createdAt: timestamp(row.created_at),
   };
 }
@@ -167,6 +169,12 @@ export class PublisherService {
     return result.rows.map((row) => mapAccount(row as Record<string, unknown>));
   }
 
+  async updateAccountStatus(projectId: string, accountId: string, status: PublisherAccountStatus): Promise<PublisherAccount> {
+    const result = await this.db.query('update publisher_accounts set status = $3, updated_at = now() where project_id = $1 and id = $2 returning *', [projectId, accountId, status]);
+    if (!result.rows[0]) throw new Error('Publisher account not found for project');
+    return mapAccount(result.rows[0] as Record<string, unknown>);
+  }
+
   async createRequest(input: CreatePublisherRequestInput): Promise<PublisherRequestAggregate> {
     const client = await this.db.connect();
     try {
@@ -189,6 +197,8 @@ export class PublisherService {
           && String(revisionRow.asset_checksum) === input.revision.assetChecksum
           && String(revisionRow.title) === input.revision.title
           && String(revisionRow.description) === input.revision.description
+          && JSON.stringify(Array.isArray(revisionRow.hashtags) ? revisionRow.hashtags : []) === JSON.stringify(input.revision.hashtags || [])
+          && (String(revisionRow.cover_asset_id || '') === String(input.revision.coverAssetId || ''))
           && sameNullableTimestamp(input.revision.desiredPublishAt, revisionRow.desired_publish_at)
           && String(revisionRow.created_by) === input.revision.createdBy;
         if (!matches) throw new Error('Idempotency key conflict: input does not match existing Publisher request');
@@ -196,7 +206,7 @@ export class PublisherService {
         return { request, revision: mapRevision(revisionRow), attempts: [], externalPosts: [], nextAction: null };
       }
       const revisionId = `publisher-revision-${randomUUID()}`;
-      const revision = await client.query('insert into publisher_request_revisions (id, request_id, revision, asset_id, asset_checksum, title, description, desired_publish_at, created_by) values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning *', [revisionId, id, 1, input.revision.assetId, input.revision.assetChecksum, input.revision.title, input.revision.description, input.revision.desiredPublishAt, input.revision.createdBy]);
+      const revision = await client.query('insert into publisher_request_revisions (id, request_id, revision, asset_id, asset_checksum, title, description, hashtags, cover_asset_id, desired_publish_at, created_by) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning *', [revisionId, id, 1, input.revision.assetId, input.revision.assetChecksum, input.revision.title, input.revision.description, JSON.stringify(input.revision.hashtags || []), input.revision.coverAssetId || null, input.revision.desiredPublishAt, input.revision.createdBy]);
       const updated = await client.query('update publisher_requests set current_revision_id = $2, desired_publish_at = $3, updated_at = now() where id = $1 returning *', [id, revisionId, input.revision.desiredPublishAt]);
       await client.query('commit');
       return { request: mapRequest(updated.rows[0] as Record<string, unknown>), revision: mapRevision(revision.rows[0] as Record<string, unknown>), attempts: [], externalPosts: [], nextAction: null };
@@ -235,7 +245,7 @@ export class PublisherService {
   }
 
   async getRequestAggregate(projectId: string, requestId: string): Promise<PublisherRequestAggregate | null> {
-    const result = await this.db.query('select p.*, r.id as revision_id, r.request_id as revision_request_id, r.revision, r.asset_id, r.asset_checksum, r.title, r.description, r.desired_publish_at as revision_desired_publish_at, r.created_by, r.created_at as revision_created_at from publisher_requests p left join publisher_request_revisions r on r.id = p.current_revision_id where p.project_id = $1 and p.id = $2', [projectId, requestId]);
+    const result = await this.db.query('select p.*, r.id as revision_id, r.request_id as revision_request_id, r.revision, r.asset_id, r.asset_checksum, r.title, r.description, r.hashtags, r.cover_asset_id, r.desired_publish_at as revision_desired_publish_at, r.created_by, r.created_at as revision_created_at from publisher_requests p left join publisher_request_revisions r on r.id = p.current_revision_id where p.project_id = $1 and p.id = $2', [projectId, requestId]);
     const row = result.rows[0] as Record<string, unknown> | undefined;
     if (!row || !row.revision_id) return null;
     const attempts = await this.listAttempts(requestId);
@@ -250,6 +260,8 @@ export class PublisherService {
         asset_checksum: row.asset_checksum,
         title: row.title,
         description: row.description,
+        hashtags: row.hashtags,
+        cover_asset_id: row.cover_asset_id,
         desired_publish_at: row.revision_desired_publish_at,
         created_by: row.created_by,
         created_at: row.revision_created_at,
@@ -291,7 +303,7 @@ export class PublisherService {
       if (String(current.rows[0].status) !== 'DRAFT') throw new Error('Only DRAFT Publisher requests can be revised');
       const next = await client.query<{ revision: number }>('select coalesce(max(revision), 0) + 1 as revision from publisher_request_revisions where request_id = $1', [requestId]);
       const revisionId = `publisher-revision-${randomUUID()}`;
-      const revision = await client.query('insert into publisher_request_revisions (id, request_id, revision, asset_id, asset_checksum, title, description, desired_publish_at, created_by) values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning *', [revisionId, requestId, Number(next.rows[0]?.revision || 1), input.assetId, input.assetChecksum, input.title, input.description, input.desiredPublishAt, input.createdBy]);
+      const revision = await client.query('insert into publisher_request_revisions (id, request_id, revision, asset_id, asset_checksum, title, description, hashtags, cover_asset_id, desired_publish_at, created_by) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning *', [revisionId, requestId, Number(next.rows[0]?.revision || 1), input.assetId, input.assetChecksum, input.title, input.description, JSON.stringify(input.hashtags || []), input.coverAssetId || null, input.desiredPublishAt, input.createdBy]);
       await client.query('update publisher_requests set current_revision_id = $2, desired_publish_at = $3, updated_at = now() where id = $1', [requestId, revisionId, input.desiredPublishAt]);
       await client.query('commit');
       return mapRevision(revision.rows[0] as Record<string, unknown>);
@@ -348,6 +360,19 @@ export class PublisherService {
   async listExternalPosts(requestId: string): Promise<PublisherExternalPost[]> {
     const result = await this.db.query('select * from publisher_external_posts where request_id = $1 order by first_observed_at', [requestId]);
     return result.rows.map((row) => mapExternalPost(row as Record<string, unknown>));
+  }
+
+  async listProjectExternalPosts(projectId: string): Promise<PublisherExternalPost[]> {
+    const result = await this.db.query('select ep.* from publisher_external_posts ep join publisher_requests pr on pr.id = ep.request_id where pr.project_id = $1 and pr.status = \'PUBLISHED\' order by ep.first_observed_at desc, ep.id desc', [projectId]);
+    return result.rows.map((row) => mapExternalPost(row as Record<string, unknown>));
+  }
+
+  async getExternalPost(projectId: string, externalPostId: string): Promise<PublisherExternalPost | null> {
+    const result = await this.db.query(
+      "select ep.* from publisher_external_posts ep join publisher_requests pr on pr.id = ep.request_id where pr.project_id = $1 and ep.id = $2 and pr.status = 'PUBLISHED'",
+      [projectId, externalPostId],
+    );
+    return result.rows[0] ? mapExternalPost(result.rows[0] as Record<string, unknown>) : null;
   }
 
   async recordExternalPost(input: RecordPublisherExternalPostInput): Promise<PublisherExternalPost> {

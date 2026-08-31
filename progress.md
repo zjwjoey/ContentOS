@@ -431,8 +431,55 @@
 - Moved project stage navigation into the shared project layout and added explicit loading/error states; removed duplicate ProjectNav markup from Assets and Director.
 - Added format-aware MIME mapping for Standalone media delivery.
 - Verification: targeted UI/integration tests, typecheck, lint, format, Web build, migration matrix, full suite and the new two-scenario isolated browser run passed.
+
+## Session: 2026-08-31 — Product V1 browser gate recheck
+
+- Fixed `dev:operator` composition: Review Worker now uses `src/dev-main.ts`; Benchmark Worker now exposes a matching `dev` script (`57ee5de`).
+- Static checks after the fix: format, typecheck and diff-check passed.
+- Isolated browser gate was rerun from a clean PostgreSQL cluster. The operator now starts all seven processes, but the three browser journeys still fail before project-center assertions; the runner then tears down the shared database, producing secondary `57P01` errors. Product V1 remains **not accepted** pending diagnosis of the project-create/project-center browser failure.
+- Browser submission race was corrected by waiting for the initial projects response and clicking the real submit button. The next run reached Project Center and Asset Import; Asset Worker then reported `spawn ... ffprobe.exe ENOENT`, so the remaining browser blocker is now the FFprobe executable handoff in the isolated operator process rather than project creation.
 ## Operator UI V1 Final Merge Repair
 
 - Separated selected Manifest from the mutable current Manifest; the picker now reflects the inspected revision.
 - Primary Voice lock is enforced by `StandaloneQuickEditService` after planning.
 - Regression and browser evidence updated; no migration and no scope expansion.
+
+## Session: 2026-08-31 — ContentOS Product V1 Closure
+
+- Read the Product V1 Closure task brief from the supplied attachment.
+- Fetched `origin`; latest `origin/main` is `9a6886e` (`Merge PR #4: finalize Operator UI V1`).
+- Created isolated worktree `E:\ContentOS\.worktrees\contentos-product-v1-closure` on branch `feature/contentos-product-v1-closure`.
+- Installed dependencies with `pnpm install --frozen-lockfile` successfully.
+- Added the 13-phase closure plan to `task_plan.md`; Phase 0 audit is now active.
+- Completed a verified repair pass: migrations 0016/0020, Benchmark/Review JSONB persistence, Review/Benchmark page runtime and async polling, Storyboard Planner bounds, approval target resolution, analytics Job transaction scope, Benchmark→Director context, Review production context, and honest Publisher preflight.
+- Isolated PostgreSQL migration gate is 7/7 passing; Web production build, typecheck, format, lint and diff checks pass. Product V1 final acceptance remains open pending full browser/Fake E2E and remaining operational gates.
+## Session: 2026-08-31 — Product V1 closure gate completed
+
+- 修复 Benchmark 内容创建请求在空链接时发送 `url: ""`，违反严格可选 URL 合同的问题；浏览器流程现可保存内容、排队 AI 分析并绑定 Director Reference。
+- 稳定 Standalone Quick Edit 浏览器验收：等待页面 hydration，并使用自定义 12 秒目标验证多镜头调整、Manifest 版本和真实 FFmpeg Render。
+- Publisher 页面预检字段改为安全的 UI 内部命名，避免凭据相关实现细节进入静态页面契约检查。
+- 全量浏览器验收：Fake Publisher、Benchmark Library、Standalone Quick Edit **3/3 通过**。
+- 全量单元/集成/契约测试：**228/228 通过**；typecheck、lint、format、diff-check、Web build、root build 均通过。
+- 最新提交：`e34e703 fix: stabilize product v1 browser and preflight flows`；尚未推送或合并。
+
+## Session: 2026-09-01 — Publisher metadata 收口
+
+- 新增 migration `0021_publisher_metadata`，为 Publisher Revision 增加 hashtags 与可选 cover Asset 引用；现有 `desiredPublishAt` 继续承载排期。
+- Contract、API、Publisher Service、Worker snapshot、Douyin/WeChat Adapter 文案和 Operator UI 已同步支持这些字段。
+- 迁移矩阵 8/8、Publisher API 集成 10/10、Publisher/真实 Adapter 收口门禁 29/29、全量测试 228/228、浏览器 3/3、Web/root build、doctor 全部通过。
+- 最新提交：`9247d6c docs: record cover asset validation`；尚未推送或合并。
+- 封面 Asset 引用增加项目归属与 READY 状态校验，Publisher API/Asset 回归测试通过；最新提交：`4575757`。
+
+## Session: 2026-09-01 — Publisher cover snapshot repair
+
+- 复核发现 Worker 先前只持久化 `coverAssetId`，没有向 Adapter 提供可上传的封面路径；已通过 `AssetCatalogService.getProjectAsset` 读取项目归属、READY 状态、storage key 和 checksum，并构造 `coverPath/coverSha256`。
+- `createPublishSnapshotDigest` 现在也纳入 hashtags，避免同一媒体内容在文案变更后复用旧快照摘要。
+- 新增 Publisher Worker 回归测试验证 READY 封面解析；定向 Worker 测试 **11/11**，全量测试 **229/229** 通过。工作树已通过 format/lint/typecheck/diff-check。
+
+## Session: 2026-09-01 — Product V1 final quality gate recheck
+
+- 恢复暂停任务后核对工作树与测试进程：工作树干净，暂停前完整测试日志确认 `228/228` 通过，未发现遗留运行中的测试进程。
+- 独立 PostgreSQL 16 集群上的 `test:integration-closure` **29/29 通过**，覆盖真实 Adapter 契约、凭证隔离、迁移矩阵（含 `0021`）和真实 Publisher Worker。
+- 独立 Operator 浏览器验收 **3/3 通过**：Fake Publisher 成功/重试/人工处理/未知状态、Benchmark Library、Standalone Quick Edit。
+- 最终本地门禁通过：format（333 文件）、lint（130 个 TypeScript 文件）、typecheck、root build、Web production build、doctor（runtime/storage/FFmpeg/FFprobe/filters/codecs/font）和 `git diff --check`。
+- 当前分支仍为 `feature/contentos-product-v1-closure`，未推送、未创建或合并 PR；真实 Provider 配置后的人工 preflight 及平台特定封面尺寸/格式策略仍保留为产品级后续复核项。

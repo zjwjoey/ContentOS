@@ -5,9 +5,9 @@ import { createDatabase, migrateDown, migrateUp, resolveMigrationsDirectory } fr
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55432/contentos_dev';
 
-test('migration files form a complete ordered 0001 through 0018 chain', async () => {
+test('migration files form a complete ordered 0001 through 0021 chain', async () => {
   const names = (await readdir(resolveMigrationsDirectory())).filter((file) => /^\d+_.+\.sql$/.test(file) && !file.endsWith('.down.sql')).sort();
-  assert.deepEqual(names.map((file) => file.slice(0, 4)), Array.from({ length: 18 }, (_, index) => String(index + 1).padStart(4, '0')));
+  assert.deepEqual(names.map((file) => file.slice(0, 4)), Array.from({ length: 21 }, (_, index) => String(index + 1).padStart(4, '0')));
 });
 
 test('migration directory resolution is independent of the process working directory', () => {
@@ -28,8 +28,8 @@ test('database migrations create the first vertical-slice schema and are idempot
     const second = await migrateUp(db);
     assert.ok(first.applied >= 0);
     assert.equal(second.applied, 0);
-    const tables = await db.query<{ table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('content_projects','assets','jobs','job_attempts','job_dependencies','edit_manifests','renders') order by table_name");
-    assert.deepEqual(tables.rows.map((row) => row.table_name), ['assets', 'content_projects', 'edit_manifests', 'job_attempts', 'job_dependencies', 'jobs', 'renders']);
+    const tables = await db.query<{ table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('content_projects','assets','jobs','job_attempts','job_dependencies','edit_manifests','renders','review_metric_snapshots','review_analysis_reports') order by table_name");
+    assert.deepEqual(tables.rows.map((row) => row.table_name), ['assets', 'content_projects', 'edit_manifests', 'job_attempts', 'job_dependencies', 'jobs', 'renders', 'review_analysis_reports', 'review_metric_snapshots']);
   } finally {
     await db.end();
   }

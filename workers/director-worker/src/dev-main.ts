@@ -1,17 +1,13 @@
 import { createDatabase, migrateUp } from '../../../packages/database/src/index.js';
 import { loadConfig } from '../../../packages/config/src/index.js';
-import { AIService, FakeAIProvider, PromptRegistry } from '../../../packages/modules/ai/src/index.js';
+import { AIService, PromptRegistry, createRuntimeAI } from '../../../packages/modules/ai/src/index.js';
 import { DIRECTOR_GENERATE_SCRIPT, DIRECTOR_GENERATE_STORYBOARD } from '../../../packages/modules/director/src/director-job-service.js';
 import { DirectorV1Service } from '../../../packages/modules/director/src/director-v1-service.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
-import type { ModelProfile } from '../../../packages/contracts/src/index.js';
 import { createDirectorWorker, type DirectorWorkerDependencies } from './main.js';
+import { BenchmarkService } from '../../../packages/modules/benchmark/src/index.js';
 
 const directorJobTypes = [DIRECTOR_GENERATE_SCRIPT, DIRECTOR_GENERATE_STORYBOARD];
-const localProfile: ModelProfile = {
-  id: 'fake-profile-local', providerId: 'fake', modelId: 'fake-zh-v1', displayName: 'Fake Chinese V1 (local)',
-  capabilities: ['TEXT', 'STRUCTURED'], maxInputCharacters: 20_000, maxOutputTokens: 2_000, enabled: true,
-};
 
 export interface DirectorDevRunnerOptions { pollIntervalMs?: number; batchSize?: number; }
 export interface DirectorDevRunner {
@@ -62,11 +58,14 @@ async function startLocalWorker(): Promise<void> {
   const db = await createDatabase(config.databaseUrl);
   await migrateUp(db);
   const jobs = new JobService(db);
+  const benchmark = new BenchmarkService(db, jobs);
+  const aiRuntime = createRuntimeAI();
   const dependencies: DirectorWorkerDependencies = {
     jobs,
     director: new DirectorV1Service(db),
-    ai: new AIService(db, new FakeAIProvider(), new PromptRegistry(), localProfile),
-    modelProfile: localProfile,
+    ai: new AIService(db, aiRuntime.provider, new PromptRegistry(), aiRuntime.profile),
+    modelProfile: aiRuntime.profile,
+    benchmark,
   };
   const runner = createDirectorDevRunner(dependencies);
   await runner.start();

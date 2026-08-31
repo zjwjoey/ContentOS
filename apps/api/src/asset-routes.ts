@@ -6,6 +6,7 @@ import { AssetCatalogService, AssetImportService } from '../../../packages/modul
 import { JobService } from '../../../packages/modules/job/src/index.js';
 import { ProjectService } from '../../../packages/modules/project/src/index.js';
 import { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
+import { z } from 'zod';
 
 export interface AssetRouteDependencies { projects: ProjectService; imports: AssetImportService; assets: AssetCatalogService; jobs: JobService; storage: LocalStorageProvider; maxUploadBytes: number; }
 
@@ -49,7 +50,16 @@ export function registerAssetRoutes(app: FastifyInstance, dependencies: AssetRou
   app.get('/api/v1/projects/:projectId/assets', async (request, reply) => {
     const projectId = (request.params as { projectId: string }).projectId;
     if (!(await dependencies.projects.get(projectId))) return error(reply, 404, 'PROJECT_NOT_FOUND', 'Project not found');
-    return { items: await dependencies.assets.listProjectAssets(projectId) };
+    const query = request.query as { kind?: string; tag?: string; q?: string };
+    return { items: await dependencies.assets.listProjectAssets(projectId, { ...(query.kind ? { kind: query.kind } : {}), ...(query.tag ? { tag: query.tag } : {}), ...(query.q ? { query: query.q } : {}) }) };
+  });
+
+  app.patch('/api/v1/projects/:projectId/assets/:assetId/tags', async (request, reply) => {
+    const params = request.params as { projectId: string; assetId: string };
+    const parsed = z.object({ tags: z.array(z.string().trim().min(1).max(100)).max(64).optional(), category: z.string().max(200).optional(), notes: z.string().max(20_000).optional() }).strict().safeParse(request.body);
+    if (!parsed.success) return error(reply, 422, 'ASSET_TAG_VALIDATION_ERROR', '素材标签信息不合法');
+    const input = parsed.data; const asset = await dependencies.assets.updateTags(params.projectId, params.assetId, { ...(input.tags ? { tags: input.tags } : {}), ...(input.category !== undefined ? { category: input.category } : {}), ...(input.notes !== undefined ? { notes: input.notes } : {}) });
+    return asset ? asset : error(reply, 404, 'ASSET_NOT_FOUND', 'Asset not found for project');
   });
 
   app.get('/api/v1/projects/:projectId/assets/:assetId/content', async (request, reply) => {

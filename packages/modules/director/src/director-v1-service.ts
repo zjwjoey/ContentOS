@@ -138,6 +138,13 @@ export class DirectorV1Service {
     });
   }
 
+  async createManualStoryboardRevision(projectId: string, parentRevisionId: string, scenes: CreateStoryboardRevisionInput['scenes'], createdBy: string): Promise<StoryboardRevisionV1> {
+    const parent = await this.getStoryboardRevision(parentRevisionId, projectId); if (!parent) throw new Error('Parent Storyboard revision not found');
+    const result = await this.db.query<{ aggregate_id: string }>('select aggregate_id from director_storyboard_revisions where id = $1 and project_id = $2', [parentRevisionId, projectId]);
+    const aggregateId = result.rows[0]?.aggregate_id; if (!aggregateId) throw new Error('Storyboard revision not found');
+    return this.createStoryboardRevision(projectId, aggregateId, { scriptRevisionId: parent.scriptRevisionId, scenes, origin: 'MANUAL', createdBy });
+  }
+
   async approveStoryboard(projectId: string, revisionId: string): Promise<StoryboardRevisionV1> {
     return this.transaction(projectId, async (client) => {
       const result = await client.query('select b.*, s.status as script_status from director_storyboard_revisions b join director_script_revisions s on s.id = b.script_revision_id where b.id = $1 and b.project_id = $2 for update', [revisionId, projectId]); const row = result.rows[0] as (Record<string, unknown> & { script_status: string }) | undefined; if (!row) throw new Error('Storyboard revision not found'); if (row.status !== 'DRAFT') throw new Error('Storyboard revision must be DRAFT'); if (row.script_status !== 'ACCEPTED') throw new Error('Storyboard requires an accepted source Script');
@@ -149,8 +156,10 @@ export class DirectorV1Service {
 
   async getBrief(id: string, projectId: string): Promise<ContentBriefV1 | null> { const result = await this.db.query('select * from director_briefs where id = $1 and project_id = $2', [id, projectId]); return result.rows[0] ? mapBrief(result.rows[0] as Record<string, unknown>) : null; }
   async getScriptRevision(id: string, projectId: string): Promise<ScriptRevisionV1 | null> { const result = await this.db.query('select * from director_script_revisions where id = $1 and project_id = $2', [id, projectId]); return result.rows[0] ? mapScript(result.rows[0] as Record<string, unknown>) : null; }
+  async getScriptAggregateId(id: string, projectId: string): Promise<string | null> { const result = await this.db.query<{ aggregate_id: string }>('select aggregate_id from director_script_revisions where id = $1 and project_id = $2', [id, projectId]); return result.rows[0]?.aggregate_id || null; }
   async listScriptRevisions(projectId: string): Promise<ScriptRevisionV1[]> { const result = await this.db.query('select * from director_script_revisions where project_id = $1 order by revision', [projectId]); return result.rows.map((row) => mapScript(row as Record<string, unknown>)); }
   async getStoryboardRevision(id: string, projectId: string): Promise<StoryboardRevisionV1 | null> { const result = await this.db.query('select * from director_storyboard_revisions where id = $1 and project_id = $2', [id, projectId]); return result.rows[0] ? mapStoryboard(result.rows[0] as Record<string, unknown>) : null; }
+  async getStoryboardAggregateId(id: string, projectId: string): Promise<string | null> { const result = await this.db.query<{ aggregate_id: string }>('select aggregate_id from director_storyboard_revisions where id = $1 and project_id = $2', [id, projectId]); return result.rows[0]?.aggregate_id || null; }
   async listStoryboardRevisions(projectId: string): Promise<StoryboardRevisionV1[]> { const result = await this.db.query('select * from director_storyboard_revisions where project_id = $1 order by revision', [projectId]); return result.rows.map((row) => mapStoryboard(row as Record<string, unknown>)); }
 
   async getCurrentPair(projectId: string): Promise<DirectorCurrentPair> {

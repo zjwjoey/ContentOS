@@ -172,7 +172,9 @@ export function buildActions(projectId: string, health: { level: ProjectCenterHe
 }
 
 function safeProject(project: ProjectRecord): ProjectCenterSnapshot['project'] {
-  return { id: project.id, name: project.name, status: project.status, updatedAt: project.updatedAt };
+  const metadata = project.metadata && typeof project.metadata === 'object' && !Array.isArray(project.metadata) ? project.metadata as Record<string, unknown> : {};
+  const safeMetadata = Object.fromEntries(Object.entries(metadata).filter(([key]) => ['topic', 'targetPlatform', 'targetAccount', 'plannedDate', 'contentType', 'tone', 'keywords', 'createdBy'].includes(key)));
+  return { id: project.id, name: project.name, status: project.status, updatedAt: project.updatedAt, metadata: safeMetadata };
 }
 
 export class ProjectCenterService {

@@ -327,3 +327,21 @@ Authoritative correction plan: `docs/superpowers/plans/2026-08-30-video-directio
 - [x] Docs Sync
 - [x] Push
 - [x] PR #4 Recheck
+
+## ContentOS Product V1 Closure — 2026-08-31
+
+- [ ] Phase 0: audit latest `origin/main`, architecture/product docs, modules, tests and runtime gaps; write `CONTENTOS_PRODUCT_V1_GAP_AUDIT.md`.
+- [ ] Phase 1: freeze/reuse Product V1 contracts and minimum data changes.
+- [ ] Phase 2: implement Benchmark Library V1 and project references.
+- [ ] Phase 3: close Director V1 fields, revisions, approvals and real AI provider path.
+- [ ] Phase 4: add Asset tags/search/filter/preview closure.
+- [ ] Phase 5: add deterministic Storyboard Video Planner with Random fallback.
+- [ ] Phase 6: close Video adjustment/timeline/render UX gaps.
+- [ ] Phase 7: close Publisher accounts/config/preflight and safe real-adapter UI.
+- [ ] Phase 8: close Review manual snapshots, trends and AI review history.
+- [ ] Phase 9: add truthful Dashboard, Content Plan and Settings pages.
+- [ ] Phase 10: add full fake-flow, benchmark, planner, failure and historical-revision E2E coverage.
+- [ ] Phase 11: product polish, accessibility/status/error review and bug fixing.
+- [ ] Phase 12: final quality gate, documentation, push and final report; stop before V2.
+
+**Status:** repair in progress; baseline audit complete. Phases 0–2 and the persistence/Planner/Review-context repair checkpoints have evidence in the 2026-08-31 review report; final Product V1 acceptance remains open.

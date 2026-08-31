@@ -7,7 +7,7 @@ import { AssetCatalogService, AssetImportService } from '../../../packages/modul
 import { DirectorService, DirectorProjectReadService } from '../../../packages/modules/director/src/index.js';
 import { DirectorVideoService, VideoProjectReadService, VideoAdjustmentService, StandaloneQuickEditService, VideoService } from '../../../packages/modules/video/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
-import { ReviewService } from '../../../packages/modules/review/src/index.js';
+import { ReviewAnalyticsService, ReviewService } from '../../../packages/modules/review/src/index.js';
 import type { DirectorPlanV0 } from '../../../packages/contracts/src/index.js';
 import { serializeError } from '../../../packages/shared/src/errors.js';
 import { DirectorV1Service } from '../../../packages/modules/director/src/index.js';
@@ -19,9 +19,19 @@ import { registerApprovalRoutes } from './approval-routes.js';
 import { ApprovalService } from '../../../packages/modules/approval/src/index.js';
 import { ProjectCenterService } from './project-center.js';
 import { registerProjectCenterRoutes } from './project-center-routes.js';
+import { registerDashboardRoutes } from './dashboard-routes.js';
 import { registerAssetRoutes } from './asset-routes.js';
 import { registerVideoRoutes } from './video-routes.js';
 import { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
+import { registerReviewAnalyticsRoutes } from './review-analytics-routes.js';
+import { BenchmarkService } from '../../../packages/modules/benchmark/src/index.js';
+import { registerBenchmarkRoutes } from './benchmark-routes.js';
+import { readAIProviderConfig } from '../../../packages/modules/ai/src/index.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { access } from 'node:fs/promises';
+
+const execFileAsync = promisify(execFile);
 
 const projectInput = z.object({ name: z.string().trim().min(1).max(200), metadata: z.record(z.string(), z.unknown()).optional() });
 const directorInput = z.object({ seed: z.number().int(), brief: z.object({ topic: z.string().trim().min(1), audience: z.string().trim().min(1), objective: z.string().trim().min(1), tone: z.string().trim().min(1) }), storyboard: z.array(z.object({ id: z.string().trim().min(1), title: z.string().trim().min(1), narration: z.string().trim().min(1), visualIntent: z.string().trim().min(1), durationMs: z.number().int().positive(), sourceAssetIds: z.array(z.string()) })).min(1), provenance: z.object({ author: z.string().trim().min(1), source: z.enum(['manual', 'ai-draft']), promptVersion: z.string().optional(), modelProfile: z.string().optional() }) });
@@ -47,6 +57,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const directorV1 = new DirectorV1Service(db);
   const directorRead = new DirectorProjectReadService(directorV1, director);
   const jobs = new JobService(db);
+  const benchmark = new BenchmarkService(db, jobs);
   const assets = new AssetCatalogService(db);
   const video = new VideoService(db, storage, jobs, assets);
   const videoFromDirector = new DirectorVideoService(directorV1, video, director);
@@ -54,12 +65,27 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const standaloneQuickEdit = new StandaloneQuickEditService(db, assets, quickEdit, video);
   registerAssetRoutes(app, { projects, imports: new AssetImportService(db), assets, jobs, storage, maxUploadBytes: uploadMaxBytes });
   const publisher = new PublisherService(db);
-  registerProjectCenterRoutes(app, { center: new ProjectCenterService({ projects, director: directorRead, assets, video: new VideoProjectReadService(db), jobs, approvals, publisher }) });
+  const reviewAnalytics = new ReviewAnalyticsService(db, jobs, publisher);
+  registerReviewAnalyticsRoutes(app, { projects, publisher, analytics: reviewAnalytics });
+  registerBenchmarkRoutes(app, { projects, benchmark });
+  const projectCenter = new ProjectCenterService({ projects, director: directorRead, assets, video: new VideoProjectReadService(db), jobs, approvals, publisher });
+  registerProjectCenterRoutes(app, { center: projectCenter });
+  registerDashboardRoutes(app, { projects, center: projectCenter });
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
   registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes });
   registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs, allowFakePublisherControls: runtime.allowFakePublisherControls === true, ...(runtime.allowFakePublisherControls ? { fakeSimulations: new FakePublisherSimulationService(db) } : {}) });
-  registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher });
+  registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher, director: directorV1 });
   app.get('/health', async () => ({ status: 'ok' }));
+  app.get('/api/v1/runtime/status', async () => {
+    let postgres: 'HEALTHY' | 'UNAVAILABLE' = 'HEALTHY';
+    try { await db.query('select 1'); } catch { postgres = 'UNAVAILABLE'; }
+    const publisherEnabled = process.env.PUBLISHER_REAL_ADAPTERS_ENABLED === '1' || process.env.PUBLISHER_REAL_ADAPTERS_ENABLED === 'true';
+    let ffmpeg: 'HEALTHY' | 'UNAVAILABLE' = 'UNAVAILABLE';
+    try { const binary = process.env.FFMPEG_PATH || 'ffmpeg'; const result = await execFileAsync(binary, ['-encoders'], { timeout: 5000 }); ffmpeg = `${result.stdout}\n${result.stderr}`.includes('libx264') ? 'HEALTHY' : 'UNAVAILABLE'; } catch { ffmpeg = 'UNAVAILABLE'; }
+    let assetStorage: 'HEALTHY' | 'UNAVAILABLE' = 'UNAVAILABLE';
+    try { await access(process.env.STORAGE_ROOT || 'storage'); assetStorage = 'HEALTHY'; } catch { assetStorage = 'UNAVAILABLE'; }
+    return { ai: readAIProviderConfig(), publisher: { fakeEnabled: true, realAdaptersEnabled: publisherEnabled }, runtime: { postgres, ffmpeg, assetStorage, videoWorker: 'UNKNOWN', publisherWorker: 'UNKNOWN', reviewWorker: 'UNKNOWN', benchmarkWorker: 'UNKNOWN' } };
+  });
   app.post('/api/v1/projects', async (request, reply) => {
     const parsed = projectInput.safeParse(request.body);
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid project input', details: parsed.error.issues } });
@@ -72,7 +98,16 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
     if (!result) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
     return result;
   });
-  app.get('/api/v1/projects', async () => ({ items: await projects.list() }));
+  app.get('/api/v1/projects', async (request) => {
+    const query = request.query as { q?: string; status?: string; plannedDateFrom?: string; plannedDateTo?: string; account?: string; platform?: string };
+    return { items: await projects.list({ ...(query.q ? { query: query.q } : {}), ...(query.status ? { status: query.status } : {}), ...(query.plannedDateFrom ? { plannedDateFrom: query.plannedDateFrom } : {}), ...(query.plannedDateTo ? { plannedDateTo: query.plannedDateTo } : {}), ...(query.account ? { account: query.account } : {}), ...(query.platform ? { platform: query.platform } : {}) }) };
+  });
+  app.patch('/api/v1/projects/:id', async (request, reply) => {
+    const parsed = z.object({ name: z.string().trim().min(1).max(200).optional(), metadata: z.record(z.string(), z.unknown()).optional(), status: z.string().trim().min(1).max(50).optional() }).strict().safeParse(request.body);
+    if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid project update', details: parsed.error.issues } });
+    try { const input = parsed.data; return await projects.update((request.params as { id: string }).id, { ...(input.name ? { name: input.name } : {}), ...(input.metadata ? { metadata: input.metadata } : {}), ...(input.status ? { status: input.status } : {}) }); } catch (error) { return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: error instanceof Error ? error.message : 'Project not found', details: [] } }); }
+  });
+  app.post('/api/v1/projects/:id/archive', async (request, reply) => { try { return await projects.archive((request.params as { id: string }).id); } catch (error) { return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: error instanceof Error ? error.message : 'Project not found', details: [] } }); } });
   app.post('/api/v1/projects/:id/director-plans', async (request, reply) => {
     const projectId = (request.params as { id: string }).id;
     const parsed = directorInput.safeParse(request.body);

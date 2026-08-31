@@ -176,3 +176,10 @@ Phase 1 studies five repositories for architectural patterns that may inform Con
 
 - Standalone Quick Edit has two Manifest identities: selected Manifest is the current UI inspection target; current Manifest is `session.currentManifestId` and the sole mutable revision.
 - Primary Voice is part of immutable Planner Configuration after the first Manifest; changing it requires a new Standalone session.
+
+## Product V1 Closure Baseline (2026-08-31)
+
+- Latest baseline is `origin/main@9a6886e`, with PR #4 already merged.
+- Existing repository contains the frozen Modular Monolith, PostgreSQL migrations through `0018`, durable Jobs/workers, Director, Video, Approval, Publisher, Review Analytics, Operator UI V1 and standalone Quick Edit.
+- The supplied closure brief expands the product scope beyond the current baseline: Benchmark Library, Content Plan, real text AI provider path, Asset tags/search, Storyboard-driven planner, Dashboard and Settings, plus a unified end-to-end browser journey.
+- Phase 0 audit must distinguish existing support from partial/missing/deferred behavior before implementation. No business code has been changed yet.

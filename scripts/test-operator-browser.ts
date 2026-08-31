@@ -61,7 +61,13 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<v
 
 function spawnPnpm(args: string[], env: NodeJS.ProcessEnv): ChildProcess {
   const invocation = pnpmInvocation(args);
-  return spawn(invocation.command, invocation.args, { cwd: root, env, stdio: 'inherit', windowsHide: true });
+  return spawn(invocation.command, invocation.args, {
+    cwd: root,
+    env,
+    stdio: 'inherit',
+    windowsHide: true,
+    detached: process.platform !== 'win32',
+  });
 }
 
 async function stopOwnedTree(child: ChildProcess): Promise<void> {
@@ -74,7 +80,30 @@ async function stopOwnedTree(child: ChildProcess): Promise<void> {
     });
     return;
   }
-  child.kill('SIGTERM');
+  const processGroupId = -child.pid;
+  await new Promise<void>((resolveStop) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(forceKillTimer);
+      resolveStop();
+    };
+    const forceKillTimer = setTimeout(() => {
+      try {
+        process.kill(processGroupId, 'SIGKILL');
+      } catch {
+        // The process group may already have exited.
+      }
+      finish();
+    }, 3_000);
+    child.once('exit', finish);
+    try {
+      process.kill(processGroupId, 'SIGTERM');
+    } catch {
+      finish();
+    }
+  });
 }
 
 async function main(): Promise<void> {
@@ -93,7 +122,7 @@ async function main(): Promise<void> {
     const database = await createDatabase(databaseUrl);
     try { await migrateUp(database); } finally { await database.end(); }
     await mkdir(storageRoot, { recursive: true });
-    for (const [index, path] of fixtureVideos.entries()) await generateFixtureVideo(path, process.env.FFMPEG_PATH ?? 'ffmpeg', ['0x2057d4', '0x3b82f6', '0x16a34a', '0xea580c'][index]!);
+    for (const [index, path] of fixtureVideos.entries()) await generateFixtureVideo(path, process.env.FFMPEG_PATH ?? 'ffmpeg', ['0x2057d4', '0x3b82f6', '0x16a34a', '0xea580c'][index]!, 6);
     await generateFixtureAudio(fixtureAudio, process.env.FFMPEG_PATH ?? 'ffmpeg');
 
     const apiUrl = `http://127.0.0.1:${apiPort}`;
@@ -111,7 +140,10 @@ async function main(): Promise<void> {
     };
     operator = spawnPnpm(['dev:operator'], environment);
     await waitForHealth(apiUrl);
-    const invocation = pnpmInvocation(['tsx', '--test', '--test-concurrency=1', 'tests/e2e/operator-browser.test.ts']);
+    const testArgs = ['tsx', '--test', '--test-concurrency=1'];
+    if (process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN) testArgs.push('--test-name-pattern', process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN);
+    testArgs.push('tests/e2e/operator-browser.test.ts');
+    const invocation = pnpmInvocation(testArgs);
     await run(invocation.command, invocation.args, {
       ...environment,
       CONTENTOS_OPERATOR_URL: webUrl,

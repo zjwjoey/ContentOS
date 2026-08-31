@@ -3,7 +3,7 @@ import type { DirectorRevision, DirectorService, DirectorV1Service } from '../..
 import { VideoService } from './video-service.js';
 import type { JobRecord } from '../../job/src/index.js';
 
-export interface DirectorVideoOptions { targetDurationMs?: number; voiceAssetId?: string; subtitleText?: string; seed?: number; videoAssetIds?: string[]; }
+export interface DirectorVideoOptions { targetDurationMs?: number; voiceAssetId?: string; subtitleText?: string; seed?: number; videoAssetIds?: string[]; plannerType?: 'RANDOM' | 'STORYBOARD'; }
 
 function renderInputFingerprint(input: { videoAssetIds: string[]; targetDurationMs: number; seed: number; voiceAssetId?: string; subtitleText?: string }): string {
   return createHash('sha256').update(JSON.stringify({
@@ -28,7 +28,7 @@ export class DirectorVideoService {
         const targetDurationMs = options.targetDurationMs || current.storyboard.scenes.reduce((total, scene) => total + Math.round(scene.durationHintSeconds * 1000), 0);
         const seed = options.seed ?? 1;
         const fingerprint = renderInputFingerprint({ videoAssetIds, targetDurationMs, seed, ...(options.voiceAssetId ? { voiceAssetId: options.voiceAssetId } : {}), ...(options.subtitleText ? { subtitleText: options.subtitleText } : {}) });
-        return this.video.createJob({ projectId, videoAssetIds, targetDurationMs, seed, ...(options.voiceAssetId ? { voiceAssetId: options.voiceAssetId } : {}), ...(options.subtitleText ? { subtitleText: options.subtitleText } : {}), idempotencyKey: `video-render:director-v1:${projectId}:${current.storyboard.id}:${fingerprint}`, metadata: { briefId: current.brief.id, scriptRevisionId: current.script.id, storyboardRevisionId: current.storyboard.id } });
+        return this.video.createJob({ projectId, videoAssetIds, targetDurationMs, seed, ...(options.voiceAssetId ? { voiceAssetId: options.voiceAssetId } : {}), ...(options.subtitleText ? { subtitleText: options.subtitleText } : {}), ...(options.plannerType ? { plannerType: options.plannerType } : {}), storyboardScenes: current.storyboard.scenes, idempotencyKey: `video-render:director-v1:${projectId}:${current.storyboard.id}:${fingerprint}:${options.plannerType || 'RANDOM'}`, metadata: { briefId: current.brief.id, scriptRevisionId: current.script.id, storyboardRevisionId: current.storyboard.id } });
       }
       if (this.legacyDirector) return this.createLegacyVideoJob(projectId, options, this.legacyDirector);
       throw new Error('An approved Script and Storyboard pair is required before creating a Video Job');

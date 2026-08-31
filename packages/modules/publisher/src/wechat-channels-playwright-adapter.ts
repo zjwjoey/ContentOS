@@ -42,7 +42,7 @@ export class WeChatChannelsPlaywrightAdapter implements PublisherAdapter {
       const selectors = this.options.selectorProfile;
       if (!(await page.isVisible(selectors.fileInput)) || !(await page.isVisible(selectors.descriptionInput))) return this.platformChanged(page, snapshot);
       await page.setInputFiles(selectors.fileInput, mediaPath);
-      await page.fill(selectors.descriptionInput, [snapshot.title.trim(), snapshot.description.trim()].filter(Boolean).join('\n'));
+      await page.fill(selectors.descriptionInput, [snapshot.title.trim(), snapshot.description.trim(), ...(snapshot.hashtags || []).map((tag) => tag.startsWith('#') ? tag : `#${tag}`)].filter(Boolean).join('\n'));
       if (coverPath) {
         if (!(await page.isVisible(selectors.coverInput))) return this.platformChanged(page, snapshot);
         await page.setInputFiles(selectors.coverInput, coverPath);

@@ -9,6 +9,7 @@ import { JobService } from '../../packages/modules/job/src/index.js';
 import { ProjectService } from '../../packages/modules/project/src/index.js';
 import { AssetCatalogService } from '../../packages/modules/asset/src/index.js';
 import { FakePublisherAdapter, FakePublisherService, FakePublisherSimulationService, PublisherService } from '../../packages/modules/publisher/src/index.js';
+import { LocalStorageProvider } from '../../packages/infrastructure/storage/src/index.js';
 import { createPublisherWorker } from '../../workers/publisher-worker/src/main.js';
 import { createPublisherDevRunner } from '../../workers/publisher-worker/src/dev-main.js';
 
@@ -28,24 +29,27 @@ class FailOnProjectSyncCallService extends ProjectService {
   }
 }
 
-async function fixture(db: Awaited<ReturnType<typeof createDatabase>>, outcome: ConstructorParameters<typeof FakePublisherAdapter>[0] = 'SUCCESS') {
+async function fixture(db: Awaited<ReturnType<typeof createDatabase>>, outcome: ConstructorParameters<typeof FakePublisherAdapter>[0] = 'SUCCESS', withCover = false) {
   await migrateUp(db);
   const project = await new ProjectService(db).create(`Publisher Worker ${randomUUID()}`);
   const assetId = `asset-publisher-worker-${randomUUID()}`;
   const checksum = `sha256:${randomUUID()}`;
   await db.query('insert into assets (id, project_id, kind, checksum, byte_size, storage_key, lifecycle, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8)', [assetId, project.id, 'VIDEO_RENDER', checksum, 100, `renders/${assetId}.mp4`, 'READY', { width: 1080, height: 1920 }]);
+  const coverId = withCover ? `asset-publisher-cover-${randomUUID()}` : null;
+  if (coverId) await db.query('insert into assets (id, project_id, kind, checksum, byte_size, storage_key, lifecycle, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8)', [coverId, project.id, 'VIDEO', `cover-sha-${randomUUID()}`, 50, `objects/${coverId}.mp4`, 'READY', { width: 1080, height: 1920 }]);
   const publisher = new PublisherService(db);
   const projects = new ProjectService(db);
   const assets = new AssetCatalogService(db);
   const account = await publisher.createAccount({ projectId: project.id, platformId: 'fake-platform', displayName: `Fake ${randomUUID()}`, credentialRef: 'fake-credential:worker', profileKey: `profile-${randomUUID()}`, status: 'READY', capabilitySnapshot: { platformId: 'fake-platform', mediaTypes: ['video/mp4'], scheduling: false, requiresHumanConfirmation: false } });
-  const request = await publisher.createRequest({ projectId: project.id, accountId: account.id, idempotencyKey: `publisher-worker-${randomUUID()}`, correlationId: `correlation-${randomUUID()}`, revision: { assetId, assetChecksum: checksum, title: 'Worker 发布', description: '描述', desiredPublishAt: null, createdBy: 'test' } });
+  const request = await publisher.createRequest({ projectId: project.id, accountId: account.id, idempotencyKey: `publisher-worker-${randomUUID()}`, correlationId: `correlation-${randomUUID()}`, revision: { assetId, assetChecksum: checksum, title: 'Worker 发布', description: '描述', ...(coverId ? { coverAssetId: coverId } : {}), desiredPublishAt: null, createdBy: 'test' } });
   await publisher.transitionRequest(request.request.id, 'QUEUED');
   const jobs = new JobService(db);
   const jobId = `job-publish-worker-${randomUUID()}`;
   const payload = await publisher.buildPublishJobPayload(project.id, request.request.id, jobId, null);
   const job = await jobs.create({ id: jobId, type: 'PUBLISH', projectId: project.id, payload, idempotencyKey: `job-publish-worker-${randomUUID()}`, maxAttempts: 3 });
   const root = await mkdtemp(join(tmpdir(), 'contentos-publisher-worker-product-'));
-  return { projectId: project.id, assetId, requestId: request.request.id, job, jobs, publisher, projects, assets, fake: new FakePublisherService(root, new FakePublisherAdapter(outcome)), root };
+  const fakeAdapter = new FakePublisherAdapter(outcome);
+  return { projectId: project.id, assetId, coverId, requestId: request.request.id, job, jobs, publisher, projects, assets, fake: new FakePublisherService(root, fakeAdapter), fakeAdapter, root };
 }
 
 async function cleanup(db: Awaited<ReturnType<typeof createDatabase>>, projectId: string, root: string): Promise<void> {
@@ -72,13 +76,31 @@ test('Publisher Worker durably publishes and records external post', async () =>
     projectId = data.projectId; root = data.root;
     const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, projects: data.projects, assets: data.assets, fakePublisher: data.fake, workerId: 'publisher-worker-test' });
     await worker.start();
-    assert.deepEqual(worker.handlerTypes(), ['PUBLISH', 'PUBLISH_RECONCILE']);
+    assert.deepEqual(worker.handlerTypes(), ['PUBLISH', 'PUBLISH_RECONCILE', 'PUBLISH_VALIDATE_ACCOUNT']);
     const result = await worker.execute('PUBLISH', { jobId: data.job.id });
     assert.equal((result as { state: string }).state, 'SUCCEEDED');
     assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'PUBLISHED');
     assert.equal((await data.projects.get(data.projectId))?.status, 'PUBLISHED');
     const posts = await db.query('select external_post_id from publisher_external_posts where request_id = $1', [data.requestId]);
     assert.equal(posts.rowCount, 1);
+    await worker.shutdown('test');
+  } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
+});
+
+test('Publisher Worker resolves a project-owned READY cover into the immutable publish snapshot', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  let root = '';
+  try {
+    const data = await fixture(db, 'SUCCESS', true);
+    projectId = data.projectId; root = data.root;
+    const storage = new LocalStorageProvider(root);
+    const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, projects: data.projects, assets: data.assets, fakePublisher: data.fake, storage, workerId: 'publisher-worker-cover-snapshot' });
+    await worker.start();
+    const result = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
+    assert.equal(result.state, 'SUCCEEDED');
+    assert.equal(data.fakeAdapter.lastSnapshot?.coverSha256?.startsWith('cover-sha-'), true);
+    assert.equal(data.fakeAdapter.lastSnapshot?.coverPath, storage.objectPath(`objects/${data.coverId}.mp4`));
     await worker.shutdown('test');
   } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
 });

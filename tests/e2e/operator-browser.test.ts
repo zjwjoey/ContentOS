@@ -11,6 +11,12 @@ async function waitForText(page: Page, text: string, timeout = 30_000): Promise<
   await page.getByText(text, { exact: false }).first().waitFor({ state: 'visible', timeout });
 }
 
+async function openOperatorHome(page: Page, url: string): Promise<void> {
+  const projectsLoaded = page.waitForResponse((response) => response.url().includes('/api/v1/projects?') && response.status() === 200);
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  await projectsLoaded;
+}
+
 async function createAndApprovePublish(page: Page, title: string, description: string) {
   await page.getByLabel('标题').fill(title);
   await page.getByLabel('描述').fill(description);
@@ -28,18 +34,18 @@ test('operator browser completes Fake Publisher success, retry, human-action and
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
-    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-    await page.waitForLoadState('networkidle');
+    await openOperatorHome(page, baseUrl);
     await page.getByRole('textbox', { name: /项目名称/ }).fill(`Browser flow ${Date.now()}`);
-    await page.locator('form').evaluate((form) => (form as HTMLFormElement).requestSubmit());
-    await page.getByTestId('project-center').waitFor({ timeout: 10_000 });
+    await page.getByRole('button', { name: '创建并进入项目总控' }).click();
+    try { await page.getByTestId('project-center').waitFor({ timeout: 10_000 }); }
+    catch (error) { throw new Error(`Project Center did not load: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     const projectId = new URL(page.url()).pathname.split('/')[2];
     assert.ok(projectId, 'project navigation must include the created project id');
 
     await page.getByRole('link', { name: /^Assets/ }).click();
-    await page.getByLabel('选择文件').setInputFiles(fixtureVideo);
+    await page.getByLabel('选择文件').setInputFiles(fixtureVideos);
     await waitForText(page, 'source.mp4');
-    try { await page.getByText(/可用 · VIDEO/).waitFor({ state: 'visible', timeout: 30_000 }); }
+    try { await page.getByText(/可用 · VIDEO/).first().waitFor({ state: 'visible', timeout: 30_000 }); }
     catch { throw new Error(`Asset import did not become usable: ${await page.locator('body').innerText()}`); }
 
     await page.getByRole('link', { name: '进入 Director' }).click();
@@ -55,12 +61,19 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('button', { name: '接受 Script' }).waitFor({ state: 'visible', timeout: 30_000 });
     await page.getByRole('button', { name: '接受 Script' }).click();
     await page.getByRole('button', { name: '生成 Storyboard Job' }).click();
-    await page.getByRole('button', { name: '批准 Storyboard' }).waitFor({ state: 'visible', timeout: 30_000 });
+    try { await page.getByRole('button', { name: '批准 Storyboard' }).waitFor({ state: 'visible', timeout: 30_000 }); }
+    catch (error) { throw new Error(`Storyboard generation did not become actionable: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     await page.getByRole('button', { name: '批准 Storyboard' }).click();
     await page.getByRole('link', { name: '进入 Video' }).click();
 
+    const sourceCheckboxes = page.locator('fieldset input[type="checkbox"]');
+    await sourceCheckboxes.nth(1).waitFor({ state: 'attached', timeout: 30_000 });
+    for (let index = 0; index < await sourceCheckboxes.count(); index += 1) await sourceCheckboxes.nth(index).check();
+    await page.getByLabel('视频规划器').selectOption('STORYBOARD');
+    await page.getByLabel('目标时长（毫秒）').fill('8000');
     await page.getByRole('button', { name: '创建渲染 Job' }).click();
-    await page.locator('video').waitFor({ state: 'visible', timeout: 45_000 });
+    try { await page.locator('video').waitFor({ state: 'visible', timeout: 45_000 }); }
+    catch (error) { throw new Error(`Video render did not become playable: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     await page.getByRole('button', { name: '送往 Approval Gate' }).click();
     await page.getByRole('link', { name: 'Approval Gate' }).click();
     await page.getByRole('button', { name: '批准此 Revision' }).click();
@@ -74,10 +87,24 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await success.getByText('ExternalPost', { exact: false }).waitFor({ state: 'visible', timeout: 30_000 });
     assert.equal(await success.getByText('ExternalPost', { exact: false }).count(), 1, 'duplicate queue clicks must not duplicate ExternalPost');
 
-    await page.goto(`${baseUrl}/projects/${projectId}`, { waitUntil: 'networkidle' });
+    await page.goto(`${baseUrl}/projects/${projectId}`, { waitUntil: 'domcontentloaded' });
     await waitForText(page, 'PUBLISHED');
 
-    await page.getByRole('link', { name: /^Publisher/ }).first().click();
+    await page.getByRole('link', { name: /^Review Analytics/ }).click();
+    await page.getByTestId('review-post').first().waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByTestId('collect-metrics').first().click();
+    await page.getByText(/播放 \d+ · 点赞 \d+/, { exact: false }).first().waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByTestId('analyze-review').first().click();
+    await page.getByText('最新复盘').waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByText('HIGH · 强化互动钩子', { exact: false }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByTestId('collect-metrics').first().click();
+    await page.waitForTimeout(500);
+    assert.equal(await page.getByTestId('review-post').first().locator(':scope > p').filter({ hasText: /播放 \d+ · 点赞 \d+/ }).count(), 1, 'idempotent metric collection must keep one latest snapshot view');
+
+    await page
+      .getByRole('link', { name: /^Publisher/ })
+      .first()
+      .click();
     const outcome = page.getByLabel('开发模拟结果');
     await outcome.selectOption('NETWORK');
     await waitForText(page, '开发模拟结果已更新');
@@ -111,6 +138,43 @@ test('operator browser completes Fake Publisher success, retry, human-action and
   }
 });
 
+test('operator browser completes the Benchmark Library flow', async () => {
+  assert.ok(baseUrl, 'test:browser must start an isolated operator');
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await openOperatorHome(page, baseUrl);
+    await page.getByRole('textbox', { name: /项目名称/ }).fill(`Benchmark browser ${Date.now()}`);
+    await page.getByRole('button', { name: '创建并进入项目总控' }).click();
+    try { await page.getByTestId('project-center').waitFor({ timeout: 10_000 }); }
+    catch (error) { throw new Error(`Project Center did not load: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
+    const projectId = new URL(page.url()).pathname.split('/')[2];
+    await page.getByRole('link', { name: /^Benchmark/ }).click();
+    await page.getByLabel('账号名称').fill('对标账号');
+    await page.getByLabel('定位').fill('效率工具');
+    await page.getByLabel('分类').fill('科技');
+    await page.getByLabel('关键词').fill('效率,工具');
+    await page.getByRole('button', { name: '保存账号' }).click();
+    await page.getByText('对标账号', { exact: true }).first().waitFor({ state: 'visible', timeout: 15_000 });
+    const accountSelect = page.locator('form').filter({ hasText: '添加对标内容' }).locator('select').first();
+    await accountSelect.selectOption({ label: '对标账号 · DOUYIN' });
+    assert.notEqual(await accountSelect.inputValue(), '', 'benchmark account must be selected before saving content');
+    await page.getByLabel('标题').fill('可复用的开场结构');
+    await page.getByLabel('文案 / 内容').fill('先给结论，再解释三步方法。');
+    await page.getByRole('button', { name: '保存内容' }).click();
+    try { await page.getByText('对标内容已保存。', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 }); }
+    catch (error) { throw new Error(`Benchmark content save did not succeed: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
+    const content = page.getByRole('listitem').filter({ hasText: '可复用的开场结构' });
+    await content.waitFor({ state: 'visible', timeout: 15_000 });
+    await content.getByRole('button', { name: 'AI 分析' }).click();
+    await content.getByText('分析 Job：SUCCEEDED').waitFor({ state: 'visible', timeout: 30_000 });
+    await content.getByText('最新分析').waitFor({ state: 'visible', timeout: 15_000 });
+    await content.getByRole('button', { name: '作为 Director Reference' }).click();
+    await waitForText(page, '已作为 Director Reference 绑定到项目');
+    assert.ok(projectId, 'benchmark flow remains project scoped');
+  } finally { await browser.close(); }
+});
+
 test('operator browser completes Standalone Quick Edit upload, adjustment and render journeys', async () => {
   assert.ok(baseUrl, 'test:browser must start an isolated operator');
   assert.equal(fixtureVideos.length, 4, 'test:browser must provide four playable upload fixtures');
@@ -118,8 +182,11 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
-    await page.goto(`${baseUrl}/video/quick-edit`, { waitUntil: 'networkidle' });
+    await page.goto(`${baseUrl}/video/quick-edit`, { waitUntil: 'domcontentloaded' });
+    await page.waitForLoadState('networkidle');
+    await page.getByRole('button', { name: '创建草稿会话' }).waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByRole('button', { name: '创建草稿会话' }).click();
+    await page.getByLabel('上传视频 / 配音').waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByLabel('上传视频 / 配音').setInputFiles([...fixtureVideos, fixtureAudio]);
     await page.getByText('source.mp4', { exact: false }).first().waitFor({ state: 'visible', timeout: 30_000 });
     await page.getByText('已就绪', { exact: false }).first().waitFor({ state: 'visible', timeout: 45_000 });
@@ -127,6 +194,8 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
     const durationMode = page.getByRole('combobox', { name: '目标时长' });
     assert.equal(await voice.isDisabled(), false, 'voice must be selectable before planning');
     assert.equal(await durationMode.isDisabled(), false, 'planner settings must be editable before planning');
+    await durationMode.selectOption('CUSTOM');
+    await page.getByLabel('自定义目标时长（秒）').fill('12');
     await voice.selectOption({ label: 'voice.wav' });
     await page.getByText('主配音已选择。').waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByRole('button', { name: 'Generate Plan' }).click();

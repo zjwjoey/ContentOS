@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const pnpmCommand = 'pnpm';
 const databaseUrl = process.env.CONTENTOS_OPERATOR_DATABASE_URL ?? process.env.DATABASE_URL ?? 'postgresql://contentos_dev@127.0.0.1:55433/contentos_operator_dev';
-const commonEnv = {
+const commonEnv: NodeJS.ProcessEnv = {
   ...process.env,
   NODE_ENV: 'development' as const,
   DATABASE_URL: databaseUrl,
@@ -14,6 +14,15 @@ const commonEnv = {
   FFPROBE_PATH: process.env.FFPROBE_PATH ?? 'ffprobe',
   FFMPEG_FONT_FILE: process.env.FFMPEG_FONT_FILE ?? 'C:\\Windows\\Fonts\\msyh.ttc',
 };
+
+// Windows FFmpeg builds may depend on sibling DLLs. Ensure every composed
+// worker can resolve those DLLs when an absolute executable path is configured.
+if (process.platform === 'win32') {
+  const executableDirs = [commonEnv.FFMPEG_PATH, commonEnv.FFPROBE_PATH]
+    .filter((value): value is string => Boolean(value) && value !== 'ffmpeg' && value !== 'ffprobe')
+    .map((value) => dirname(resolve(value)));
+  commonEnv.PATH = [...new Set([...executableDirs, process.env.PATH ?? ''])].join(';');
+}
 
 const children: ChildProcess[] = [];
 let stopping = false;
@@ -48,3 +57,5 @@ launch(['--filter', '@contentos/director-worker', 'dev'], { ...commonEnv, PORT: 
 launch(['--filter', '@contentos/asset-worker', 'dev'], { ...commonEnv, PORT: process.env.ASSET_WORKER_PORT ?? '3012' });
 launch(['--filter', '@contentos/worker-video', 'dev'], { ...commonEnv, PORT: process.env.VIDEO_WORKER_PORT ?? '3015' });
 launch(['--filter', '@contentos/worker-publisher', 'dev'], { ...commonEnv, PORT: process.env.PUBLISHER_WORKER_PORT ?? '3020' });
+launch(['--filter', '@contentos/review-worker', 'dev'], { ...commonEnv, PORT: process.env.REVIEW_WORKER_PORT ?? '3025' });
+launch(['--filter', '@contentos/benchmark-worker', 'dev'], { ...commonEnv, PORT: process.env.BENCHMARK_WORKER_PORT ?? '3026' });

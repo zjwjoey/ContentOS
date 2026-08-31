@@ -3,11 +3,11 @@ import type { Pool } from 'pg';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import type { AssetCatalogService } from '../../asset/src/index.js';
 import { JobService, type JobAttemptScope, type JobRecord } from '../../job/src/index.js';
-import { buildVideoManifest, type PlannerAsset } from './planner.js';
+import { buildStoryboardVideoManifest, buildVideoManifest, type PlannerAsset } from './planner.js';
 import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
 import { digestEditManifest } from './quick-edit.js';
 
-export interface CreateVideoJobInput { projectId: string; videoAssetIds: string[]; voiceAssetId?: string; targetDurationMs: number; seed: number; subtitleText?: string; idempotencyKey?: string; directorRevisionId?: string; directorRevision?: number; directorBrief?: unknown; directorStoryboard?: unknown; metadata?: { briefId?: string; scriptRevisionId?: string; storyboardRevisionId?: string }; }
+export interface CreateVideoJobInput { projectId: string; videoAssetIds: string[]; voiceAssetId?: string; targetDurationMs: number; seed: number; subtitleText?: string; idempotencyKey?: string; directorRevisionId?: string; directorRevision?: number; directorBrief?: unknown; directorStoryboard?: unknown; plannerType?: 'RANDOM' | 'STORYBOARD'; storyboardScenes?: Array<{ sceneIndex: number; voiceoverText: string; durationHintSeconds: number; visualInstruction: string; assetKeywords: string[] }>; metadata?: { briefId?: string; scriptRevisionId?: string; storyboardRevisionId?: string }; }
 export interface VideoJobPayload extends Omit<CreateVideoJobInput, 'projectId'> { projectId?: string; workspaceId?: string; manifestId?: string; manifestRevision?: number; manifestDigest?: string; }
 export interface VideoPlanResult { manifestId: string; renderId: string; manifest: ReturnType<typeof buildVideoManifest>; renderStatus: string; outputAssetId: string | null; }
 
@@ -94,7 +94,11 @@ export class VideoService {
       if (!voice) throw new Error('Voice asset is unavailable');
       voicePath = storage.objectPath(voice.storageKey);
     }
-    const manifest = buildVideoManifest({ ...payload, projectId, assets: plannerAssets, ...(voicePath ? { voicePath } : {}) });
+    let manifest = buildVideoManifest({ ...payload, projectId, assets: plannerAssets, ...(voicePath ? { voicePath } : {}) });
+    if (payload.plannerType === 'STORYBOARD' && payload.storyboardScenes?.length && payload.metadata?.storyboardRevisionId) {
+      const storyboardAssets = result.map((row) => ({ id: row.id, storageKey: row.storageKey, sourcePath: storage.objectPath(row.storageKey), durationMs: Number(row.metadata.durationMs || 2000), originalName: typeof row.metadata.originalName === 'string' ? row.metadata.originalName : row.id, tags: Array.isArray(row.metadata.tags) ? row.metadata.tags.filter((tag): tag is string => typeof tag === 'string') : [], metadata: row.metadata }));
+      manifest = buildStoryboardVideoManifest({ projectId, seed: payload.seed, storyboardRevisionId: payload.metadata.storyboardRevisionId, scenes: payload.storyboardScenes, assets: storyboardAssets, targetDurationMs: payload.targetDurationMs, ...(payload.voiceAssetId ? { voiceAssetId: payload.voiceAssetId } : {}), ...(voicePath ? { voicePath } : {}) }).manifest;
+    }
     const client = await this.db.connect();
     try {
       await client.query('begin');

@@ -1,0 +1,37 @@
+'use client';
+
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
+
+type Snapshot = { id: string; capturedAt: string; metrics: { plays: number; likes: number; comments: number; saves: number; shares: number }; source: string };
+type Report = { id: string; summary: string; recommendations: Array<{ priority: string; title: string; detail: string }> };
+type Item = { post: { id: string; platformId: string; externalPostId: string; externalUrl: string | null }; snapshots: Snapshot[]; reports: Report[] };
+type Job = { jobId?: string; id?: string; state: string; error?: { message?: string } };
+const terminalJobs = new Set(['SUCCEEDED', 'FAILED', 'BLOCKED', 'CANCELLED']);
+
+export default function ReviewAnalyticsPage({ params }: { params: { id: string } }) {
+  const projectId = params.id;
+  const [items, setItems] = useState<Item[]>([]);
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [jobs, setJobs] = useState<Record<string, Job>>({});
+  const [snapshotForm, setSnapshotForm] = useState({ postId: '', plays: 0, likes: 0, comments: 0, saves: 0, shares: 0, sourceReference: 'operator' });
+
+  const refresh = useCallback(async () => {
+    const response = await fetch(`/api/v1/projects/${projectId}/reviews/analytics`);
+    if (response.ok) setItems(((await response.json()) as { items: Item[] }).items);
+  }, [projectId]);
+  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    const active = Object.entries(jobs).filter(([, job]) => !terminalJobs.has(job.state));
+    if (!active.length) return;
+    let disposed = false;
+    const poll = async () => { for (const [postId, job] of active) { const id = job.jobId || job.id; if (!id) continue; const response = await fetch(`/api/v1/jobs/${id}`); if (!response.ok || disposed) continue; const next = await response.json() as Job; setJobs((current) => ({ ...current, [postId]: { ...next, jobId: id } })); if (terminalJobs.has(next.state)) { setMessage(next.state === 'SUCCEEDED' ? 'Review Job 已完成，结果已刷新。' : next.error?.message || `Review Job 状态：${next.state}`); await refresh(); } } };
+    void poll(); const timer = window.setInterval(() => { void poll(); }, 800); return () => { disposed = true; window.clearInterval(timer); };
+  }, [jobs, refresh]);
+
+  const collect = async (postId: string) => { setBusy(true); const response = await fetch(`/api/v1/projects/${projectId}/reviews/analytics/posts/${postId}/collect`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ source: 'FAKE', idempotencyKey: `review-collect-${projectId}-${postId}`, correlationId: `review-${projectId}` }) }); if (response.ok) { const job = await response.json() as Job; setJobs((current) => ({ ...current, [postId]: job })); setMessage('指标采集 Job 已排队。'); } else setMessage('指标采集排队失败。'); setBusy(false); };
+  const analyze = async (item: Item) => { if (!item.snapshots.length) return; setBusy(true); const response = await fetch(`/api/v1/projects/${projectId}/reviews/analytics/posts/${item.post.id}/analyze`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ metricSnapshotIds: item.snapshots.map((snapshot) => snapshot.id), idempotencyKey: `review-analyze-${projectId}-${item.post.id}-${item.snapshots.map((snapshot) => snapshot.id).join('-')}`, correlationId: `review-${projectId}` }) }); if (response.ok) { const job = await response.json() as Job; setJobs((current) => ({ ...current, [item.post.id]: job })); setMessage('AI 复盘 Job 已排队。'); } else setMessage('AI 复盘排队失败。'); setBusy(false); };
+  const addSnapshot = async (event: FormEvent) => { event.preventDefault(); if (!snapshotForm.postId) return; setBusy(true); const response = await fetch(`/api/v1/projects/${projectId}/reviews/analytics/posts/${snapshotForm.postId}/snapshots`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ capturedAt: new Date().toISOString(), metrics: { plays: Number(snapshotForm.plays), likes: Number(snapshotForm.likes), comments: Number(snapshotForm.comments), saves: Number(snapshotForm.saves), shares: Number(snapshotForm.shares) }, sourceReference: snapshotForm.sourceReference }) }); setMessage(response.ok ? '指标快照已追加保存。' : '指标快照保存失败。'); if (response.ok) await refresh(); setBusy(false); };
+
+  return <main className="shell"><header><p className="eyebrow">Project / {projectId}</p><h1>Review Analytics</h1><p className="muted">这里只处理已确认发布内容的 Fake/Import 指标快照与 AI 复盘，不改变 Approval Gate 或发布状态。</p></header>{message && <p className="feedback">{message}</p>}{items.length === 0 ? <section className="card"><h2>暂无已确认外部内容</h2><p className="muted">请先在 Publisher 完成 Fake Platform 发布闭环。</p></section> : <><form className="card" onSubmit={addSnapshot}><div className="section-title"><h2>手动追加指标快照</h2><span>append-only</span></div><label>外部内容<select required value={snapshotForm.postId} onChange={(event) => setSnapshotForm({ ...snapshotForm, postId: event.target.value })}><option value="">请选择</option>{items.map((item) => <option key={item.post.id} value={item.post.id}>{item.post.platformId} · {item.post.externalPostId}</option>)}</select></label><div className="grid">{(['plays', 'likes', 'comments', 'saves', 'shares'] as const).map((key) => <label key={key}>{key}<input type="number" min="0" value={snapshotForm[key]} onChange={(event) => setSnapshotForm({ ...snapshotForm, [key]: Number(event.target.value) })} /></label>)}</div><button disabled={busy}>追加快照</button></form><div>{items.map((item) => { const latest = item.snapshots[0]; const previous = item.snapshots[1]; const report = item.reports[0]; const trend = latest && previous ? latest.metrics.plays - previous.metrics.plays : null; const job = jobs[item.post.id]; return <section className="card" key={item.post.id} data-testid="review-post"><div className="section-title"><h2>{item.post.platformId} · {item.post.externalPostId}</h2><span>{item.snapshots.length} 个快照 · {item.reports.length} 个复盘</span></div>{latest ? <><p>播放 {latest.metrics.plays} · 点赞 {latest.metrics.likes} · 评论 {latest.metrics.comments} · 收藏 {latest.metrics.saves} · 分享 {latest.metrics.shares}</p><small className="muted">采集于 {new Date(latest.capturedAt).toLocaleString()} · {latest.source}{trend === null ? '' : ` · 播放变化 ${trend >= 0 ? '+' : ''}${trend}`}</small></> : <p className="muted">尚未采集指标。</p>}{job && <p className="status">任务状态：{job.state}{job.error?.message ? ` · ${job.error.message}` : ''}</p>}<div className="module-nav"><button data-testid="collect-metrics" disabled={busy} onClick={() => void collect(item.post.id)}>采集指标</button><button data-testid="analyze-review" disabled={busy || !item.snapshots.length} onClick={() => void analyze(item)}>生成 AI 复盘</button></div><details><summary>查看全部快照历史（{item.snapshots.length}）</summary>{item.snapshots.map((snapshot) => <p key={snapshot.id}>{new Date(snapshot.capturedAt).toLocaleString()} · 播放 {snapshot.metrics.plays} · 点赞 {snapshot.metrics.likes} · 来源 {snapshot.source}</p>)}</details>{report && <div className="card"><h3>最新复盘</h3><p>{report.summary}</p>{report.recommendations.map((recommendation) => <p key={recommendation.title}><strong>{recommendation.priority} · {recommendation.title}</strong>：{recommendation.detail}</p>)}<details><summary>查看全部复盘历史（{item.reports.length}）</summary>{item.reports.map((history) => <p key={history.id}>{history.id.slice(-8)} · {history.summary}</p>)}</details></div>}</section>; })}</div></>}</main>;
+}

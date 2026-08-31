@@ -32,6 +32,8 @@ const requestInput = z.object({
     assetChecksum: z.string().trim().min(1).max(200),
     title: z.string().trim().min(1).max(200),
     description: z.string().max(5000),
+    hashtags: z.array(z.string().trim().min(1).max(100)).max(32).optional(),
+    coverAssetId: z.string().trim().min(1).optional(),
     desiredPublishAt: z.string().datetime().nullable(),
     createdBy: z.string().trim().min(1).max(200),
   }),
@@ -42,6 +44,8 @@ const handoffInput = z.object({
   assetId: z.string().trim().min(1),
   title: z.string().trim().min(1).max(200),
   description: z.string().max(5000),
+  hashtags: z.array(z.string().trim().min(1).max(100)).max(32).optional(),
+  coverAssetId: z.string().trim().min(1).optional(),
   desiredPublishAt: z.string().datetime().nullable(),
   createdBy: z.string().trim().min(1).max(200),
   idempotencyKey: z.string().trim().min(1).max(200),
@@ -108,6 +112,25 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     return publisher.getProjectSummary(projectId);
   });
 
+  app.get('/api/v1/projects/:projectId/publisher/preflight', async (request, reply) => {
+    const projectId = projectIdOf(request);
+    if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    const accounts = await publisher.listAccounts(projectId);
+    const realAdaptersEnabled = process.env.PUBLISHER_REAL_ADAPTERS_ENABLED === '1' || process.env.PUBLISHER_REAL_ADAPTERS_ENABLED === 'true';
+    const accountChecks = accounts.map((account) => ({ id: account.id, platformId: account.platformId, displayName: account.displayName, status: account.status, ready: account.status === 'READY', credentialReferenceConfigured: Boolean(account.credentialRef), sessionValidation: account.platformId === 'fake-platform' ? 'VALIDATED' : 'REQUIRED', requiresHumanAction: account.status === 'REAUTH_REQUIRED' || account.status === 'SUSPENDED' }));
+    return { realAdaptersEnabled, publishMode: realAdaptersEnabled ? 'REAL_OR_FAKE_BY_ACCOUNT' : 'FAKE_ONLY', accounts: accountChecks, checks: { adapterRuntime: realAdaptersEnabled ? 'ENABLED_NOT_VALIDATED' : 'DISABLED', credentials: accountChecks.length > 0 && accountChecks.every((account) => account.credentialReferenceConfigured), accountReady: accountChecks.length > 0 && accountChecks.every((account) => account.ready && account.sessionValidation === 'VALIDATED'), humanActionRequired: accountChecks.some((account) => account.requiresHumanAction) } };
+  });
+
+  app.post('/api/v1/projects/:projectId/publisher/accounts/:accountId/validate', async (request, reply) => {
+    const projectId = projectIdOf(request); const accountId = (request.params as { accountId: string }).accountId;
+    if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    const account = await publisher.getAccount(projectId, accountId);
+    if (!account) return reply.code(404).send({ error: { code: 'PUBLISH_ACCOUNT_NOT_FOUND', message: 'Publisher account is not available', details: [] } });
+    const idempotencyKey = `publisher:validate:${projectId}:${accountId}`;
+    const job = await jobs.createIdempotent({ id: `job-publisher-validate-${accountId}`, type: 'PUBLISH_VALIDATE_ACCOUNT', projectId, payload: { schemaVersion: 'PUBLISH_VALIDATE_ACCOUNT_JOB_V1', projectId, accountId }, idempotencyKey, maxAttempts: 2 });
+    return reply.code(202).send({ jobId: job.id, state: job.state, accountId, projectId });
+  });
+
   app.get('/api/v1/projects/:projectId/publisher/requests', async (request, reply) => {
     const projectId = projectIdOf(request);
     if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
@@ -141,8 +164,10 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Publisher request input', details: parsed.error.issues } });
     const asset = await assets.getPublishableAsset(projectId, parsed.data.revision.assetId);
     if (!asset || asset.checksum !== parsed.data.revision.assetChecksum) return reply.code(422).send({ error: { code: 'PUBLISHER_ASSET_INVALID', message: 'A READY VIDEO_RENDER Asset owned by this project and matching the checksum is required', details: [] } });
+    if (parsed.data.revision.coverAssetId) { const cover = await assets.getProjectAsset(projectId, parsed.data.revision.coverAssetId); if (!cover || cover.lifecycle !== 'READY') return reply.code(422).send({ error: { code: 'PUBLISHER_COVER_ASSET_INVALID', message: '封面 Asset 必须属于当前项目且处于 READY 状态', details: [] } }); }
     try {
-      const result = await publisher.createRequest({ projectId, ...parsed.data });
+      const revision = parsed.data.revision;
+      const result = await publisher.createRequest({ projectId, accountId: parsed.data.accountId, idempotencyKey: parsed.data.idempotencyKey, correlationId: parsed.data.correlationId, revision: { assetId: revision.assetId, assetChecksum: revision.assetChecksum, title: revision.title, description: revision.description, hashtags: revision.hashtags || [], ...(revision.coverAssetId ? { coverAssetId: revision.coverAssetId } : {}), desiredPublishAt: revision.desiredPublishAt, createdBy: revision.createdBy } });
       await refreshProjectPublishingStatus(projectId, projects, publisher, assets);
       return reply.code(201).send(result);
     }
@@ -156,6 +181,7 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid project Publisher handoff input', details: parsed.error.issues } });
     const asset = await assets.getPublishableAsset(projectId, parsed.data.assetId);
     if (!asset) return reply.code(422).send({ error: { code: 'PUBLISHER_ASSET_INVALID', message: 'A READY VIDEO_RENDER Asset owned by this project is required', details: [] } });
+    if (parsed.data.coverAssetId) { const cover = await assets.getProjectAsset(projectId, parsed.data.coverAssetId); if (!cover || cover.lifecycle !== 'READY') return reply.code(422).send({ error: { code: 'PUBLISHER_COVER_ASSET_INVALID', message: '封面 Asset 必须属于当前项目且处于 READY 状态', details: [] } }); }
     const accounts = await Promise.all(parsed.data.accountIds.map((accountId) => publisher.getAccount(projectId, accountId)));
     if (accounts.some((account) => !account)) return reply.code(422).send({ error: { code: 'PUBLISHER_ACCOUNT_INVALID', message: 'Every Publisher account must belong to this project', details: [] } });
     try {
@@ -166,7 +192,7 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
           accountId,
           idempotencyKey: `publisher:handoff:${parsed.data.idempotencyKey}:${accountId}`,
           correlationId: parsed.data.correlationId,
-          revision: { assetId: asset.id, assetChecksum: asset.checksum, title: parsed.data.title, description: parsed.data.description, desiredPublishAt: parsed.data.desiredPublishAt, createdBy: parsed.data.createdBy },
+          revision: { assetId: asset.id, assetChecksum: asset.checksum, title: parsed.data.title, description: parsed.data.description, ...(parsed.data.hashtags ? { hashtags: parsed.data.hashtags } : {}), ...(parsed.data.coverAssetId ? { coverAssetId: parsed.data.coverAssetId } : {}), desiredPublishAt: parsed.data.desiredPublishAt, createdBy: parsed.data.createdBy },
         });
         // A handoff is the entry point to the Publish Approval Gate.  Keep the
         // gate tied to the immutable revision and do not overwrite an existing

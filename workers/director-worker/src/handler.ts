@@ -3,8 +3,9 @@ import { AIService } from '../../../packages/modules/ai/src/ai-service.js';
 import { DirectorV1Service } from '../../../packages/modules/director/src/director-v1-service.js';
 import { DIRECTOR_GENERATE_SCRIPT, DIRECTOR_GENERATE_STORYBOARD, type DirectorJobPayload, type DirectorJobType } from '../../../packages/modules/director/src/director-job-service.js';
 import type { ModelProfile } from '../../../packages/contracts/src/index.js';
+import type { BenchmarkService } from '../../../packages/modules/benchmark/src/index.js';
 
-export interface DirectorWorkerDependencies { jobs: JobService; director: DirectorV1Service; ai: AIService; modelProfile: ModelProfile; }
+export interface DirectorWorkerDependencies { jobs: JobService; director: DirectorV1Service; ai: AIService; modelProfile: ModelProfile; benchmark?: BenchmarkService; }
 export interface DirectorWorkerInvocation { jobId: string; }
 
 function payloadOf(job: JobRecord): DirectorJobPayload {
@@ -26,14 +27,15 @@ async function process(job: JobRecord, attemptId: string, type: DirectorJobType,
   if (job.type !== type) throw new Error(`Unexpected Director Job type: ${job.type}`);
   const payload = payloadOf(job); if (payload.projectId !== job.projectId) throw new Error('Director Job project mismatch');
   const brief = await deps.director.getBrief('briefId' in payload ? payload.briefId : (await deps.director.getCurrentPair(payload.projectId)).brief?.id ?? '', payload.projectId); if (!brief) throw new Error('Director Job Brief not found');
-  const variables = { topic: brief.topic, coreThesis: brief.coreThesis };
   if (type === DIRECTOR_GENERATE_SCRIPT) {
     if (!('scriptAggregateId' in payload)) throw new Error('Script Job requires scriptAggregateId');
-    const result = await deps.ai.generateStructured({ projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, operation: DIRECTOR_GENERATE_SCRIPT, promptKey: 'director.script.v1', variables }, scriptOutput);
+    const analyses = deps.benchmark ? await deps.benchmark.listReferenceAnalyses(payload.projectId) : [];
+    const result = await deps.ai.generateStructured({ projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, operation: DIRECTOR_GENERATE_SCRIPT, promptKey: 'director.script.v2', variables: { brief: JSON.stringify({ ...brief, benchmarkReferences: analyses.map((analysis) => ({ analysisId: analysis.id, lessons: analysis.lessons, doNotCopy: analysis.doNotCopy })) }) } }, scriptOutput);
     const revision = await deps.director.createScriptRevision(payload.projectId, payload.scriptAggregateId, { ...scriptOutput(result.output), aiRunId: result.aiRunId, promptVersionId: result.promptVersionId, sourceJobId: job.id }); return { scriptRevisionId: revision.id, aiRunId: result.aiRunId };
   }
   if (!('scriptRevisionId' in payload)) throw new Error('Storyboard Job requires scriptRevisionId');
-  const result = await deps.ai.generateStructured({ projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, operation: DIRECTOR_GENERATE_STORYBOARD, promptKey: 'director.storyboard.v1', variables }, storyboardOutput);
+  const script = await deps.director.getScriptRevision(payload.scriptRevisionId, payload.projectId); if (!script) throw new Error('Storyboard source Script not found for project');
+  const result = await deps.ai.generateStructured({ projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, operation: DIRECTOR_GENERATE_STORYBOARD, promptKey: 'director.storyboard.v2', variables: { brief: JSON.stringify(brief), script: JSON.stringify(script) } }, storyboardOutput);
   const parsed = storyboardOutput(result.output); const revision = await deps.director.createStoryboardRevision(payload.projectId, payload.storyboardAggregateId, { ...parsed, scriptRevisionId: payload.scriptRevisionId, aiRunId: result.aiRunId, promptVersionId: result.promptVersionId, sourceJobId: job.id }); return { storyboardRevisionId: revision.id, aiRunId: result.aiRunId };
 }
 
