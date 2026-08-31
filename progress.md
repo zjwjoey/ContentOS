@@ -437,6 +437,7 @@
 - Fixed `dev:operator` composition: Review Worker now uses `src/dev-main.ts`; Benchmark Worker now exposes a matching `dev` script (`57ee5de`).
 - Static checks after the fix: format, typecheck and diff-check passed.
 - Isolated browser gate was rerun from a clean PostgreSQL cluster. The operator now starts all seven processes, but the three browser journeys still fail before project-center assertions; the runner then tears down the shared database, producing secondary `57P01` errors. Product V1 remains **not accepted** pending diagnosis of the project-create/project-center browser failure.
+- Browser submission race was corrected by waiting for the initial projects response and clicking the real submit button. The next run reached Project Center and Asset Import; Asset Worker then reported `spawn ... ffprobe.exe ENOENT`, so the remaining browser blocker is now the FFprobe executable handoff in the isolated operator process rather than project creation.
 ## Operator UI V1 Final Merge Repair
 
 - Separated selected Manifest from the mutable current Manifest; the picker now reflects the inspected revision.

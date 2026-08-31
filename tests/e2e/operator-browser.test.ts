@@ -11,6 +11,12 @@ async function waitForText(page: Page, text: string, timeout = 30_000): Promise<
   await page.getByText(text, { exact: false }).first().waitFor({ state: 'visible', timeout });
 }
 
+async function openOperatorHome(page: Page, url: string): Promise<void> {
+  const projectsLoaded = page.waitForResponse((response) => response.url().includes('/api/v1/projects?') && response.status() === 200);
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  await projectsLoaded;
+}
+
 async function createAndApprovePublish(page: Page, title: string, description: string) {
   await page.getByLabel('标题').fill(title);
   await page.getByLabel('描述').fill(description);
@@ -28,10 +34,11 @@ test('operator browser completes Fake Publisher success, retry, human-action and
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
-    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+    await openOperatorHome(page, baseUrl);
     await page.getByRole('textbox', { name: /项目名称/ }).fill(`Browser flow ${Date.now()}`);
-    await page.locator('form').evaluate((form) => (form as HTMLFormElement).requestSubmit());
-    await page.getByTestId('project-center').waitFor({ timeout: 10_000 });
+    await page.getByRole('button', { name: '创建并进入项目总控' }).click();
+    try { await page.getByTestId('project-center').waitFor({ timeout: 10_000 }); }
+    catch (error) { throw new Error(`Project Center did not load: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     const projectId = new URL(page.url()).pathname.split('/')[2];
     assert.ok(projectId, 'project navigation must include the created project id');
 
@@ -130,10 +137,11 @@ test('operator browser completes the Benchmark Library flow', async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
-    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+    await openOperatorHome(page, baseUrl);
     await page.getByRole('textbox', { name: /项目名称/ }).fill(`Benchmark browser ${Date.now()}`);
-    await page.locator('form').evaluate((form) => (form as HTMLFormElement).requestSubmit());
-    await page.getByTestId('project-center').waitFor({ timeout: 10_000 });
+    await page.getByRole('button', { name: '创建并进入项目总控' }).click();
+    try { await page.getByTestId('project-center').waitFor({ timeout: 10_000 }); }
+    catch (error) { throw new Error(`Project Center did not load: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     const projectId = new URL(page.url()).pathname.split('/')[2];
     await page.getByRole('link', { name: 'Benchmark', exact: true }).click();
     await page.getByLabel('账号名称').fill('对标账号');
