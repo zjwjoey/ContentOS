@@ -38,8 +38,8 @@ export function createReviewJobHandler(deps: ReviewWorkerDependencies): (job: Jo
         return candidate;
       });
       signal.throwIfAborted();
-      const result = await deps.jobs.succeedWithCurrentAttempt(job.id, attemptId, async () => {
-        const report = await deps.analytics.recordAnalysisReport({ schemaVersion: 'REVIEW_ANALYSIS_REPORT_V1', id: `review-report-${randomUUID()}`, projectId: String(payload.projectId), externalPostId: String(payload.externalPostId), metricSnapshotIds: snapshotIds, summary: String((aiResult.output as Record<string, unknown>).summary), highlights: (aiResult.output as Record<string, unknown>).highlights as never, risks: (aiResult.output as Record<string, unknown>).risks as never, recommendations: (aiResult.output as Record<string, unknown>).recommendations as never, aiRunId: aiResult.aiRunId, createdAt: new Date().toISOString() });
+      const result = await deps.jobs.succeedWithCurrentAttempt(job.id, attemptId, async (scope) => {
+        const report = await deps.analytics.recordAnalysisReport({ schemaVersion: 'REVIEW_ANALYSIS_REPORT_V1', id: `review-report-${randomUUID()}`, projectId: String(payload.projectId), externalPostId: String(payload.externalPostId), metricSnapshotIds: snapshotIds, summary: String((aiResult.output as Record<string, unknown>).summary), highlights: (aiResult.output as Record<string, unknown>).highlights as never, risks: (aiResult.output as Record<string, unknown>).risks as never, recommendations: (aiResult.output as Record<string, unknown>).recommendations as never, aiRunId: aiResult.aiRunId, createdAt: new Date().toISOString() }, scope);
         return { reportId: report.id, externalPostId: report.externalPostId, status: 'RECORDED' };
       });
       return result.executed ? result.value : { status: 'STALE_ATTEMPT' };
@@ -50,7 +50,7 @@ export function createReviewJobHandler(deps: ReviewWorkerDependencies): (job: Jo
     signal.throwIfAborted();
     const collected = await deps.metricsSource.collect(post);
     signal.throwIfAborted();
-    const result = await deps.jobs.succeedWithCurrentAttempt(job.id, attemptId, async () => {
+    const result = await deps.jobs.succeedWithCurrentAttempt(job.id, attemptId, async (scope) => {
       const snapshot = await deps.analytics.recordMetricSnapshot({
         projectId: post ? String(payload.projectId) : '',
         externalPostId: String(payload.externalPostId),
@@ -60,7 +60,7 @@ export function createReviewJobHandler(deps: ReviewWorkerDependencies): (job: Jo
         metrics: collected.metrics,
         source: String(payload.source) as 'FAKE' | 'IMPORT',
         sourceReference: collected.sourceReference,
-      });
+      }, scope);
       return { snapshotId: snapshot.id, externalPostId: snapshot.externalPostId, status: 'RECORDED' };
     });
     return result.executed ? result.value : { status: 'STALE_ATTEMPT' };

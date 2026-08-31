@@ -7,7 +7,7 @@ import {
   type ReviewAnalysisReportV1,
 } from '../../../contracts/src/index.js';
 import { ReviewJobService, type PublisherExternalPostReader } from './review-job-service.js';
-import type { JobRecord, JobService } from '../../job/src/index.js';
+import type { JobAttemptScope, JobRecord, JobService } from '../../job/src/index.js';
 
 function iso(value: unknown): string { return new Date(String(value)).toISOString(); }
 function nullableIso(value: unknown): string | null { return value ? iso(value) : null; }
@@ -64,7 +64,7 @@ export class ReviewAnalyticsService {
     return this.jobs.createAnalysisJob(input);
   }
 
-  async recordMetricSnapshot(input: RecordMetricSnapshotInput): Promise<MetricSnapshotV1> {
+  async recordMetricSnapshot(input: RecordMetricSnapshotInput, scope?: JobAttemptScope): Promise<MetricSnapshotV1> {
     const snapshot: MetricSnapshotV1 = {
       schemaVersion: 'METRIC_SNAPSHOT_V1',
       id: input.id || `review-snapshot-${randomUUID()}`,
@@ -79,12 +79,13 @@ export class ReviewAnalyticsService {
       createdAt: input.createdAt || new Date().toISOString(),
     };
     validateMetricSnapshotV1(snapshot);
-    const result = await this.db.query(
+    const query = scope ? scope.query.bind(scope) : this.db.query.bind(this.db);
+    const result = await query(
       'insert into review_metric_snapshots (id, project_id, external_post_id, platform_id, captured_at, published_at, metrics, source, source_reference, schema_version, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict (external_post_id, source, captured_at) do nothing returning *',
       [snapshot.id, snapshot.projectId, snapshot.externalPostId, snapshot.platformId, snapshot.capturedAt, snapshot.publishedAt, snapshot.metrics, snapshot.source, snapshot.sourceReference, snapshot.schemaVersion, snapshot.createdAt],
     );
     if (result.rows[0]) return mapSnapshot(result.rows[0] as Record<string, unknown>);
-    const existing = await this.db.query('select * from review_metric_snapshots where external_post_id = $1 and source = $2 and captured_at = $3', [snapshot.externalPostId, snapshot.source, snapshot.capturedAt]);
+    const existing = await query('select * from review_metric_snapshots where external_post_id = $1 and source = $2 and captured_at = $3', [snapshot.externalPostId, snapshot.source, snapshot.capturedAt]);
     return mapSnapshot(existing.rows[0] as Record<string, unknown>);
   }
 
@@ -99,9 +100,10 @@ export class ReviewAnalyticsService {
     return result.rows.map((row) => mapSnapshot(row as Record<string, unknown>));
   }
 
-  async recordAnalysisReport(report: ReviewAnalysisReportV1): Promise<ReviewAnalysisReportV1> {
+  async recordAnalysisReport(report: ReviewAnalysisReportV1, scope?: JobAttemptScope): Promise<ReviewAnalysisReportV1> {
     validateReviewAnalysisReportV1(report);
-    const result = await this.db.query(
+    const query = scope ? scope.query.bind(scope) : this.db.query.bind(this.db);
+    const result = await query(
       'insert into review_analysis_reports (id, project_id, external_post_id, metric_snapshot_ids, schema_version, summary, highlights, risks, recommendations, ai_run_id, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning *',
       [report.id, report.projectId, report.externalPostId, report.metricSnapshotIds, report.schemaVersion, report.summary, JSON.stringify(report.highlights), JSON.stringify(report.risks), JSON.stringify(report.recommendations), report.aiRunId, report.createdAt],
     );

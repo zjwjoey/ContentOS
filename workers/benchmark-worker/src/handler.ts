@@ -32,8 +32,7 @@ export function createBenchmarkJobHandler(deps: BenchmarkWorkerDependencies): (j
     const data = analysisOutput(result.output);
     const candidate = { schemaVersion: 'BENCHMARK_ANALYSIS_V1' as const, id: `validation-${randomUUID()}`, projectId: payload.projectId, benchmarkContentId: payload.benchmarkContentId, ...data, aiRunId: result.aiRunId, createdAt: new Date().toISOString() };
     validateBenchmarkAnalysisV1(candidate);
-    const committed = await deps.jobs.succeedWithCurrentAttempt(job.id, attemptId, async () => { const report = await deps.benchmark.recordAnalysis({ ...data, id: `benchmark-analysis-${randomUUID()}`, projectId: payload.projectId, benchmarkContentId: payload.benchmarkContentId, aiRunId: result.aiRunId, createdAt: new Date().toISOString() }); return { analysisId: report.id, benchmarkContentId: report.benchmarkContentId, status: 'RECORDED' }; });
+    const committed = await deps.jobs.succeedWithCurrentAttempt(job.id, attemptId, async (scope) => { const report = await deps.benchmark.recordAnalysis({ ...data, id: `benchmark-analysis-${randomUUID()}`, projectId: payload.projectId, benchmarkContentId: payload.benchmarkContentId, aiRunId: result.aiRunId, createdAt: new Date().toISOString() }, scope); return { analysisId: report.id, benchmarkContentId: report.benchmarkContentId, status: 'RECORDED' }; });
     return committed.executed ? committed.value : { status: 'STALE_ATTEMPT' };
   };
 }
-
