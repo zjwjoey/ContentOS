@@ -45,7 +45,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('link', { name: /^Assets/ }).click();
     await page.getByLabel('选择文件').setInputFiles(fixtureVideos);
     await waitForText(page, 'source.mp4');
-    try { await page.getByText(/可用 · VIDEO/).waitFor({ state: 'visible', timeout: 30_000 }); }
+    try { await page.getByText(/可用 · VIDEO/).first().waitFor({ state: 'visible', timeout: 30_000 }); }
     catch { throw new Error(`Asset import did not become usable: ${await page.locator('body').innerText()}`); }
 
     await page.getByRole('link', { name: '进入 Director' }).click();
