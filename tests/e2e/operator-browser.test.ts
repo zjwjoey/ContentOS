@@ -150,7 +150,7 @@ test('operator browser completes the Benchmark Library flow', async () => {
     try { await page.getByTestId('project-center').waitFor({ timeout: 10_000 }); }
     catch (error) { throw new Error(`Project Center did not load: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     const projectId = new URL(page.url()).pathname.split('/')[2];
-    await page.getByRole('link', { name: 'Benchmark', exact: true }).click();
+    await page.getByRole('link', { name: /^Benchmark/ }).click();
     await page.getByLabel('账号名称').fill('对标账号');
     await page.getByLabel('定位').fill('效率工具');
     await page.getByLabel('分类').fill('科技');
@@ -180,6 +180,7 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
   try {
     await page.goto(`${baseUrl}/video/quick-edit`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: '创建草稿会话' }).click();
+    await page.getByLabel('上传视频 / 配音').waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByLabel('上传视频 / 配音').setInputFiles([...fixtureVideos, fixtureAudio]);
     await page.getByText('source.mp4', { exact: false }).first().waitFor({ state: 'visible', timeout: 30_000 });
     await page.getByText('已就绪', { exact: false }).first().waitFor({ state: 'visible', timeout: 45_000 });
