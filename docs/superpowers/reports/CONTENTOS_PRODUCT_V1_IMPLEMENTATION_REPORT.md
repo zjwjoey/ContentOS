@@ -44,6 +44,6 @@ Follow `docs/product/CONTENTOS_PRODUCT_V1_USER_FLOW.md` from project creation th
 
 ## Final acceptance state
 
-- Final SHA: recorded after the final closure commit.
+- Final SHA: `de5b772` (plus the preceding closure commit `955f3fe`).
 - Branch is intentionally not merged to `main`; push and merge remain an explicit release decision.
 - Status: `PASS WITH EXTERNAL GATES` until PostgreSQL/FFmpeg/Playwright and real platform credentials are available for browser and live-adapter acceptance.
