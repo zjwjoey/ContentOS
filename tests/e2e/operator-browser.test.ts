@@ -43,7 +43,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     assert.ok(projectId, 'project navigation must include the created project id');
 
     await page.getByRole('link', { name: /^Assets/ }).click();
-    await page.getByLabel('选择文件').setInputFiles(fixtureVideo);
+    await page.getByLabel('选择文件').setInputFiles(fixtureVideos);
     await waitForText(page, 'source.mp4');
     try { await page.getByText(/可用 · VIDEO/).waitFor({ state: 'visible', timeout: 30_000 }); }
     catch { throw new Error(`Asset import did not become usable: ${await page.locator('body').innerText()}`); }
@@ -68,7 +68,8 @@ test('operator browser completes Fake Publisher success, retry, human-action and
 
     await page.getByLabel('视频规划器').selectOption('STORYBOARD');
     await page.getByRole('button', { name: '创建渲染 Job' }).click();
-    await page.locator('video').waitFor({ state: 'visible', timeout: 45_000 });
+    try { await page.locator('video').waitFor({ state: 'visible', timeout: 45_000 }); }
+    catch (error) { throw new Error(`Video render did not become playable: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     await page.getByRole('button', { name: '送往 Approval Gate' }).click();
     await page.getByRole('link', { name: 'Approval Gate' }).click();
     await page.getByRole('button', { name: '批准此 Revision' }).click();
