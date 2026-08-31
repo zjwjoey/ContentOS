@@ -30,9 +30,9 @@ function escapeFilterText(text: string): string {
   return text.replaceAll('\\', '\\\\').replaceAll(':', '\\:').replaceAll("'", "\\'").replaceAll(',', '\\,').replaceAll('\n', ' ');
 }
 
-export async function generateFixtureVideo(path: string, ffmpegPath: string, color?: string): Promise<void> {
+export async function generateFixtureVideo(path: string, ffmpegPath: string, color?: string, durationSeconds = 2): Promise<void> {
   const input = color ? `color=c=${color}:size=640x360:rate=30` : 'testsrc=size=640x360:rate=30';
-  await run(ffmpegPath, ['-y', '-f', 'lavfi', '-i', input, '-t', '2', '-pix_fmt', 'yuv420p', '-an', path]);
+  await run(ffmpegPath, ['-y', '-f', 'lavfi', '-i', input, '-t', String(durationSeconds), '-pix_fmt', 'yuv420p', '-an', path]);
 }
 
 export async function generateFixtureAudio(path: string, ffmpegPath: string): Promise<void> {

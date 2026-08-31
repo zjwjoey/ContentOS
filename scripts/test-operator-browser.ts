@@ -122,7 +122,7 @@ async function main(): Promise<void> {
     const database = await createDatabase(databaseUrl);
     try { await migrateUp(database); } finally { await database.end(); }
     await mkdir(storageRoot, { recursive: true });
-    for (const [index, path] of fixtureVideos.entries()) await generateFixtureVideo(path, process.env.FFMPEG_PATH ?? 'ffmpeg', ['0x2057d4', '0x3b82f6', '0x16a34a', '0xea580c'][index]!);
+    for (const [index, path] of fixtureVideos.entries()) await generateFixtureVideo(path, process.env.FFMPEG_PATH ?? 'ffmpeg', ['0x2057d4', '0x3b82f6', '0x16a34a', '0xea580c'][index]!, 6);
     await generateFixtureAudio(fixtureAudio, process.env.FFMPEG_PATH ?? 'ffmpeg');
 
     const apiUrl = `http://127.0.0.1:${apiPort}`;
