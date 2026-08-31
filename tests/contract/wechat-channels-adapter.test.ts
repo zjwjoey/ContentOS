@@ -9,7 +9,7 @@ const snapshot: PublishSnapshot = { requestId: 'request-wechat', idempotencyKey:
 
 class FakePage implements BrowserPage {
   readonly calls: string[] = [];
-  constructor(private readonly visible: Record<string, boolean>, private readonly success = true, private readonly visibleAfterWait: Record<string, boolean> = {}) {}
+  constructor(private readonly visible: Record<string, boolean>, private readonly success = true, private readonly visibleAfterWait: Record<string, boolean> = {}, private readonly textValues: Record<string, string> = {}) {}
   async goto(url: string): Promise<void> { this.calls.push(`goto:${url}`); }
   async isVisible(selector: string): Promise<boolean> { this.calls.push(`visible:${selector}`); return this.visible[selector] || false; }
   async setInputFiles(selector: string, filePath: string): Promise<void> { this.calls.push(`file:${selector}:${filePath}`); }
@@ -17,6 +17,7 @@ class FakePage implements BrowserPage {
   async click(selector: string): Promise<void> { this.calls.push(`click:${selector}`); }
   async waitFor(selector: string): Promise<void> { this.calls.push(`wait:${selector}`); if (this.visibleAfterWait[selector]) this.visible[selector] = true; }
   async screenshot(path: string): Promise<void> { this.calls.push(`screenshot:${path}`); }
+  async textContent(selector: string): Promise<string | null> { this.calls.push(`text:${selector}`); return this.textValues[selector] || null; }
   isSuccess(): boolean { return this.success; }
 }
 
@@ -57,10 +58,18 @@ test('WeChat Channels normalizes DOM drift and uncertain submit with isolated pr
 });
 
 test('WeChat Channels waits for an asynchronous success marker after submit', async () => {
-  const page = new FakePage({ 'input[type="file"]': true, textarea: true, 'button:has-text("发表")': true }, true, { 'text=发布成功': true });
+  const page = new FakePage({ 'input[type="file"]': true, textarea: true, 'button:has-text("发表")': true }, true, { 'text=发布成功': true }, { '[data-post-id]': 'wechat-post-1' });
   const result = await new WeChatChannelsPlaywrightAdapter(factoryFor(page, []), { headed: false, allowSubmit: true }).publish(context, { ...snapshot, idempotencyKey: 'publish-wechat-success' });
   assert.equal(result.status, 'PUBLISHED');
+  assert.equal(result.externalPostId, 'wechat-post-1');
   assert.equal(page.calls.includes('wait:text=发布成功'), true);
+});
+
+test('WeChat Channels never reports success without an external post id', async () => {
+  const page = new FakePage({ 'input[type="file"]': true, textarea: true, 'button:has-text("发表")': true }, true, { 'text=发布成功': true });
+  const result = await new WeChatChannelsPlaywrightAdapter(factoryFor(page, []), { headed: false, allowSubmit: true }).publish(context, { ...snapshot, idempotencyKey: 'publish-wechat-missing-id' });
+  assert.equal(result.status, 'FAILED');
+  assert.equal(result.failure?.classification, 'HUMAN_ACTION_REQUIRED');
 });
 
 test('WeChat Channels normalizes browser failures before submission as retryable network errors', async () => {

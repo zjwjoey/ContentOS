@@ -42,6 +42,7 @@ function payloadFromJob(job: JobRecord): PublisherPublishJobPayload {
     jobId: value.jobId,
     jobAttemptId: value.jobAttemptId || null,
     correlationId: value.correlationId || 'publisher-worker',
+    ...(value.desiredPublishAt ? { desiredPublishAt: value.desiredPublishAt } : {}),
   };
 }
 
@@ -121,6 +122,12 @@ async function executePublish(options: PublisherWorkerOptions, job: JobRecord, j
   if (aggregate.request.status === 'PUBLISHED') {
     await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'PUBLISHED', requestId: payload.requestId };
+  }
+  if (aggregate.request.status === 'SCHEDULED') {
+    if (aggregate.request.desiredPublishAt && new Date(aggregate.request.desiredPublishAt).getTime() > Date.now()) {
+      return { status: 'SCHEDULED', requestId: payload.requestId };
+    }
+    await service.transitionRequest(payload.requestId, 'QUEUED');
   }
   const account = await service.getAccount(payload.projectId, payload.accountId);
   if (!account || account.platformId !== payload.platformId) throw new PublisherHandlerError('PUBLISH_ACCOUNT_NOT_FOUND', 'Publisher account is not available', false);
@@ -208,6 +215,12 @@ async function executeReconcile(options: PublisherWorkerOptions, job: JobRecord,
     await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN_EXTERNAL_STATE', message: 'Reconciliation confirmed no external post was found' });
     await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'FAILED', requestId: payload.requestId };
+  }
+  if (job.attemptCount >= job.maxAttempts) {
+    await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'UNKNOWN_EXHAUSTED' } });
+    await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN_EXTERNAL_STATE', message: 'External state remains unknown after reconciliation attempts; human action is required' });
+    await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
+    return { status: 'FAILED', requestId: payload.requestId, nextAction: 'NEEDS_HUMAN_ACTION' };
   }
   await service.finishAttempt(attempt.id, { status: 'UNKNOWN', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'UNKNOWN' } });
   throw new PublisherHandlerError('RECONCILIATION_INCONCLUSIVE', 'External state remains unknown', true);

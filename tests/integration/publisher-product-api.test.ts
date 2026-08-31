@@ -60,6 +60,24 @@ test('Publisher API creates project-scoped account and request', async () => {
   }
 });
 
+test('Publisher Revision edits enforce request project ownership and cover ownership', async () => {
+  const db = await createDatabase(databaseUrl); await migrateUp(db);
+  const projectA = await new ProjectService(db).create(`Publisher Edit A ${randomUUID()}`); const projectB = await new ProjectService(db).create(`Publisher Edit B ${randomUUID()}`);
+  const assetA = `asset-edit-a-${randomUUID()}`; const assetB = `asset-edit-b-${randomUUID()}`;
+  for (const [id, projectId] of [[assetA, projectA.id], [assetB, projectB.id]] as const) await db.query('insert into assets (id, project_id, kind, checksum, byte_size, storage_key, lifecycle, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8)', [id, projectId, 'VIDEO_RENDER', `sha256:${id}`, 100, `renders/${id}.mp4`, 'READY', {}]);
+  const publisher = new PublisherService(db); const account = await publisher.createAccount({ projectId: projectB.id, platformId: 'fake-platform', displayName: 'B', credentialRef: 'fake-credential:b', profileKey: `profile-${randomUUID()}`, status: 'READY', capabilitySnapshot: { platformId: 'fake-platform', mediaTypes: ['video/mp4'], scheduling: false, requiresHumanConfirmation: false } });
+  const created = await publisher.createRequest({ projectId: projectB.id, accountId: account.id, idempotencyKey: `edit-${randomUUID()}`, correlationId: 'edit-test', revision: { assetId: assetB, assetChecksum: `sha256:${assetB}`, title: 'Original', description: '', desiredPublishAt: null, createdBy: 'test' } });
+  const app = await buildApi(db);
+  try {
+    const crossProject = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectA.id}/publisher/requests/${created.request.id}/revisions`, payload: { assetId: assetA, assetChecksum: `sha256:${assetA}`, title: 'Cross project', description: '', desiredPublishAt: null, createdBy: 'test' } });
+    assert.notEqual(crossProject.statusCode, 201);
+    const invalidCover = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectB.id}/publisher/requests/${created.request.id}/revisions`, payload: { assetId: assetB, assetChecksum: `sha256:${assetB}`, title: 'Bad cover', description: '', coverAssetId: assetA, desiredPublishAt: null, createdBy: 'test' } });
+    assert.equal(invalidCover.statusCode, 422);
+  } finally {
+    await app.close(); await cleanup(db, projectA.id); await cleanup(db, projectB.id); await db.end();
+  }
+});
+
 test('Project publisher handoff creates idempotent requests for multiple project accounts and updates lifecycle', async () => {
   const db = await createDatabase(databaseUrl);
   let projectId = '';

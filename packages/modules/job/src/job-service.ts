@@ -96,7 +96,7 @@ export class JobService {
 
   async listRunnable(types: string[], limit = 10): Promise<JobRecord[]> {
     if (types.length === 0 || limit <= 0) return [];
-    const result = await this.db.query('select * from jobs where type = any($1::text[]) and (state = \'QUEUED\' or (state = \'RETRY_WAIT\' and (retry_at is null or retry_at <= now()))) order by created_at, id limit $2', [types, limit]);
+    const result = await this.db.query("select * from jobs where type = any($1::text[]) and (state = 'QUEUED' or (state = 'RETRY_WAIT' and (retry_at is null or retry_at <= now()))) and (type <> 'PUBLISH' or payload->>'desiredPublishAt' is null or (payload->>'desiredPublishAt')::timestamptz <= now()) order by created_at, id limit $2", [types, limit]);
     return result.rows.map((row) => mapJob(row as Record<string, unknown>));
   }
 
@@ -107,6 +107,8 @@ export class JobService {
       const selected = await client.query('select * from jobs where id = $1 for update', [id]);
       const row = selected.rows[0] as Record<string, unknown> | undefined;
       if (!row || !['QUEUED', 'RETRY_WAIT'].includes(String(row.state))) { await client.query('rollback'); return null; }
+      const scheduledAt = String((row.payload as { desiredPublishAt?: unknown } | null)?.desiredPublishAt || '');
+      if (String(row.type) === 'PUBLISH' && scheduledAt && !Number.isNaN(Date.parse(scheduledAt)) && Date.parse(scheduledAt) > Date.now()) { await client.query('rollback'); return null; }
       const attemptNumber = Number(row.attempt_count) + 1;
       const attemptId = randomUUID();
       const leaseExpires = new Date(Date.now() + leaseMs);

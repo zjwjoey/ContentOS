@@ -65,6 +65,7 @@ export interface PublisherPublishJobPayload {
   jobId: string;
   jobAttemptId: string | null;
   correlationId: string;
+  desiredPublishAt?: string | null;
 }
 
 export interface StartPublisherAttemptInput {
@@ -286,6 +287,7 @@ export class PublisherService {
       jobId,
       jobAttemptId,
       correlationId: aggregate.request.correlationId,
+      ...(aggregate.request.desiredPublishAt ? { desiredPublishAt: aggregate.request.desiredPublishAt } : {}),
     };
   }
 

@@ -6,8 +6,9 @@ export interface WeChatChannelsSelectorProfile {
   coverInput: string;
   publishButton: string;
   successMarker: string;
+  externalPostIdSelector?: string;
 }
 
 export const defaultWeChatChannelsSelectors: WeChatChannelsSelectorProfile = {
-  loginMarker: 'text=登录', verificationMarker: 'text=验证', fileInput: 'input[type="file"]', descriptionInput: 'textarea', coverInput: 'input[type="file"][accept*="image"]', publishButton: 'button:has-text("发表")', successMarker: 'text=发布成功',
+  loginMarker: 'text=登录', verificationMarker: 'text=验证', fileInput: 'input[type="file"]', descriptionInput: 'textarea', coverInput: 'input[type="file"][accept*="image"]', publishButton: 'button:has-text("发表")', successMarker: 'text=发布成功', externalPostIdSelector: '[data-post-id]',
 };

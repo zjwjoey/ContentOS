@@ -17,10 +17,14 @@ test('Director V1 API creates briefs, queues jobs, preserves revisions and retur
     assert.deepEqual((await app.inject({ method: 'GET', url: `/api/v1/projects/${project.id}/scripts` })).json().items, []);
     const job = await app.inject({ method: 'GET', url: `/api/v1/jobs/${queuedJson.jobId}` }); assert.equal(job.statusCode, 200); assert.equal(job.json().payload, undefined); assert.equal(job.json().state, 'QUEUED');
     const revision = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/scripts/${queuedJson.scriptAggregateId}/revisions`, payload: script }); assert.equal(revision.statusCode, 201); const revisionId = revision.json().id as string;
-    assert.equal((await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/scripts/${revisionId}/accept` })).statusCode, 200);
+    const approval = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/approvals`, payload: { targetType: 'SCRIPT', targetId: revisionId, targetRevisionId: revisionId, status: 'PENDING', approver: 'operator' } });
+    assert.equal(approval.statusCode, 201);
+    const approved = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/approvals/SCRIPT/${revisionId}/${revisionId}/approve`, payload: { approver: 'operator' } });
+    assert.equal(approved.statusCode, 200);
     const boardJob = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/scripts/${revisionId}/storyboards/generate`, payload: { correlationId: 'corr-api-storyboard' } }); assert.equal(boardJob.statusCode, 202); assert.equal(boardJob.json().state, 'QUEUED');
     assert.equal((await app.inject({ method: 'GET', url: `/api/v1/projects/${project.id}/storyboards` })).statusCode, 200);
   } finally {
+    await db.query('delete from approval_decisions where project_id = $1', [project.id]);
     await app.close();
     await db.query('delete from job_events where job_id in (select id from jobs where project_id = $1)', [project.id]); await db.query('delete from job_attempts where job_id in (select id from jobs where project_id = $1)', [project.id]); await db.query('delete from jobs where project_id = $1', [project.id]);
     await db.query('delete from director_project_state where project_id = $1', [project.id]); await db.query('delete from director_storyboard_revisions where project_id = $1', [project.id]); await db.query('delete from director_storyboards where project_id = $1', [project.id]); await db.query('delete from director_script_revisions where project_id = $1', [project.id]); await db.query('delete from director_scripts where project_id = $1', [project.id]); await db.query('delete from director_briefs where project_id = $1', [project.id]); await db.query('delete from content_projects where id = $1', [project.id]); await db.end();
@@ -39,5 +43,40 @@ test('Director V1 API distinguishes Brief validation from missing projects', asy
   } finally {
     await app.close();
     await db.query('delete from content_projects where id = $1', [project.id]); await db.end();
+  }
+});
+
+test('Director V1 compatibility transitions cannot bypass the Approval Gate', async () => {
+  const db = await createDatabase(databaseUrl); await migrateUp(db);
+  const project = await new ProjectService(db).create('Director V1 Approval Gate'); const app = await buildApi(db);
+  try {
+    const createdBrief = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/director/brief`, payload: brief });
+    const briefId = createdBrief.json().id as string;
+    const generated = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/scripts/generate`, payload: { briefId } });
+    const revision = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/scripts/${generated.json().scriptAggregateId}/revisions`, payload: script });
+    const response = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/scripts/${revision.json().id}/accept` });
+    assert.equal(response.statusCode, 409);
+    assert.equal(response.json().error.code, 'DIRECTOR_APPROVAL_REQUIRED');
+  } finally {
+    await app.close();
+    await db.query('delete from job_events where job_id in (select id from jobs where project_id = $1)', [project.id]); await db.query('delete from job_attempts where job_id in (select id from jobs where project_id = $1)', [project.id]); await db.query('delete from jobs where project_id = $1', [project.id]);
+    await db.query('delete from director_project_state where project_id = $1', [project.id]); await db.query('delete from director_script_revisions where project_id = $1', [project.id]); await db.query('delete from director_scripts where project_id = $1', [project.id]); await db.query('delete from director_briefs where project_id = $1', [project.id]); await db.query('delete from content_projects where id = $1', [project.id]); await db.end();
+  }
+});
+
+test('Approval action does not mutate Director state when no pending decision exists', async () => {
+  const db = await createDatabase(databaseUrl); await migrateUp(db);
+  const project = await new ProjectService(db).create('Director Approval Atomicity'); const app = await buildApi(db);
+  try {
+    const createdBrief = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/director/brief`, payload: brief });
+    const generated = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/scripts/generate`, payload: { briefId: createdBrief.json().id } });
+    const revision = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/scripts/${generated.json().scriptAggregateId}/revisions`, payload: script });
+    const response = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/approvals/SCRIPT/${revision.json().id}/${revision.json().id}/approve`, payload: { approver: 'operator' } });
+    assert.equal(response.statusCode, 409);
+    const current = await app.inject({ method: 'GET', url: `/api/v1/projects/${project.id}/scripts/${revision.json().id}` });
+    assert.equal(current.json().status, 'DRAFT');
+  } finally {
+    await app.close();
+    await db.query('delete from approval_decisions where project_id = $1', [project.id]); await db.query('delete from job_events where job_id in (select id from jobs where project_id = $1)', [project.id]); await db.query('delete from job_attempts where job_id in (select id from jobs where project_id = $1)', [project.id]); await db.query('delete from jobs where project_id = $1', [project.id]); await db.query('delete from director_project_state where project_id = $1', [project.id]); await db.query('delete from director_script_revisions where project_id = $1', [project.id]); await db.query('delete from director_scripts where project_id = $1', [project.id]); await db.query('delete from director_briefs where project_id = $1', [project.id]); await db.query('delete from content_projects where id = $1', [project.id]); await db.end();
   }
 });
