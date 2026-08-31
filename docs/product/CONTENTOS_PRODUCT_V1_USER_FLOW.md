@@ -10,7 +10,7 @@
 8. 打开 Video，选择素材和规划器。Random 用于随机混剪；Storyboard 按分镜关键词和素材标签匹配，无匹配时自动回退。点击创建渲染 Job。
 9. Job 完成后在 Video 预览成片。选择 Manifest 版本可查看历史；对当前版本执行调整并生成新版本，再按需渲染。
 10. 点击“送往 Approval Gate”，在 Approval 页面批准明确的 Render Revision。
-11. 打开 Publisher，创建 Fake 账号和发布草稿，选择成片、标题、描述和账号；在 Approval Gate 批准发布 Revision，再点击进入发布队列。
+11. 打开 Publisher，创建 Fake 账号和发布草稿，选择成片、标题、描述、hashtags、可选封面和账号；在 Approval Gate 批准发布 Revision，再点击进入发布队列。
 12. Fake Worker 完成后，Publisher 显示 Attempt、ExternalPost、链接和最终状态。失败、登录失效、RECONCILING 都会显示下一步人工动作。
 13. 打开 Review，选择 ExternalPost。可以“追加快照”手动录入指标，查看多个快照和播放变化，点击“生成 AI 复盘”查看历史报告。
 

@@ -15,7 +15,7 @@ ContentOS V1 是以 Content Project 为中心的浏览器生产工作台。普�
 | Assets | 多文件视频/音频上传、READY/FAILED、预览、标签、类型和标签筛选 |
 | Video | Random 或 Storyboard Planner、可解释匹配、EDIT_MANIFEST_V0、TRIM/REMOVE/REORDER/REPLACE/REROLL、历史 Manifest、真实 FFmpeg Render |
 | Approval | Script、Storyboard、Render、Publish 均绑定 entity 与具体 revision，可批准/驳回并记录理由 |
-| Publisher | Fake 账号、发布 Revision、Attempt、ExternalPost、重试/人工处理/RECONCILING 状态 |
+| Publisher | Fake 账号、发布 Revision（标题/描述/hashtags/可选封面/排期）、Attempt、ExternalPost、重试/人工处理/RECONCILING 状态；真实 Adapter 仅在显式开关、账号验证和人工确认后可用 |
 | Review | append-only Metric Snapshot、历史趋势、Fake/Import 采集、AI Review 报告和 AI Run 证据 |
 | Settings/Dashboard | 真实项目/Job 数据和安全的 AI、Publisher、PostgreSQL、FFmpeg、Worker 状态 |
 
