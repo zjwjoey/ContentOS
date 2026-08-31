@@ -94,7 +94,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByRole('link', { name: /^Review Analytics/ }).click();
     await page.getByTestId('review-post').first().waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByTestId('collect-metrics').first().click();
-    await page.getByText(/播放 \d+ · 点赞 \d+/, { exact: false }).waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByText(/播放 \d+ · 点赞 \d+/, { exact: false }).first().waitFor({ state: 'visible', timeout: 30_000 });
     await page.getByTestId('analyze-review').first().click();
     await page.getByText('最新复盘').waitFor({ state: 'visible', timeout: 30_000 });
     await page.getByText('HIGH · 强化互动钩子', { exact: false }).waitFor({ state: 'visible', timeout: 15_000 });
