@@ -126,6 +126,18 @@ test('migration 0020 creates benchmark library tables with project ownership', a
   } finally { await database.drop(); }
 });
 
+test('migration 0021 creates publisher metadata columns', async () => {
+  const database = await createTemporarySchema();
+  try {
+    const db = await createDatabase(database.url);
+    try {
+      await migrateUp(db);
+      const columns = await db.query<{ column_name: string }> ("select column_name from information_schema.columns where table_schema = current_schema() and table_name = 'publisher_request_revisions' and column_name in ('hashtags', 'cover_asset_id') order by column_name");
+      assert.deepEqual(columns.rows.map((row) => row.column_name), ['cover_asset_id', 'hashtags']);
+    } finally { await db.end(); }
+  } finally { await database.drop(); }
+});
+
 test('migration 0016 maps legacy render asset roles into video workspace outputs', async () => {
   const database = await createTemporarySchema();
   const temp = await mkdtemp(join(tmpdir(), 'contentos-migration-0016-legacy-role-'));
