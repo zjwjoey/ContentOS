@@ -461,3 +461,10 @@
 - 全量浏览器验收：Fake Publisher、Benchmark Library、Standalone Quick Edit **3/3 通过**。
 - 全量单元/集成/契约测试：**228/228 通过**；typecheck、lint、format、diff-check、Web build、root build 均通过。
 - 最新提交：`e34e703 fix: stabilize product v1 browser and preflight flows`；尚未推送或合并。
+
+## Session: 2026-09-01 — Publisher metadata 收口
+
+- 新增 migration `0021_publisher_metadata`，为 Publisher Revision 增加 hashtags 与可选 cover Asset 引用；现有 `desiredPublishAt` 继续承载排期。
+- Contract、API、Publisher Service、Worker snapshot、Douyin/WeChat Adapter 文案和 Operator UI 已同步支持这些字段。
+- 迁移矩阵 7/7、Publisher API 集成 7/7、全量测试 228/228、浏览器 3/3、Web/root build、doctor 全部通过。
+- 最新提交：`762bdb3 test: include publisher metadata migration`；尚未推送或合并。

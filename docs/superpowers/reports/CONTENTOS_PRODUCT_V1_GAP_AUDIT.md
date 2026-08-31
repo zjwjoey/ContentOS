@@ -61,4 +61,4 @@ AI Vision、Embedding、Vector DB、大规模平台抓取、复杂社交爬虫�
 - Benchmark 空 URL 严格校验、Quick Edit 多镜头浏览器路径和 Publisher 页面安全字段已在 `770d4ae`、`e34e703` 修复。
 - 当前验证证据：浏览器 3/3、单元/集成/契约 228/228、迁移矩阵 7/7、doctor 全部 PASS，typecheck/lint/format/build 全部 PASS。
 
-仍需在产品级收口前单独复核的范围：Publisher 的 hashtags/cover/schedule 字段是否完整进入公开 Contract 与持久化；Project 的编辑/归档入口；Storyboard 场景人工编辑与历史选择；以及真实 Provider 在配置凭证后的人工 preflight。Fake、迁移、FFmpeg 和本地构建门禁已不再是当前阻塞项。
+仍需在产品级收口前单独复核的范围：真实 Provider 在配置凭证后的人工 preflight，以及封面 Asset 是否需要进一步做类型/归属校验。Publisher hashtags、cover Asset 引用和 schedule 已进入公开 Contract、API、持久化迁移 `0021`、Worker snapshot 与 Adapter 文案；Project 编辑/归档和 Storyboard 场景人工编辑/历史 revision 入口也已具备。Fake、迁移、FFmpeg 和本地构建门禁已不再是当前阻塞项。
