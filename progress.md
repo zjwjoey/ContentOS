@@ -466,6 +466,14 @@
 
 - 新增 migration `0021_publisher_metadata`，为 Publisher Revision 增加 hashtags 与可选 cover Asset 引用；现有 `desiredPublishAt` 继续承载排期。
 - Contract、API、Publisher Service、Worker snapshot、Douyin/WeChat Adapter 文案和 Operator UI 已同步支持这些字段。
-- 迁移矩阵 7/7、Publisher API 集成 7/7、全量测试 228/228、浏览器 3/3、Web/root build、doctor 全部通过。
-- 最新提交：`762bdb3 test: include publisher metadata migration`；尚未推送或合并。
+- 迁移矩阵 8/8、Publisher API 集成 10/10、Publisher/真实 Adapter 收口门禁 29/29、全量测试 228/228、浏览器 3/3、Web/root build、doctor 全部通过。
+- 最新提交：`9247d6c docs: record cover asset validation`；尚未推送或合并。
 - 封面 Asset 引用增加项目归属与 READY 状态校验，Publisher API/Asset 回归测试通过；最新提交：`4575757`。
+
+## Session: 2026-09-01 — Product V1 final quality gate recheck
+
+- 恢复暂停任务后核对工作树与测试进程：工作树干净，暂停前完整测试日志确认 `228/228` 通过，未发现遗留运行中的测试进程。
+- 独立 PostgreSQL 16 集群上的 `test:integration-closure` **29/29 通过**，覆盖真实 Adapter 契约、凭证隔离、迁移矩阵（含 `0021`）和真实 Publisher Worker。
+- 独立 Operator 浏览器验收 **3/3 通过**：Fake Publisher 成功/重试/人工处理/未知状态、Benchmark Library、Standalone Quick Edit。
+- 最终本地门禁通过：format（333 文件）、lint（130 个 TypeScript 文件）、typecheck、root build、Web production build、doctor（runtime/storage/FFmpeg/FFprobe/filters/codecs/font）和 `git diff --check`。
+- 当前分支仍为 `feature/contentos-product-v1-closure`，未推送、未创建或合并 PR；真实 Provider 配置后的人工 preflight 及平台特定封面尺寸/格式策略仍保留为产品级后续复核项。
