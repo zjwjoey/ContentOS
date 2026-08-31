@@ -42,12 +42,14 @@ test('Publisher API creates project-scoped account and request', async () => {
     projectId = data.projectId;
     const accountResponse = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/publisher/accounts`, payload: { platformId: 'fake-platform', displayName: `Operator Fake ${randomUUID()}`, status: 'READY', capabilitySnapshot: { platformId: 'fake-platform', mediaTypes: ['video/mp4'], scheduling: false, requiresHumanConfirmation: false } } });
     assert.equal(accountResponse.statusCode, 201, accountResponse.body);
-    const requestResponse = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/publisher/requests`, payload: { accountId: data.accountId, idempotencyKey: `publisher-api-${randomUUID()}`, correlationId: `correlation-${randomUUID()}`, revision: { assetId: data.assetId, assetChecksum: data.checksum, title: 'API 发布', description: '描述', desiredPublishAt: null, createdBy: 'operator' } } });
+    const requestResponse = await app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/publisher/requests`, payload: { accountId: data.accountId, idempotencyKey: `publisher-api-${randomUUID()}`, correlationId: `correlation-${randomUUID()}`, revision: { assetId: data.assetId, assetChecksum: data.checksum, title: 'API 发布', description: '描述', hashtags: ['效率工具', '#ContentOS'], coverAssetId: 'cover-asset-demo', desiredPublishAt: null, createdBy: 'operator' } } });
     assert.equal(requestResponse.statusCode, 201);
-    const request = requestResponse.json() as { request: { id: string; projectId: string; status: string }; revision: { title: string } };
+    const request = requestResponse.json() as { request: { id: string; projectId: string; status: string }; revision: { title: string; hashtags: string[]; coverAssetId?: string } };
     assert.equal(request.request.projectId, projectId);
     assert.equal(request.request.status, 'DRAFT');
     assert.equal(request.revision.title, 'API 发布');
+    assert.deepEqual(request.revision.hashtags, ['效率工具', '#ContentOS']);
+    assert.equal(request.revision.coverAssetId, 'cover-asset-demo');
     const listResponse = await app.inject({ method: 'GET', url: `/api/v1/projects/${projectId}/publisher/requests` });
     assert.equal(listResponse.statusCode, 200);
     assert.equal((listResponse.json() as { items: unknown[] }).items.length, 1);

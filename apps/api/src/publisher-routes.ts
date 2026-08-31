@@ -32,6 +32,8 @@ const requestInput = z.object({
     assetChecksum: z.string().trim().min(1).max(200),
     title: z.string().trim().min(1).max(200),
     description: z.string().max(5000),
+    hashtags: z.array(z.string().trim().min(1).max(100)).max(32).optional(),
+    coverAssetId: z.string().trim().min(1).optional(),
     desiredPublishAt: z.string().datetime().nullable(),
     createdBy: z.string().trim().min(1).max(200),
   }),
@@ -42,6 +44,8 @@ const handoffInput = z.object({
   assetId: z.string().trim().min(1),
   title: z.string().trim().min(1).max(200),
   description: z.string().max(5000),
+  hashtags: z.array(z.string().trim().min(1).max(100)).max(32).optional(),
+  coverAssetId: z.string().trim().min(1).optional(),
   desiredPublishAt: z.string().datetime().nullable(),
   createdBy: z.string().trim().min(1).max(200),
   idempotencyKey: z.string().trim().min(1).max(200),
@@ -161,7 +165,8 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     const asset = await assets.getPublishableAsset(projectId, parsed.data.revision.assetId);
     if (!asset || asset.checksum !== parsed.data.revision.assetChecksum) return reply.code(422).send({ error: { code: 'PUBLISHER_ASSET_INVALID', message: 'A READY VIDEO_RENDER Asset owned by this project and matching the checksum is required', details: [] } });
     try {
-      const result = await publisher.createRequest({ projectId, ...parsed.data });
+      const revision = parsed.data.revision;
+      const result = await publisher.createRequest({ projectId, accountId: parsed.data.accountId, idempotencyKey: parsed.data.idempotencyKey, correlationId: parsed.data.correlationId, revision: { assetId: revision.assetId, assetChecksum: revision.assetChecksum, title: revision.title, description: revision.description, hashtags: revision.hashtags || [], ...(revision.coverAssetId ? { coverAssetId: revision.coverAssetId } : {}), desiredPublishAt: revision.desiredPublishAt, createdBy: revision.createdBy } });
       await refreshProjectPublishingStatus(projectId, projects, publisher, assets);
       return reply.code(201).send(result);
     }
@@ -185,7 +190,7 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
           accountId,
           idempotencyKey: `publisher:handoff:${parsed.data.idempotencyKey}:${accountId}`,
           correlationId: parsed.data.correlationId,
-          revision: { assetId: asset.id, assetChecksum: asset.checksum, title: parsed.data.title, description: parsed.data.description, desiredPublishAt: parsed.data.desiredPublishAt, createdBy: parsed.data.createdBy },
+          revision: { assetId: asset.id, assetChecksum: asset.checksum, title: parsed.data.title, description: parsed.data.description, ...(parsed.data.hashtags ? { hashtags: parsed.data.hashtags } : {}), ...(parsed.data.coverAssetId ? { coverAssetId: parsed.data.coverAssetId } : {}), desiredPublishAt: parsed.data.desiredPublishAt, createdBy: parsed.data.createdBy },
         });
         // A handoff is the entry point to the Publish Approval Gate.  Keep the
         // gate tied to the immutable revision and do not overwrite an existing

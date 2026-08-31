@@ -50,7 +50,7 @@ export class DouyinOpenApiAdapter implements PublisherAdapter {
       return { status: 'FAILED', failure: failure('NETWORK_ERROR', 'RETRYABLE', 'Douyin upload transport failed') };
     }
     try {
-      const text = [snapshot.title.trim(), snapshot.description.trim()].filter(Boolean).join('\n');
+    const text = [snapshot.title.trim(), snapshot.description.trim(), ...(snapshot.hashtags || []).map((tag) => tag.startsWith('#') ? tag : `#${tag}`)].filter(Boolean).join('\n');
       const url = new URL(`${this.endpoints.baseUrl}${this.endpoints.createPath}`);
       url.searchParams.set('open_id', context.credential?.openId || '');
       const create = await this.transport.request({ method: 'POST', url: url.toString(), headers: { 'access-token': context.credential?.accessToken || '', 'content-type': 'application/json' }, body: JSON.stringify({ video_id: videoId, text }) });

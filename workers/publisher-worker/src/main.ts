@@ -139,7 +139,7 @@ async function executePublish(options: PublisherWorkerOptions, job: JobRecord, j
   else if (current?.status !== 'PUBLISHING') throw new PublisherHandlerError('PUBLISH_REQUEST_NOT_QUEUEABLE', `Publisher request is ${current?.status || 'missing'}`, false);
 
   const attempt = await service.startAttempt({ requestId: payload.requestId, revisionId: payload.revisionId, operation: 'PUBLISH', jobId: job.id, jobAttemptId });
-  const snapshot = { requestId: payload.requestId, idempotencyKey: aggregate.request.idempotencyKey, assetId: aggregate.revision.assetId, assetSha256: asset.checksum, ...(options.storage ? { mediaPath: options.storage.objectPath(asset.storageKey) } : {}), title: aggregate.revision.title, description: aggregate.revision.description };
+  const snapshot = { requestId: payload.requestId, idempotencyKey: aggregate.request.idempotencyKey, assetId: aggregate.revision.assetId, assetSha256: asset.checksum, ...(options.storage ? { mediaPath: options.storage.objectPath(asset.storageKey) } : {}), title: aggregate.revision.title, description: aggregate.revision.description, ...(aggregate.revision.hashtags.length ? { hashtags: aggregate.revision.hashtags } : {}) };
   let result: PublishResult;
   try { result = await executeAdapterPublish(options, account, asset, snapshot); }
   catch (error) {
