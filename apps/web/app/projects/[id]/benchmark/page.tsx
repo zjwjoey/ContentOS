@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { use, useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 type Account = { id: string; platform: string; accountName: string; positioning: string; category: string; keywords: string[]; notes: string };
 type Content = { id: string; benchmarkAccountId: string; accountName: string; platform: string; title: string; url?: string; copy: string; analysisCount: number; referenced: boolean };
@@ -10,8 +10,8 @@ type Job = { jobId: string; state: string };
 const done = new Set(['SUCCEEDED', 'FAILED', 'BLOCKED', 'CANCELLED']);
 async function errorMessage(response: Response, fallback: string): Promise<string> { try { return ((await response.json()) as { error?: { message?: string } }).error?.message || fallback; } catch { return fallback; } }
 
-export default function BenchmarkPage({ params }: { params: Promise<{ id: string }> }) {
-  const projectId = use(params).id;
+export default function BenchmarkPage({ params }: { params: { id: string } }) {
+  const projectId = params.id;
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [contents, setContents] = useState<Content[]>([]);
   const [analyses, setAnalyses] = useState<Record<string, Analysis[]>>({});

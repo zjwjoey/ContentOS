@@ -103,7 +103,7 @@ export class ReviewAnalyticsService {
     validateReviewAnalysisReportV1(report);
     const result = await this.db.query(
       'insert into review_analysis_reports (id, project_id, external_post_id, metric_snapshot_ids, schema_version, summary, highlights, risks, recommendations, ai_run_id, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning *',
-      [report.id, report.projectId, report.externalPostId, report.metricSnapshotIds, report.schemaVersion, report.summary, report.highlights, report.risks, report.recommendations, report.aiRunId, report.createdAt],
+      [report.id, report.projectId, report.externalPostId, report.metricSnapshotIds, report.schemaVersion, report.summary, JSON.stringify(report.highlights), JSON.stringify(report.risks), JSON.stringify(report.recommendations), report.aiRunId, report.createdAt],
     );
     return mapReport(result.rows[0] as Record<string, unknown>);
   }

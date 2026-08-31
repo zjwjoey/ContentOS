@@ -1,35 +1,46 @@
 'use client';
 
-import { use, useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 type Snapshot = { id: string; capturedAt: string; metrics: { plays: number; likes: number; comments: number; saves: number; shares: number }; source: string };
 type Report = { id: string; summary: string; highlights: Array<{ title: string; detail: string }>; risks: Array<{ title: string; detail: string }>; recommendations: Array<{ priority: string; title: string; detail: string }> };
 type Item = { post: { id: string; platformId: string; externalPostId: string; externalUrl: string | null }; snapshots: Snapshot[]; reports: Report[] };
+type Job = { jobId?: string; id?: string; state: string; error?: { message?: string } };
+const terminalJobs = new Set(['SUCCEEDED', 'FAILED', 'BLOCKED', 'CANCELLED']);
 
-export default function ReviewAnalyticsPage({ params }: { params: Promise<{ id: string }> }) {
-  const projectId = use(params).id;
+export default function ReviewAnalyticsPage({ params }: { params: { id: string } }) {
+  const projectId = params.id;
   const [items, setItems] = useState<Item[]>([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [snapshotForm, setSnapshotForm] = useState({ postId: '', plays: 0, likes: 0, comments: 0, saves: 0, shares: 0, sourceReference: 'operator' });
+  const [jobs, setJobs] = useState<Record<string, Job>>({});
   const refresh = useCallback(async () => {
     const response = await fetch(`/api/v1/projects/${projectId}/reviews/analytics`);
     if (response.ok) setItems(((await response.json()) as { items: Item[] }).items);
   }, [projectId]);
   useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    const active = Object.entries(jobs).filter(([, job]) => !terminalJobs.has(job.state));
+    if (!active.length) return;
+    let disposed = false;
+    const poll = async () => { for (const [postId, job] of active) { const id = job.jobId || job.id; if (!id) continue; const response = await fetch(`/api/v1/jobs/${id}`); if (!response.ok || disposed) continue; const next = await response.json() as Job; setJobs((current) => ({ ...current, [postId]: { ...next, jobId: id } })); if (terminalJobs.has(next.state)) { if (next.state === 'FAILED') setMessage(next.error?.message || 'Review Job 执行失败。'); await refresh(); } } };
+    void poll(); const timer = window.setInterval(() => { void poll(); }, 800); return () => { disposed = true; window.clearInterval(timer); };
+  }, [jobs, refresh]);
 
   const collect = async (postId: string) => {
     setBusy(true); setMessage('正在排队采集指标…');
     const response = await fetch(`/api/v1/projects/${projectId}/reviews/analytics/posts/${postId}/collect`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ source: 'FAKE', idempotencyKey: `review-collect-${projectId}-${postId}`, correlationId: `review-${projectId}` }) });
-    setMessage(response.ok ? '指标采集 Job 已排队。' : '指标采集排队失败。');
-    if (response.ok) window.setTimeout(() => void refresh(), 350);
+    if (response.ok) setJobs((current) => ({ ...current, [postId]: await response.json() as Job }));
+    else setMessage('指标采集排队失败。');
     setBusy(false);
   };
   const analyze = async (item: Item) => {
     if (!item.snapshots.length) return;
     setBusy(true); setMessage('正在排队生成 AI 复盘…');
     const response = await fetch(`/api/v1/projects/${projectId}/reviews/analytics/posts/${item.post.id}/analyze`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ metricSnapshotIds: item.snapshots.map((snapshot) => snapshot.id), idempotencyKey: `review-analyze-${projectId}-${item.post.id}-${item.snapshots.map((snapshot) => snapshot.id).join('-')}`, correlationId: `review-${projectId}` }) });
-    setMessage(response.ok ? 'AI 复盘 Job 已排队。' : 'AI 复盘排队失败。');
+    if (response.ok) setJobs((current) => ({ ...current, [item.post.id]: await response.json() as Job }));
+    else setMessage('AI 复盘排队失败。');
     setBusy(false);
   };
   const addSnapshot = async (event: React.FormEvent) => { event.preventDefault(); if (!snapshotForm.postId) return; setBusy(true); const response = await fetch(`/api/v1/projects/${projectId}/reviews/analytics/posts/${snapshotForm.postId}/snapshots`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ capturedAt: new Date().toISOString(), metrics: { plays: Number(snapshotForm.plays), likes: Number(snapshotForm.likes), comments: Number(snapshotForm.comments), saves: Number(snapshotForm.saves), shares: Number(snapshotForm.shares) }, sourceReference: snapshotForm.sourceReference }) }); setMessage(response.ok ? '指标快照已追加保存。' : '指标快照保存失败。'); if (response.ok) await refresh(); setBusy(false); };

@@ -24,6 +24,7 @@ create table benchmark_contents (
   metrics jsonb,
   notes text not null default '',
   created_at timestamptz not null default now(),
+  constraint benchmark_contents_id_project_key unique (id, project_id),
   constraint benchmark_contents_account_project_fk foreign key (benchmark_account_id, project_id) references benchmark_accounts(id, project_id)
 );
 

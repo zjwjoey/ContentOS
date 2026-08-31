@@ -110,14 +110,25 @@ export function buildStoryboardVideoManifest(input: StoryboardPlannerInput): Sto
   const decisions: StoryboardPlannerDecision[] = []; const timeline: EditManifestV0['timeline'] = [];
   for (const scene of [...input.scenes].sort((a, b) => a.sceneIndex - b.sceneIndex)) {
     const required = tokens(scene.assetKeywords); const previous = timeline.at(-1)?.assetId;
+    const requestedDurationMs = Math.max(1, Math.round(scene.durationHintSeconds * 1000));
+    const durationMs = Math.min(requestedDurationMs, remainingForTarget(targetDurationMs, timeline));
     const ranked = sorted.map((asset) => { const haystack = tokens([asset.originalName || '', ...(asset.tags || []), ...Object.values(asset.metadata || {}).filter((value): value is string => typeof value === 'string')]); const matched = required.filter((word) => haystack.includes(word)); const score = required.length ? Math.round((matched.length / required.length) * 100) : 0; return { asset, matched, score }; }).sort((a, b) => b.score - a.score || a.asset.id.localeCompare(b.asset.id));
-    const eligible = ranked.filter((item) => item.asset.id !== previous); const best = eligible[0] || ranked[0]; if (!best) throw new Error('Storyboard planner could not select an asset');
-    const fallback = best.score === 0; const durationMs = Math.max(1, Math.round(scene.durationHintSeconds * 1000)); const maxIn = Math.max(0, Math.floor(best.asset.durationMs - durationMs)); const sourceInMs = maxIn > 0 ? (Math.abs(input.seed + scene.sceneIndex) % (maxIn + 1)) : 0;
+    const eligible = ranked.filter((item) => item.asset.id !== previous && Math.floor(item.asset.durationMs) >= durationMs);
+    const best = eligible[0];
+    if (!best) {
+      if (ranked.length === 1 && ranked[0]!.asset.id === previous) throw new Error('Storyboard planner cannot place adjacent scenes with only one asset');
+      throw new Error(`Storyboard planner has no asset long enough for scene ${scene.sceneIndex}`);
+    }
+    const fallback = best.score === 0; const maxIn = Math.max(0, Math.floor(best.asset.durationMs - durationMs)); const sourceInMs = maxIn > 0 ? (Math.abs(input.seed + scene.sceneIndex) % (maxIn + 1)) : 0;
     timeline.push({ assetId: best.asset.id, sourcePath: best.asset.sourcePath, sourceInMs, durationMs, transition: timeline.length ? 'cut' : 'cut' }); decisions.push({ sceneIndex: scene.sceneIndex, assetId: best.asset.id, score: best.score, matchedKeywords: best.matched, fallback });
   }
+  if (timeline.reduce((total, clip) => total + clip.durationMs, 0) !== targetDurationMs) throw new Error('Storyboard planner cannot satisfy the requested target duration');
   let manifest: EditManifestV0 = { schemaVersion: 'EDIT_MANIFEST_V0', projectId: input.projectId, seed: input.seed, canvas: { width: 1080, height: 1920, aspectRatio: '9:16', fps: 30 }, timeline, audio: { ...(input.voiceAssetId ? { voiceAssetId: input.voiceAssetId } : {}), ...(input.voicePath ? { voicePath: input.voicePath } : {}), volume: 1 }, metadata: { storyboardRevisionId: input.storyboardRevisionId }, output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' } };
-  if (timeline.reduce((total, clip) => total + clip.durationMs, 0) < targetDurationMs) { const random = buildVideoManifest({ projectId: input.projectId, seed: input.seed, assets: sorted, targetDurationMs, ...(input.voiceAssetId ? { voiceAssetId: input.voiceAssetId } : {}), ...(input.voicePath ? { voicePath: input.voicePath } : {}), metadata: { storyboardRevisionId: input.storyboardRevisionId } }); manifest = random; }
   validateEditManifest(manifest); return { manifest, decisions };
+}
+
+function remainingForTarget(targetDurationMs: number, timeline: EditManifestV0['timeline']): number {
+  return Math.max(1, targetDurationMs - timeline.reduce((total, clip) => total + clip.durationMs, 0));
 }
 
 function validateAndReturn(manifest: EditManifestV0): EditManifestV0 { validateEditManifest(manifest); return manifest; }
