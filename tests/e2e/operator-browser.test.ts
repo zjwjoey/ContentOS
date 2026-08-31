@@ -71,6 +71,7 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await sourceCheckboxes.nth(1).waitFor({ state: 'attached', timeout: 30_000 });
     for (let index = 0; index < await sourceCheckboxes.count(); index += 1) await sourceCheckboxes.nth(index).check();
     await page.getByLabel('视频规划器').selectOption('STORYBOARD');
+    await page.getByLabel('目标时长（毫秒）').fill('8000');
     await page.getByRole('button', { name: '创建渲染 Job' }).click();
     try { await page.locator('video').waitFor({ state: 'visible', timeout: 45_000 }); }
     catch (error) { throw new Error(`Video render did not become playable: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
