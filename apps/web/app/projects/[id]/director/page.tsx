@@ -73,11 +73,6 @@ export default function DirectorPage({ params }: { params: { id: string } }) {
     setJob(response.ok ? data : null); setMessage(response.ok ? `Script Job ${data.jobId} 已入队，正在等待 Worker。` : data.error?.message || 'Job 创建失败。');
   };
 
-  const acceptScript = async (scriptId: string) => {
-    const response = await fetch(`/api/v1/projects/${projectId}/scripts/${scriptId}/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-    if (!response.ok) { setMessage(await responseMessage(response, '接受 Script 失败。')); return; }
-    await refresh(); setMessage('Script 已接受。');
-  };
 
   const reviseScript = async (script: Script) => {
     const response = await fetch(`/api/v1/projects/${projectId}/scripts/${script.id}/revisions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ origin: 'MANUAL', title: script.title, titleCandidates: script.titleCandidates, coverText: script.coverText, topicKeywords: script.topicKeywords, hook: script.hook, body: `${script.body}\n\n补充说明：请用一个真实例子解释。`, ...(script.cta ? { cta: script.cta } : {}), createdBy: 'operator' }) });
@@ -92,11 +87,9 @@ export default function DirectorPage({ params }: { params: { id: string } }) {
     setJob(response.ok ? data : null); setMessage(response.ok ? `Storyboard Job ${data.jobId} 已入队。` : data.error?.message || 'Job 创建失败。');
   };
 
-  const approveStoryboard = async (storyboardId: string) => {
-    const response = await fetch(`/api/v1/projects/${projectId}/storyboards/${storyboardId}/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-    if (!response.ok) { setMessage(await responseMessage(response, '批准 Storyboard 失败。')); return; }
-    await refresh(); setMessage('Storyboard 已批准。');
-  };
+  const acceptScript = async (scriptId: string) => { await requestApproval('SCRIPT', scriptId); };
+  const approveStoryboard = async (storyboardId: string) => { await requestApproval('STORYBOARD', storyboardId); };
+
   const saveStoryboardEdit = async (storyboard: Storyboard) => { let scenes: unknown; try { scenes = JSON.parse(storyboardDrafts[storyboard.id] || JSON.stringify(storyboard.scenes)); } catch { setMessage('Storyboard 场景 JSON 格式不正确。'); return; } const response = await fetch(`/api/v1/projects/${projectId}/storyboards/${storyboard.id}/revisions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scenes, createdBy: 'operator' }) }); setMessage(response.ok ? `Storyboard V${storyboard.revision + 1} 已保存。` : await responseMessage(response, 'Storyboard 编辑保存失败。')); if (response.ok) { setStoryboardDrafts((current) => { const next = { ...current }; delete next[storyboard.id]; return next; }); await refresh(); } };
   const requestApproval = async (targetType: 'SCRIPT' | 'STORYBOARD', targetId: string) => { const response = await fetch(`/api/v1/projects/${projectId}/approvals`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ targetType, targetId, targetRevisionId: targetId, status: 'PENDING', approver: 'operator', evidence: { source: 'director-workspace' } }) }); setMessage(response.ok ? '已提交到 Approval Gate，请在审批页批准明确版本。' : await responseMessage(response, '提交审批失败。')); };
 

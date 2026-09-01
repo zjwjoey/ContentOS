@@ -44,6 +44,11 @@ export class ApprovalService {
   private async assertProject(projectId: string): Promise<void> { if (!(await this.projects.get(projectId))) throw new Error(`Project ${projectId} not found`); }
 
   async create(input: ApprovalCreateInput): Promise<ApprovalRecord> {
+    if (input.status !== 'PENDING') throw new Error(`Approval decision must start as PENDING, got ${input.status}`);
+    return this.insert(input);
+  }
+
+  private async insert(input: ApprovalCreateInput): Promise<ApprovalRecord> {
     const decision: ApprovalDecisionV0 = { schemaVersion: input.schemaVersion || 'APPROVAL_V0', projectId: input.projectId, targetType: input.targetType, targetId: input.targetId, targetRevisionId: input.targetRevisionId, status: input.status, approver: input.approver, ...(input.reason !== undefined ? { reason: input.reason } : {}), ...(input.evidence !== undefined ? { evidence: input.evidence } : {}) };
     validateApprovalDecision(decision);
     await this.assertProject(decision.projectId);
@@ -69,6 +74,6 @@ export class ApprovalService {
     const current = await this.getCurrent(projectId, targetType, targetId, targetRevisionId);
     if (!current) throw new Error('Approval decision not found');
     if (current.status !== 'PENDING') throw new Error(`Approval decision must be PENDING, got ${current.status}`);
-    return this.create({ projectId, targetType, targetId, targetRevisionId, status, approver, ...(reason !== undefined ? { reason } : {}), evidence: current.evidence });
+    return this.insert({ projectId, targetType, targetId, targetRevisionId, status, approver, ...(reason !== undefined ? { reason } : {}), evidence: current.evidence });
   }
 }

@@ -87,6 +87,26 @@ test('Publisher Worker durably publishes and records external post', async () =>
   } finally { if (projectId) await cleanup(db, projectId, root); await db.end(); }
 });
 
+test('Publisher Worker cannot consume a future scheduled Job early', async () => {
+  const db = await createDatabase(databaseUrl); const data = await fixture(db);
+  try {
+    const future = new Date(Date.now() + 60_000).toISOString();
+    await db.query("update publisher_requests set status = 'SCHEDULED', desired_publish_at = $2 where id = $1", [data.requestId, future]);
+    await db.query('update publisher_request_revisions set desired_publish_at = $2 where request_id = $1', [data.requestId, future]);
+    await db.query('update jobs set scheduled_at = $2 where id = $1', [data.job.id, future]);
+    await db.query("update jobs set payload = jsonb_set(payload::jsonb, '{desiredPublishAt}', to_jsonb($2::text)) where id = $1", [data.job.id, future]);
+    const worker = createPublisherWorker({ service: data.publisher, jobs: data.jobs, projects: data.projects, assets: data.assets, fakePublisher: data.fake, workerId: 'publisher-worker-scheduled-early' });
+    await worker.start();
+    const result = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
+    assert.equal(result.state, 'QUEUED');
+    assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'SCHEDULED');
+    await db.query("update jobs set payload = payload - 'desiredPublishAt' where id = $1", [data.job.id]);
+    const stalePayloadResult = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
+    assert.equal(stalePayloadResult.state, 'QUEUED');
+    await worker.shutdown('test');
+  } finally { await cleanup(db, data.projectId, data.root); await db.end(); }
+});
+
 test('Publisher Worker resolves a project-owned READY cover into the immutable publish snapshot', async () => {
   const db = await createDatabase(databaseUrl);
   let projectId = '';

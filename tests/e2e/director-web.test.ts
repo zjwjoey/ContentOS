@@ -8,7 +8,8 @@ test('Director Operator UI is API-backed and keeps credentials out of browser co
   assert.match(page, /scripts\/generate/);
   assert.match(page, /storyboards\/generate/);
   assert.match(page, /scripts\/\$\{script\.id\}\/revisions/);
-  assert.match(page, /storyboards\/\$\{storyboardId\}\/approve/);
+  assert.match(page, /\/approvals/);
+  assert.doesNotMatch(page, /scripts\/\$\{scriptId\}\/accept|storyboards\/\$\{storyboardId\}\/approve/);
   assert.doesNotMatch(page, /apiKey|accessToken|refreshToken|cookie|authorization/i);
 });
 
@@ -37,8 +38,7 @@ test('Director Operator exposes project creation, complete Brief inputs and Job 
   assert.match(director, /setInterval/);
   assert.match(director, /clearInterval/);
   assert.match(director, /error/);
-  assert.match(director, /scripts\/\$\{scriptId\}\/accept.*body: '\{\}'/);
-  assert.match(director, /storyboards\/\$\{storyboardId\}\/approve.*body: '\{\}'/);
+  assert.match(director, /approvals/);
 });
 
 test('Director handoff requires an accepted Script and matching approved Storyboard', async () => {

@@ -53,6 +53,7 @@ const handoffInput = z.object({
 }).superRefine((value, context) => {
   if (new Set(value.accountIds).size !== value.accountIds.length) context.addIssue({ code: z.ZodIssueCode.custom, path: ['accountIds'], message: 'accountIds must not contain duplicates' });
 });
+const revisionEditInput = requestInput.shape.revision;
 
 export interface PublisherRouteDependencies {
   projects: ProjectService;
@@ -164,7 +165,7 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Publisher request input', details: parsed.error.issues } });
     const asset = await assets.getPublishableAsset(projectId, parsed.data.revision.assetId);
     if (!asset || asset.checksum !== parsed.data.revision.assetChecksum) return reply.code(422).send({ error: { code: 'PUBLISHER_ASSET_INVALID', message: 'A READY VIDEO_RENDER Asset owned by this project and matching the checksum is required', details: [] } });
-    if (parsed.data.revision.coverAssetId) { const cover = await assets.getProjectAsset(projectId, parsed.data.revision.coverAssetId); if (!cover || cover.lifecycle !== 'READY') return reply.code(422).send({ error: { code: 'PUBLISHER_COVER_ASSET_INVALID', message: '封面 Asset 必须属于当前项目且处于 READY 状态', details: [] } }); }
+    if (parsed.data.revision.coverAssetId) { const cover = await assets.getProjectAsset(projectId, parsed.data.revision.coverAssetId); if (!cover || cover.lifecycle !== 'READY' || cover.kind !== 'VIDEO_RENDER') return reply.code(422).send({ error: { code: 'PUBLISHER_COVER_ASSET_INVALID', message: '封面 Asset 必须属于当前项目、处于 READY 且为支持的媒体类型', details: [] } }); }
     try {
       const revision = parsed.data.revision;
       const result = await publisher.createRequest({ projectId, accountId: parsed.data.accountId, idempotencyKey: parsed.data.idempotencyKey, correlationId: parsed.data.correlationId, revision: { assetId: revision.assetId, assetChecksum: revision.assetChecksum, title: revision.title, description: revision.description, hashtags: revision.hashtags || [], ...(revision.coverAssetId ? { coverAssetId: revision.coverAssetId } : {}), desiredPublishAt: revision.desiredPublishAt, createdBy: revision.createdBy } });
@@ -181,7 +182,7 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid project Publisher handoff input', details: parsed.error.issues } });
     const asset = await assets.getPublishableAsset(projectId, parsed.data.assetId);
     if (!asset) return reply.code(422).send({ error: { code: 'PUBLISHER_ASSET_INVALID', message: 'A READY VIDEO_RENDER Asset owned by this project is required', details: [] } });
-    if (parsed.data.coverAssetId) { const cover = await assets.getProjectAsset(projectId, parsed.data.coverAssetId); if (!cover || cover.lifecycle !== 'READY') return reply.code(422).send({ error: { code: 'PUBLISHER_COVER_ASSET_INVALID', message: '封面 Asset 必须属于当前项目且处于 READY 状态', details: [] } }); }
+    if (parsed.data.coverAssetId) { const cover = await assets.getProjectAsset(projectId, parsed.data.coverAssetId); if (!cover || cover.lifecycle !== 'READY' || cover.kind !== 'VIDEO_RENDER') return reply.code(422).send({ error: { code: 'PUBLISHER_COVER_ASSET_INVALID', message: '封面 Asset 必须属于当前项目、处于 READY 且为支持的媒体类型', details: [] } }); }
     const accounts = await Promise.all(parsed.data.accountIds.map((accountId) => publisher.getAccount(projectId, accountId)));
     if (accounts.some((account) => !account)) return reply.code(422).send({ error: { code: 'PUBLISHER_ACCOUNT_INVALID', message: 'Every Publisher account must belong to this project', details: [] } });
     try {
@@ -227,6 +228,28 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     return safeAggregate(aggregate);
   });
 
+  app.post('/api/v1/projects/:projectId/publisher/requests/:requestId/revisions', async (request, reply) => {
+    const projectId = projectIdOf(request); const requestId = requestIdOf(request);
+    if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    const aggregate = await publisher.getRequestAggregate(projectId, requestId);
+    if (!aggregate) return reply.code(404).send({ error: { code: 'PUBLISHER_REQUEST_NOT_FOUND', message: 'Publisher request not found', details: [] } });
+    const parsed = revisionEditInput.safeParse(request.body);
+    if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Publisher revision input', details: parsed.error.issues } });
+    const asset = await assets.getPublishableAsset(projectId, parsed.data.assetId);
+    if (!asset || asset.checksum !== parsed.data.assetChecksum) return reply.code(422).send({ error: { code: 'PUBLISHER_ASSET_INVALID', message: 'A READY render Asset matching the checksum is required', details: [] } });
+    if (parsed.data.coverAssetId) {
+      const cover = await assets.getProjectAsset(projectId, parsed.data.coverAssetId);
+      if (!cover || cover.lifecycle !== 'READY' || cover.kind !== 'VIDEO_RENDER') return reply.code(422).send({ error: { code: 'PUBLISHER_COVER_ASSET_INVALID', message: '封面 Asset 必须属于当前项目、处于 READY 且为支持的媒体类型', details: [] } });
+    }
+    try {
+      const revisionInput = { assetId: parsed.data.assetId, assetChecksum: parsed.data.assetChecksum, title: parsed.data.title, description: parsed.data.description, hashtags: parsed.data.hashtags || [], desiredPublishAt: parsed.data.desiredPublishAt, createdBy: parsed.data.createdBy } as { assetId: string; assetChecksum: string; title: string; description: string; hashtags: string[]; desiredPublishAt: string | null; createdBy: string; coverAssetId?: string };
+      if (parsed.data.coverAssetId) revisionInput.coverAssetId = parsed.data.coverAssetId;
+      const revision = await publisher.addRevision(requestId, revisionInput);
+      await approvals.create({ projectId, targetType: 'PUBLISH', targetId: requestId, targetRevisionId: revision.id, status: 'PENDING', approver: parsed.data.createdBy, evidence: { source: 'PUBLISHER_REVISION_EDIT_V0' } });
+      return reply.code(201).send(revision);
+    } catch (error) { return reply.code(409).send({ error: { code: 'PUBLISHER_REVISION_CONFLICT', message: error instanceof Error ? error.message : 'Publisher revision conflict', details: [] } }); }
+  });
+
   app.post('/api/v1/projects/:projectId/publisher/requests/:requestId/queue', async (request, reply) => {
     const projectId = projectIdOf(request);
     const requestId = requestIdOf(request);
@@ -238,8 +261,9 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     const idempotencyKey = `publisher:publish:${requestId}:${aggregate.revision.id}`;
     const jobId = `job-publish-${requestId}-${aggregate.revision.revision}`;
     const payload = await publisher.buildPublishJobPayload(projectId, requestId, jobId, null);
-    const job = await jobs.createIdempotent({ id: jobId, type: 'PUBLISH', projectId, payload, idempotencyKey, maxAttempts: 3 });
-    if (aggregate.request.status !== 'QUEUED') await publisher.transitionRequest(requestId, 'QUEUED');
+    const job = await jobs.createIdempotent({ id: jobId, type: 'PUBLISH', projectId, payload, idempotencyKey, maxAttempts: 3, scheduledAt: aggregate.revision.desiredPublishAt });
+    const scheduled = aggregate.request.desiredPublishAt && new Date(aggregate.request.desiredPublishAt).getTime() > Date.now();
+    if (aggregate.request.status !== (scheduled ? 'SCHEDULED' : 'QUEUED')) await publisher.transitionRequest(requestId, scheduled ? 'SCHEDULED' : 'QUEUED');
     await refreshProjectPublishingStatus(projectId, projects, publisher, assets);
     return reply.code(202).send({ jobId: job.id, requestId, state: job.state });
   });

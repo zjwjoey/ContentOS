@@ -6,6 +6,8 @@ export interface BrowserPage {
   click(selector: string): Promise<void>;
   waitFor(selector: string, timeoutMs?: number): Promise<void>;
   screenshot(path: string): Promise<void>;
+  textContent?(selector: string): Promise<string | null>;
+  getAttribute?(selector: string, name: string): Promise<string | null>;
 }
 
 export interface BrowserSession {

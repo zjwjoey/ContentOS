@@ -27,3 +27,22 @@ test('Approval binds publish approval to one concrete Publisher Revision', async
     await db.end();
   }
 });
+
+test('Approval creation never starts in an approved state', async () => {
+  const db = await createDatabase(databaseUrl);
+  let projectId = '';
+  try {
+    await migrateUp(db);
+    const project = await new ProjectService(db).create(`Approval pending ${randomUUID()}`);
+    projectId = project.id;
+    const approvals = new ApprovalService(db);
+    await assert.rejects(
+      () => approvals.create({ projectId, targetType: 'SCRIPT', targetId: 'script-1', targetRevisionId: 'script-revision-1', status: 'APPROVED', approver: 'operator' }),
+      /PENDING/,
+    );
+  } finally {
+    if (projectId) await db.query('delete from approval_decisions where project_id = $1', [projectId]);
+    if (projectId) await db.query('delete from content_projects where id = $1', [projectId]);
+    await db.end();
+  }
+});
