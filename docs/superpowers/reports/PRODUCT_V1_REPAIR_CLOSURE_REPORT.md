@@ -5,8 +5,8 @@
 - **Status:** PASS — branch is ready for PR review; no merge performed.
 - **Branch:** `codex/product-v1-repair`
 - **Baseline:** `origin/main` at `55ee1059c309b705e2f1608804a1c3ba0137bb1e`
-- **Final code HEAD:** `f416532` (`fix: close final product v1 acceptance gaps`)
-- **Ahead / Behind (code commits):** 7 / 0; closure documentation commits are additional, and the branch is not behind `origin/main`.
+- **Final code HEAD:** `370fb47` (`fix: harden approval and wechat acceptance paths`)
+- **Ahead / Behind (code commits):** 8 / 0; closure documentation commits are included in the branch, and the branch is not behind `origin/main`.
 - **Scope:** acceptance-gap repair only; no new product module or V2 work.
 
 ### Commits in the repair branch
