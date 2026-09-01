@@ -58,12 +58,19 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await page.getByLabel('必须避免').fill('真实平台调用');
     await page.getByRole('button', { name: '保存 Brief 版本' }).click();
     await page.getByRole('button', { name: '生成 Script' }).click();
-    await page.getByRole('button', { name: '接受 Script' }).waitFor({ state: 'visible', timeout: 30_000 });
-    await page.getByRole('button', { name: '接受 Script' }).click();
+    await page.getByRole('button', { name: '提交 Script Approval' }).waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByRole('button', { name: '提交 Script Approval' }).click();
+    await page.goto(`${baseUrl}/projects/${projectId}/approvals`, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: '批准此 Revision' }).first().click();
+    await page.goto(`${baseUrl}/projects/${projectId}/director`, { waitUntil: 'domcontentloaded' });
+    await page.getByText('ACCEPTED', { exact: false }).first().waitFor({ state: 'visible', timeout: 30_000 });
     await page.getByRole('button', { name: '生成 Storyboard Job' }).click();
-    try { await page.getByRole('button', { name: '批准 Storyboard' }).waitFor({ state: 'visible', timeout: 30_000 }); }
+    try { await page.getByRole('button', { name: '提交 Storyboard Approval' }).waitFor({ state: 'visible', timeout: 30_000 }); }
     catch (error) { throw new Error(`Storyboard generation did not become actionable: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
-    await page.getByRole('button', { name: '批准 Storyboard' }).click();
+    await page.getByRole('button', { name: '提交 Storyboard Approval' }).click();
+    await page.goto(`${baseUrl}/projects/${projectId}/approvals`, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: '批准此 Revision' }).first().click();
+    await page.goto(`${baseUrl}/projects/${projectId}/director`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('link', { name: '进入 Video' }).click();
 
     const sourceCheckboxes = page.locator('fieldset input[type="checkbox"]');
@@ -128,7 +135,11 @@ test('operator browser completes Fake Publisher success, retry, human-action and
     await outcome.selectOption('BROWSER_CRASH');
     await waitForText(page, '开发模拟结果已更新');
     const reconciling = await createAndApprovePublish(page, '浏览器未知发布状态', '浏览器崩溃后必须走 reconcile');
-    await reconciling.getByRole('button', { name: '进入发布队列' }).click();
+    try {
+      await reconciling.getByRole('button', { name: '进入发布队列' }).click();
+    } catch (error) {
+      throw new Error(`Reconciliation request was not queueable: ${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`);
+    }
     await reconciling.getByText('UNKNOWN_EXTERNAL_STATE').waitFor({ state: 'visible', timeout: 30_000 });
     await reconciling.getByText('ExternalPost', { exact: false }).waitFor({ state: 'visible', timeout: 30_000 });
     assert.equal(await reconciling.getByText('PublishAttempt #', { exact: false }).count(), 2, 'reconciliation must preserve publish and reconcile attempts');
@@ -242,8 +253,18 @@ test('operator browser completes Standalone Quick Edit upload, adjustment and re
     revision = await waitForRevision(revision);
     await page.getByRole('button', { name: 'TRIM' }).click();
     revision = await waitForRevision(revision);
-    await page.getByLabel('Manifest 时间线').getByRole('button').nth(1).click();
-    await page.getByRole('button', { name: 'REORDER' }).click();
+    const reorderTimeline = page.getByLabel('Manifest 时间线').getByRole('button');
+    let reorderSucceeded = false;
+    for (let index = 1; index < await reorderTimeline.count(); index += 1) {
+      await reorderTimeline.nth(index).click();
+      const reorderResponse = page.waitForResponse((response) => response.url().includes('/api/v1/video/quick-edits/') && response.url().endsWith('/adjustments') && response.request().method() === 'POST', { timeout: 15_000 });
+      await page.getByRole('button', { name: 'REORDER' }).click();
+      const reorderResult = await reorderResponse;
+      if (reorderResult.status() === 201) { reorderSucceeded = true; break; }
+      const reorderBody = await reorderResult.text();
+      if (reorderResult.status() !== 409 || !reorderBody.includes('Adjacent duplicate clips are not allowed')) throw new Error(`REORDER failed with ${reorderResult.status()}: ${reorderBody}`);
+    }
+    assert.equal(reorderSucceeded, true, 'REORDER must find a valid adjacent swap');
     revision = await waitForRevision(revision);
     await page.getByRole('button', { name: 'REMOVE' }).click();
     revision = await waitForRevision(revision);

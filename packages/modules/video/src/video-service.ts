@@ -197,7 +197,7 @@ export class VideoService {
     }
     const existing = await this.db.query<{ render_id: string; manifest_id: string; manifest: EditManifestV0; render_status: string; output_asset_id: string | null }>('select r.id as render_id, r.manifest_id, m.manifest, r.status as render_status, r.output_asset_id from renders r join edit_manifests m on m.id = r.manifest_id and m.workspace_id = r.workspace_id where r.job_id = $1 and r.workspace_id = $2 order by r.created_at desc, r.id desc limit 1', [job.id, payload.workspaceId]);
     const prior = existing.rows[0];
-    if (prior) return { manifestId: prior.manifest_id, renderId: prior.render_id, manifest: prior.manifest, renderStatus: prior.render_status, outputAssetId: prior.output_asset_id };
+    if (prior) return { manifestId: prior.manifest_id, renderId: prior.render_id, manifest, renderStatus: prior.render_status, outputAssetId: prior.output_asset_id };
     const renderId = `render-${randomUUID()}`;
     await this.db.query('insert into renders (id, project_id, workspace_id, manifest_id, job_id, status, diagnostics) values ($1, null, $2, $3, $4, $5, $6)', [renderId, payload.workspaceId, payload.manifestId, job.id, 'QUEUED', { manifestRevision: payload.manifestRevision }]);
     return { manifestId: payload.manifestId, renderId, manifest, renderStatus: 'QUEUED', outputAssetId: null };
