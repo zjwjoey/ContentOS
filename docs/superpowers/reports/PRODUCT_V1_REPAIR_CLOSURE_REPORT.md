@@ -5,13 +5,13 @@
 - **Status:** PASS — branch is ready for PR review; no merge performed.
 - **Branch:** `codex/product-v1-repair`
 - **Baseline:** `origin/main` at `55ee1059c309b705e2f1608804a1c3ba0137bb1e`
-- **Final code HEAD:** `aa717c8` (`fix: close publisher adapter acceptance gaps`)
-- **Ahead / Behind (code commits):** 14 / 0 at the final code review; the branch is not behind `origin/main`.
+- **Final code HEAD:** `81fcb20` (`fix: preserve uncertain publisher state`)
+- **Ahead / Behind (code commits):** 16 / 0 at final verification; the branch is not behind `origin/main`.
 - **Scope:** acceptance-gap repair only; no new product module or V2 work.
 
 ### Commits in the repair branch
 
-`0463543` design spec, `2df10f9` acceptance repair plan, `88f8c7b` acceptance gaps, `ed44ae8` durable scheduling, `9920bca` Approval Gate, `028698e` lockfile sync, `f416532` final acceptance fixes, followed by closure-report documentation commits.
+`0463543` design spec, `2df10f9` acceptance repair plan, `88f8c7b` acceptance gaps, `ed44ae8` durable scheduling, `9920bca` Approval Gate, `028698e` lockfile sync, `f416532` final acceptance fixes, `aa717c8` publisher adapter hardening, and `81fcb20` uncertain-state safeguards, followed by closure-report documentation commits.
 
 ### Files changed versus baseline
 
@@ -59,7 +59,7 @@ Focused Standalone Quick Edit regression coverage also passed: **4/4** integrati
 ## Final review notes
 
 - PostgreSQL is the business truth; browser and migration checks ran against the isolated test cluster, not a production database.
-- Approval/Director state writes remain ordered across module services rather than sharing a cross-module transaction. The PENDING preflight and post-transition persistence make failure states retryable, but this is an acknowledged operational limitation, not a claim of cross-module atomicity.
+- Approval/Director state writes remain ordered across module services rather than sharing a cross-module transaction. The PENDING preflight prevents bypasses; a write failure in the ordered cross-module window remains an operational repair case. This is an acknowledged limitation, not a claim of cross-module atomicity.
 - Real Douyin/WeChat irreversible publishing, production credentials, real browser sessions, and AI quality are not live-verified. The release gate covers contracts, fail-closed adapters, Fake Publisher journeys, reconciliation, and secret-safe payloads.
 - `pnpm install --frozen-lockfile` reported pnpm's existing ignored-build-script warning for `esbuild`; it did not affect any gate result.
 
