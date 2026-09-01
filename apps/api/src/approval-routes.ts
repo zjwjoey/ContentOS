@@ -76,10 +76,13 @@ export function registerApprovalRoutes(app: FastifyInstance, dependencies: Appro
     if (!targetType.success || !parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid approval action', details: [...(targetType.success ? [] : targetType.error.issues), ...(parsed.success ? [] : parsed.error.issues)] } });
     try {
       const targetId = await resolveTargetId(params.projectId, targetType.data, params.targetId, params.targetRevisionId);
-      const approved = await approvals.approve(params.projectId, targetType.data, targetId, params.targetRevisionId, parsed.data.approver);
+      const current = await approvals.getCurrent(params.projectId, targetType.data, targetId, params.targetRevisionId);
+      if (!current) throw new Error('Approval decision not found');
+      if (current.status !== 'PENDING') throw new Error(`Approval decision must be PENDING, got ${current.status}`);
       if (dependencies.director && targetType.data === 'SCRIPT') await dependencies.director.acceptScript(params.projectId, params.targetRevisionId);
       if (dependencies.director && targetType.data === 'STORYBOARD') await dependencies.director.approveStoryboard(params.projectId, params.targetRevisionId);
-      return approved;
+      // Advance Director first: if its transition fails, no APPROVED decision is persisted.
+      return await approvals.approve(params.projectId, targetType.data, targetId, params.targetRevisionId, parsed.data.approver);
     }
     catch (error) { return reply.code(409).send({ error: { code: 'APPROVAL_TRANSITION_CONFLICT', message: error instanceof Error ? error.message : 'Approval transition conflict', details: [] } }); }
   });
