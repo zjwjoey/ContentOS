@@ -132,6 +132,8 @@ test('Publisher service guards transitions, appends attempts and deduplicates ex
     const post = await fixtureResult.publisher.recordExternalPost({ requestId, accountId: fixtureResult.accountId, platformId: 'fake-platform', externalPostId: 'fake-post-1', externalUrl: null });
     const duplicatePost = await fixtureResult.publisher.recordExternalPost({ requestId, accountId: fixtureResult.accountId, platformId: 'fake-platform', externalPostId: 'fake-post-1', externalUrl: null });
     assert.equal(duplicatePost.id, post.id);
+    const second = await fixtureResult.publisher.createRequest({ projectId: fixtureResult.projectId, accountId: fixtureResult.accountId, idempotencyKey: `duplicate-external-${randomUUID()}`, correlationId: 'duplicate-external', revision: { assetId: fixtureResult.request.revision.assetId, assetChecksum: fixtureResult.request.revision.assetChecksum, title: 'Second request', description: '', desiredPublishAt: null, createdBy: 'test' } });
+    await assert.rejects(() => fixtureResult.publisher.recordExternalPost({ requestId: second.request.id, accountId: fixtureResult.accountId, platformId: 'fake-platform', externalPostId: 'fake-post-1', externalUrl: null }), /already bound/);
     assert.equal((await db.query('select count(*)::int as count from publisher_attempts where request_id = $1', [requestId])).rows[0]?.count, 1);
     assert.equal((await db.query('select count(*)::int as count from publisher_external_posts where request_id = $1', [requestId])).rows[0]?.count, 1);
   } finally {

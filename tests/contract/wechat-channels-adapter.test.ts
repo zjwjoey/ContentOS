@@ -17,6 +17,7 @@ class FakePage implements BrowserPage {
   async click(selector: string): Promise<void> { this.calls.push(`click:${selector}`); }
   async waitFor(selector: string): Promise<void> { this.calls.push(`wait:${selector}`); if (this.visibleAfterWait[selector]) this.visible[selector] = true; }
   async screenshot(path: string): Promise<void> { this.calls.push(`screenshot:${path}`); }
+  async getAttribute(selector: string, name: string): Promise<string | null> { this.calls.push(`attribute:${selector}:${name}`); return name === 'data-post-id' ? this.textValues[selector] || null : null; }
   async textContent(selector: string): Promise<string | null> { this.calls.push(`text:${selector}`); return this.textValues[selector] || null; }
   isSuccess(): boolean { return this.success; }
 }
@@ -63,6 +64,7 @@ test('WeChat Channels waits for an asynchronous success marker after submit', as
   assert.equal(result.status, 'PUBLISHED');
   assert.equal(result.externalPostId, 'wechat-post-1');
   assert.equal(page.calls.includes('wait:text=发布成功'), true);
+  assert.equal(page.calls.includes('attribute:[data-post-id]:data-post-id'), true);
 });
 
 test('WeChat Channels never reports success without an external post id', async () => {

@@ -158,8 +158,15 @@ async function executePublish(options: PublisherWorkerOptions, job: JobRecord, j
   }
 
   if (result.status === 'PUBLISHED' && result.externalPostId) {
+    try {
+      await service.recordExternalPost({ requestId: payload.requestId, accountId: account.id, platformId: account.platformId, externalPostId: result.externalPostId, externalUrl: null });
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('already bound')) throw error;
+      await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_CONFLICT' } });
+      await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN', message: 'External post identity conflict requires human action' });
+      throw new PublisherHandlerError('PUBLISH_EXTERNAL_POST_CONFLICT', 'External post identity conflict requires human action', false);
+    }
     await service.finishAttempt(attempt.id, { status: 'SUCCEEDED', diagnostics: { outcome: 'PUBLISHED' } });
-    await service.recordExternalPost({ requestId: payload.requestId, accountId: account.id, platformId: account.platformId, externalPostId: result.externalPostId, externalUrl: null });
     await service.transitionRequest(payload.requestId, 'PUBLISHED');
     await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'PUBLISHED', requestId: payload.requestId, externalPostId: result.externalPostId };
@@ -204,8 +211,15 @@ async function executeReconcile(options: PublisherWorkerOptions, job: JobRecord,
   }
 
   if (result.status === 'PUBLISHED' && result.externalPostId) {
+    try {
+      await service.recordExternalPost({ requestId: payload.requestId, accountId: account.id, platformId: account.platformId, externalPostId: result.externalPostId, externalUrl: null });
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('already bound')) throw error;
+      await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_CONFLICT' } });
+      await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN', message: 'External post identity conflict requires human action' });
+      throw new PublisherHandlerError('PUBLISH_EXTERNAL_POST_CONFLICT', 'External post identity conflict requires human action', false);
+    }
     await service.finishAttempt(attempt.id, { status: 'SUCCEEDED', diagnostics: { outcome: 'PUBLISHED' } });
-    await service.recordExternalPost({ requestId: payload.requestId, accountId: account.id, platformId: account.platformId, externalPostId: result.externalPostId, externalUrl: null });
     await service.transitionRequest(payload.requestId, 'PUBLISHED');
     await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'PUBLISHED', requestId: payload.requestId, externalPostId: result.externalPostId };
