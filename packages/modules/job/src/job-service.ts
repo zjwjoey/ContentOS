@@ -5,7 +5,7 @@ export type JobState = 'QUEUED' | 'RUNNING' | 'RETRY_WAIT' | 'FAILED' | 'SUCCEED
 export interface JobRecord { id: string; projectId: string | null; workspaceId: string | null; type: string; state: JobState; payload: unknown; result: unknown; error: unknown; attemptCount: number; maxAttempts: number; leaseOwner: string | null; leaseExpiresAt: Date | null; progress: unknown; }
 export interface JobSummary { id: string; projectId: string; type: string; state: JobState; attemptCount: number; maxAttempts: number; createdAt: string; }
 export interface ProjectJobStateSummary { stateCounts: Record<string, number>; videoStateCounts: Record<string, number>; }
-export interface CreateJobInput { id: string; type: string; projectId: string | null; workspaceId?: string | null; payload: unknown; idempotencyKey: string; maxAttempts: number; }
+export interface CreateJobInput { id: string; type: string; projectId: string | null; workspaceId?: string | null; payload: unknown; idempotencyKey: string; maxAttempts: number; scheduledAt?: Date | string | null; }
 export type JobHeartbeat = 'ACTIVE' | 'CANCEL_REQUESTED' | 'STALE';
 export type JobAttemptFenceResult<T> = { executed: true; value: T } | { executed: false };
 export type JobAttemptCommitResult<T> = { executed: true; value: T; job: JobRecord } | { executed: false; job: JobRecord };
@@ -39,12 +39,12 @@ export class JobService {
   constructor(private readonly db: Pool) {}
 
   async create(input: CreateJobInput): Promise<JobRecord> {
-    const result = await this.db.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts) values ($1, $2, $3, $4, $5, $6, $7, $8) returning *', [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts]);
+    const result = await this.db.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts, scheduled_at) values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now())) returning *', [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts, input.scheduledAt || null]);
     return mapJob(result.rows[0] as Record<string, unknown>);
   }
 
   async createIdempotent(input: CreateJobInput): Promise<JobRecord> {
-    const result = await this.db.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts) values ($1, $2, $3, $4, $5, $6, $7, $8) on conflict (idempotency_key) do update set id = jobs.id returning *', [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts]);
+    const result = await this.db.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts, scheduled_at) values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now())) on conflict (idempotency_key) do update set id = jobs.id returning *', [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts, input.scheduledAt || null]);
     return mapJob(result.rows[0] as Record<string, unknown>);
   }
 
@@ -96,7 +96,7 @@ export class JobService {
 
   async listRunnable(types: string[], limit = 10): Promise<JobRecord[]> {
     if (types.length === 0 || limit <= 0) return [];
-    const result = await this.db.query("select * from jobs where type = any($1::text[]) and (state = 'QUEUED' or (state = 'RETRY_WAIT' and (retry_at is null or retry_at <= now()))) and (type <> 'PUBLISH' or payload->>'desiredPublishAt' is null or (payload->>'desiredPublishAt')::timestamptz <= now()) order by created_at, id limit $2", [types, limit]);
+    const result = await this.db.query("select * from jobs where type = any($1::text[]) and scheduled_at <= now() and (state = 'QUEUED' or (state = 'RETRY_WAIT' and (retry_at is null or retry_at <= now()))) order by created_at, id limit $2", [types, limit]);
     return result.rows.map((row) => mapJob(row as Record<string, unknown>));
   }
 
@@ -107,8 +107,7 @@ export class JobService {
       const selected = await client.query('select * from jobs where id = $1 for update', [id]);
       const row = selected.rows[0] as Record<string, unknown> | undefined;
       if (!row || !['QUEUED', 'RETRY_WAIT'].includes(String(row.state))) { await client.query('rollback'); return null; }
-      const scheduledAt = String((row.payload as { desiredPublishAt?: unknown } | null)?.desiredPublishAt || '');
-      if (String(row.type) === 'PUBLISH' && scheduledAt && !Number.isNaN(Date.parse(scheduledAt)) && Date.parse(scheduledAt) > Date.now()) { await client.query('rollback'); return null; }
+      if (row.scheduled_at && new Date(String(row.scheduled_at)).getTime() > Date.now()) { await client.query('rollback'); return null; }
       const attemptNumber = Number(row.attempt_count) + 1;
       const attemptId = randomUUID();
       const leaseExpires = new Date(Date.now() + leaseMs);

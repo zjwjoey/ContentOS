@@ -261,7 +261,7 @@ export function registerPublisherRoutes(app: FastifyInstance, dependencies: Publ
     const idempotencyKey = `publisher:publish:${requestId}:${aggregate.revision.id}`;
     const jobId = `job-publish-${requestId}-${aggregate.revision.revision}`;
     const payload = await publisher.buildPublishJobPayload(projectId, requestId, jobId, null);
-    const job = await jobs.createIdempotent({ id: jobId, type: 'PUBLISH', projectId, payload, idempotencyKey, maxAttempts: 3 });
+    const job = await jobs.createIdempotent({ id: jobId, type: 'PUBLISH', projectId, payload, idempotencyKey, maxAttempts: 3, scheduledAt: aggregate.revision.desiredPublishAt });
     const scheduled = aggregate.request.desiredPublishAt && new Date(aggregate.request.desiredPublishAt).getTime() > Date.now();
     if (aggregate.request.status !== (scheduled ? 'SCHEDULED' : 'QUEUED')) await publisher.transitionRequest(requestId, scheduled ? 'SCHEDULED' : 'QUEUED');
     await refreshProjectPublishingStatus(projectId, projects, publisher, assets);
