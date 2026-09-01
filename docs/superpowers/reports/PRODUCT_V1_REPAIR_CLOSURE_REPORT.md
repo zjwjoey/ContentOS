@@ -6,8 +6,16 @@
 - **Branch:** `codex/product-v1-repair`
 - **Baseline:** `origin/main` at `55ee1059c309b705e2f1608804a1c3ba0137bb1e`
 - **Final code HEAD:** `f416532` (`fix: close final product v1 acceptance gaps`)
-- **Closure documentation:** committed after the code repair; final branch review is 9 commits ahead, 0 commits behind `origin/main`.
+- **Ahead / Behind (code commits):** 7 / 0; closure documentation commits are additional, and the branch is not behind `origin/main`.
 - **Scope:** acceptance-gap repair only; no new product module or V2 work.
+
+### Commits in the repair branch
+
+`0463543` design spec, `2df10f9` acceptance repair plan, `88f8c7b` acceptance gaps, `ed44ae8` durable scheduling, `9920bca` Approval Gate, `028698e` lockfile sync, `f416532` final acceptance fixes, followed by closure-report documentation commits.
+
+### Files changed versus baseline
+
+24 files; changes are limited to approval routes/service, Director compatibility/UI flow, publisher revision/scheduling/reconciliation and adapter safety, standalone video render reuse, acceptance tests, lockfile, and the repair plan/closure report.
 
 ## Implemented acceptance repairs
 
@@ -39,9 +47,20 @@ All commands were run from the repair worktree with an isolated PostgreSQL 16 te
 
 Focused Standalone Quick Edit regression coverage also passed: **4/4** integration/API/vertical-slice tests.
 
+## Required invariant status
+
+- **Approval consistency:** PASS with documented **LIMITATION** — PENDING preflight, non-PENDING rejection, transition-failure protection, wrong-project/revision checks, and duplicate approval checks are covered; cross-module writes are ordered rather than one atomic transaction.
+- **Durable scheduling:** PASS — `jobs.scheduled_at` gates both runnable listing and claim; retry and idempotency paths are covered.
+- **Publisher reconciliation:** PASS — unknown outcomes reconcile durably, deduplicate the confirmed ExternalPost, and terminate exhausted reconciliation as human action.
+- **Security:** PASS — public payloads and logs exclude credentials, cookies, authorization headers, storage paths, and private diagnostics; ownership checks are project-scoped.
+
 ## Final review notes
 
 - PostgreSQL is the business truth; browser and migration checks ran against the isolated test cluster, not a production database.
 - Approval/Director state writes remain ordered across module services rather than sharing a cross-module transaction. The PENDING preflight and post-transition persistence make failure states retryable, but this is an acknowledged operational limitation, not a claim of cross-module atomicity.
 - Real Douyin/WeChat irreversible publishing, production credentials, real browser sessions, and AI quality are not live-verified. The release gate covers contracts, fail-closed adapters, Fake Publisher journeys, reconciliation, and secret-safe payloads.
 - `pnpm install --frozen-lockfile` reported pnpm's existing ignored-build-script warning for `esbuild`; it did not affect any gate result.
+
+## External gates
+
+Real Douyin publishing, irreversible WeChat Channels submission, production credentials/browser sessions, and real AI quality remain explicitly deferred. No external platform side effect was executed.
