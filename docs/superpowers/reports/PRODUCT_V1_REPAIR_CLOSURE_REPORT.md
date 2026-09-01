@@ -5,8 +5,8 @@
 - **Status:** PASS — branch is ready for PR review; no merge performed.
 - **Branch:** `codex/product-v1-repair`
 - **Baseline:** `origin/main` at `55ee1059c309b705e2f1608804a1c3ba0137bb1e`
-- **Final code HEAD:** `370fb47` (`fix: harden approval and wechat acceptance paths`)
-- **Ahead / Behind (code commits):** 8 / 0; closure documentation commits are included in the branch, and the branch is not behind `origin/main`.
+- **Final code HEAD:** `aa717c8` (`fix: close publisher adapter acceptance gaps`)
+- **Ahead / Behind (code commits):** 14 / 0 at the final code review; the branch is not behind `origin/main`.
 - **Scope:** acceptance-gap repair only; no new product module or V2 work.
 
 ### Commits in the repair branch
@@ -24,6 +24,7 @@
 - Job scheduling uses durable `jobs.scheduled_at`; runnable listing and claim both enforce the schedule gate independently of mutable payload fields.
 - WeChat Channels only reports `PUBLISHED` after a confirmed external post ID; uncertain submission remains reconcilable and missing IDs require human action.
 - The concrete Playwright page adapter implements the external-post-ID text extraction required by the WeChat adapter contract.
+- External post identity conflicts across requests are fail-closed and become a human-action failure rather than a false `PUBLISHED` state.
 - Standalone Quick Edit retries an existing render with the current resolved manifest, preserving absolute workspace media paths for FFmpeg.
 - Operator browser acceptance uses the real Script/Storyboard Approval Gate and selects a valid reorder operation when random fixture ordering makes a candidate swap invalid.
 
@@ -34,8 +35,8 @@ All commands were run from the repair worktree with an isolated PostgreSQL 16 te
 | Gate | Result |
 |---|---|
 | `pnpm install --frozen-lockfile` | PASS; lockfile up to date |
-| `pnpm format` | PASS; 333 files |
-| `pnpm lint` | PASS; 130 TypeScript files |
+| `pnpm format` | PASS; 361 files |
+| `pnpm lint` | PASS; 132 TypeScript files |
 | `pnpm typecheck` | PASS |
 | `pnpm test` | **234 passed, 0 failed, 0 skipped** |
 | `pnpm run test:integration-closure` | **30 passed, 0 failed** |
