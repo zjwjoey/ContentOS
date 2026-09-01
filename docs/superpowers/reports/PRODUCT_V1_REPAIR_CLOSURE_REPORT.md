@@ -5,8 +5,8 @@
 - **Status:** PASS — branch is ready for PR review; no merge performed.
 - **Branch:** `codex/product-v1-repair`
 - **Baseline:** `origin/main` at `55ee1059c309b705e2f1608804a1c3ba0137bb1e`
-- **Final HEAD:** `f416532` (`fix: close final product v1 acceptance gaps`)
-- **Divergence:** 6 commits ahead, 0 commits behind `origin/main`; `origin/main` is an ancestor of HEAD.
+- **Final code HEAD:** `f416532` (`fix: close final product v1 acceptance gaps`)
+- **Closure documentation:** committed after the code repair; final branch review is 9 commits ahead, 0 commits behind `origin/main`.
 - **Scope:** acceptance-gap repair only; no new product module or V2 work.
 
 ## Implemented acceptance repairs
