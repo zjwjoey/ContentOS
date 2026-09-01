@@ -15,7 +15,7 @@
 
 ### Files changed versus baseline
 
-24 files; changes are limited to approval routes/service, Director compatibility/UI flow, publisher revision/scheduling/reconciliation and adapter safety, standalone video render reuse, acceptance tests, lockfile, and the repair plan/closure report.
+27 files; changes are limited to approval routes/service, Director compatibility/UI flow, publisher revision/scheduling/reconciliation and adapter safety, standalone video render reuse, acceptance tests, lockfile, and the repair plan/closure report.
 
 ## Implemented acceptance repairs
 
