@@ -11,6 +11,7 @@ class PlaywrightPage implements BrowserPage {
   async fill(selector: string, value: string): Promise<void> { await this.page.locator(selector).fill(value, { timeout: this.timeoutMs }); }
   async click(selector: string): Promise<void> { await this.page.locator(selector).click({ timeout: this.timeoutMs }); }
   async waitFor(selector: string, timeoutMs = this.timeoutMs): Promise<void> { await this.page.locator(selector).waitFor({ state: 'visible', timeout: timeoutMs }); }
+  textContent(selector: string): Promise<string | null> { return this.page.locator(selector).textContent({ timeout: this.timeoutMs }); }
   async screenshot(path: string): Promise<void> { await this.page.screenshot({ path, fullPage: true }); }
 }
 

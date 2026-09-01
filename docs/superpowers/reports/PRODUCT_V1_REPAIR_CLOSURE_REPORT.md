@@ -19,10 +19,11 @@
 
 ## Implemented acceptance repairs
 
-- Approval actions validate a current `PENDING` decision before advancing Director, and persist the approval result only after the Director transition succeeds. Direct Director compatibility transition endpoints fail closed with `DIRECTOR_APPROVAL_REQUIRED`.
+- Approval actions validate a current `PENDING` decision before advancing Director, and persist the approval result only after the Director transition succeeds. `ApprovalService.create` accepts only `PENDING`, and direct Director compatibility transition endpoints fail closed with `DIRECTOR_APPROVAL_REQUIRED`.
 - Publisher revision edits enforce request project ownership, asset checksum/ownership, and READY `VIDEO_RENDER` cover constraints.
 - Job scheduling uses durable `jobs.scheduled_at`; runnable listing and claim both enforce the schedule gate independently of mutable payload fields.
 - WeChat Channels only reports `PUBLISHED` after a confirmed external post ID; uncertain submission remains reconcilable and missing IDs require human action.
+- The concrete Playwright page adapter implements the external-post-ID text extraction required by the WeChat adapter contract.
 - Standalone Quick Edit retries an existing render with the current resolved manifest, preserving absolute workspace media paths for FFmpeg.
 - Operator browser acceptance uses the real Script/Storyboard Approval Gate and selects a valid reorder operation when random fixture ordering makes a candidate swap invalid.
 

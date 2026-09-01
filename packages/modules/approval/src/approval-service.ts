@@ -44,11 +44,7 @@ export class ApprovalService {
   private async assertProject(projectId: string): Promise<void> { if (!(await this.projects.get(projectId))) throw new Error(`Project ${projectId} not found`); }
 
   async create(input: ApprovalCreateInput): Promise<ApprovalRecord> {
-    if (input.status !== 'PENDING' && (input.targetType === 'SCRIPT' || input.targetType === 'STORYBOARD')) {
-      const table = input.targetType === 'SCRIPT' ? 'director_script_revisions' : 'director_storyboard_revisions';
-      const exists = await this.db.query(`select 1 from ${table} where id = $1 and project_id = $2`, [input.targetRevisionId, input.projectId]);
-      if (!exists.rowCount) throw new Error(`Approval decision must start as PENDING, got ${input.status}`);
-    }
+    if (input.status !== 'PENDING') throw new Error(`Approval decision must start as PENDING, got ${input.status}`);
     return this.insert(input);
   }
 
