@@ -78,13 +78,19 @@ importers:
 
   packages/modules: {}
 
+  packages/modules/benchmark: {}
+
   packages/shared: {}
 
   workers/asset-worker: {}
 
+  workers/benchmark-worker: {}
+
   workers/director-worker: {}
 
   workers/publisher-worker: {}
+
+  workers/review-worker: {}
 
   workers/video-worker: {}
 
