@@ -378,7 +378,9 @@ export class PublisherService {
   }
 
   async recordExternalPost(input: RecordPublisherExternalPostInput): Promise<PublisherExternalPost> {
-    const result = await this.db.query('insert into publisher_external_posts (id, request_id, account_id, platform_id, external_post_id, external_url) values ($1, $2, $3, $4, $5, $6) on conflict (account_id, platform_id, external_post_id) do update set external_url = coalesce(publisher_external_posts.external_url, excluded.external_url), last_reconciled_at = now() returning *', [`publisher-external-${randomUUID()}`, input.requestId, input.accountId, input.platformId, input.externalPostId, input.externalUrl]);
+    const inserted = await this.db.query('insert into publisher_external_posts (id, request_id, account_id, platform_id, external_post_id, external_url) values ($1, $2, $3, $4, $5, $6) on conflict (account_id, platform_id, external_post_id) do nothing returning *', [`publisher-external-${randomUUID()}`, input.requestId, input.accountId, input.platformId, input.externalPostId, input.externalUrl]);
+    const result = inserted.rows[0] ? inserted : await this.db.query('select * from publisher_external_posts where account_id = $1 and platform_id = $2 and external_post_id = $3', [input.accountId, input.platformId, input.externalPostId]);
+    if (String(result.rows[0]?.request_id) !== input.requestId) throw new Error('External post id is already bound to another request');
     return mapExternalPost(result.rows[0] as Record<string, unknown>);
   }
 }
