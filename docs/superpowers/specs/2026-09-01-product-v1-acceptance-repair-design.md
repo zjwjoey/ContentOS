@@ -1,6 +1,6 @@
 # ContentOS Product V1 Acceptance Repair Design
 
-日期：2026-09-01  
+日期：2026-09-01
 基线：`origin/main@55ee105`（PR #5 已使用普通 Merge commit 合并）
 
 ## 目标

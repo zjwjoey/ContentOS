@@ -161,10 +161,16 @@ async function executePublish(options: PublisherWorkerOptions, job: JobRecord, j
     try {
       await service.recordExternalPost({ requestId: payload.requestId, accountId: account.id, platformId: account.platformId, externalPostId: result.externalPostId, externalUrl: null });
     } catch (error) {
-      if (!(error instanceof Error) || !error.message.includes('already bound')) throw error;
-      await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_CONFLICT' } });
-      await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN', message: 'External post identity conflict requires human action' });
-      throw new PublisherHandlerError('PUBLISH_EXTERNAL_POST_CONFLICT', 'External post identity conflict requires human action', false);
+      if (error instanceof Error && error.message.includes('already bound')) {
+        await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_CONFLICT' } });
+        await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN', message: 'External post identity conflict requires human action' });
+        throw new PublisherHandlerError('PUBLISH_EXTERNAL_POST_CONFLICT', 'External post identity conflict requires human action', false);
+      }
+      await service.finishAttempt(attempt.id, { status: 'UNKNOWN', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_PERSISTENCE_UNKNOWN' } });
+      await service.transitionRequest(payload.requestId, 'RECONCILING', { code: 'UNKNOWN_EXTERNAL_STATE', message: 'External post persistence is uncertain; reconciliation is required' });
+      const reconcileJob = await ensureReconcileJob(service, jobs, payload);
+      await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
+      return { status: 'RECONCILING', requestId: payload.requestId, reconcileJobId: reconcileJob.id };
     }
     await service.finishAttempt(attempt.id, { status: 'SUCCEEDED', diagnostics: { outcome: 'PUBLISHED' } });
     await service.transitionRequest(payload.requestId, 'PUBLISHED');
@@ -214,10 +220,13 @@ async function executeReconcile(options: PublisherWorkerOptions, job: JobRecord,
     try {
       await service.recordExternalPost({ requestId: payload.requestId, accountId: account.id, platformId: account.platformId, externalPostId: result.externalPostId, externalUrl: null });
     } catch (error) {
-      if (!(error instanceof Error) || !error.message.includes('already bound')) throw error;
-      await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_CONFLICT' } });
-      await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN', message: 'External post identity conflict requires human action' });
-      throw new PublisherHandlerError('PUBLISH_EXTERNAL_POST_CONFLICT', 'External post identity conflict requires human action', false);
+      if (error instanceof Error && error.message.includes('already bound')) {
+        await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_CONFLICT' } });
+        await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN', message: 'External post identity conflict requires human action' });
+        throw new PublisherHandlerError('PUBLISH_EXTERNAL_POST_CONFLICT', 'External post identity conflict requires human action', false);
+      }
+      await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_PERSISTENCE_RETRY' } });
+      throw new PublisherHandlerError('RECONCILE_EXTERNAL_POST_PERSISTENCE', 'External post persistence failed during reconciliation', true);
     }
     await service.finishAttempt(attempt.id, { status: 'SUCCEEDED', diagnostics: { outcome: 'PUBLISHED' } });
     await service.transitionRequest(payload.requestId, 'PUBLISHED');

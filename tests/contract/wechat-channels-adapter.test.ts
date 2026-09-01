@@ -69,9 +69,12 @@ test('WeChat Channels waits for an asynchronous success marker after submit', as
 
 test('WeChat Channels never reports success without an external post id', async () => {
   const page = new FakePage({ 'input[type="file"]': true, textarea: true, 'button:has-text("发表")': true }, true, { 'text=发布成功': true });
-  const result = await new WeChatChannelsPlaywrightAdapter(factoryFor(page, []), { headed: false, allowSubmit: true }).publish(context, { ...snapshot, idempotencyKey: 'publish-wechat-missing-id' });
+  const adapter = new WeChatChannelsPlaywrightAdapter(factoryFor(page, []), { headed: false, allowSubmit: true });
+  const result = await adapter.publish(context, { ...snapshot, idempotencyKey: 'publish-wechat-missing-id' });
   assert.equal(result.status, 'FAILED');
   assert.equal(result.failure?.classification, 'HUMAN_ACTION_REQUIRED');
+  const retry = await adapter.publish(context, { ...snapshot, idempotencyKey: 'publish-wechat-missing-id' });
+  assert.equal(retry.status, 'UNKNOWN_EXTERNAL_STATE');
 });
 
 test('WeChat Channels normalizes browser failures before submission as retryable network errors', async () => {

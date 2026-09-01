@@ -56,7 +56,10 @@ export class WeChatChannelsPlaywrightAdapter implements PublisherAdapter {
           ? (await page.getAttribute(selectors.externalPostIdSelector, selectors.externalPostIdAttribute))?.trim()
           : page.textContent ? (await page.textContent(selectors.externalPostIdSelector))?.trim() : undefined)
         : undefined;
-      if (!externalPostId) return { status: 'FAILED', failure: failure('PLATFORM_CHANGED', 'HUMAN_ACTION_REQUIRED', 'WeChat Channels reported success without a durable external post id') };
+      if (!externalPostId) {
+        await this.state.markUnknown(stateKey);
+        return { status: 'FAILED', failure: failure('PLATFORM_CHANGED', 'HUMAN_ACTION_REQUIRED', 'WeChat Channels reported success without a durable external post id') };
+      }
       await this.state.markPublished(stateKey, externalPostId);
       return { status: 'PUBLISHED', externalPostId };
       });
