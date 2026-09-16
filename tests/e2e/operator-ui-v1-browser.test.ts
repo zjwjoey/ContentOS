@@ -5,10 +5,12 @@ import { readFile } from 'node:fs/promises';
 test('Operator UI V1 exposes global shell and approved project-scoped navigation', async () => {
   const layout = await readFile('apps/web/app/layout.tsx', 'utf8');
   const home = await readFile('apps/web/app/page.tsx', 'utf8');
+  const sidebar = await readFile('apps/web/app/_components/operator-sidebar.tsx', 'utf8');
   const nav = await readFile('apps/web/app/projects/[id]/project-nav.tsx', 'utf8');
   const model = await readFile('apps/web/app/projects/[id]/product-model.ts', 'utf8');
   assert.match(layout, /OperatorShell/);
   assert.match(home, /快速剪辑|Quick Edit/);
+  assert.doesNotMatch(sidebar, /video\/quick-edit/);
   for (const stage of ['Overview', 'Assets', 'Director', 'Video', 'Approval', 'Publisher']) assert.match(`${nav}\n${model}`, new RegExp(stage));
   assert.doesNotMatch(home, /Review Analytics/);
 });

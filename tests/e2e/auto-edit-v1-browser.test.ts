@@ -30,7 +30,7 @@ test('Auto Edit V1 browser flow completes Script and Random local editing', asyn
 
     await page.goto(`${baseUrl}/projects/${projectId}/video`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: /按脚本剪辑/ }).first().click();
-    await page.getByText(/当前项目脚本 · Script v1 · 已载入 5 句话/).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByText(/当前项目脚本 · 版本 1 · 已载入 5 句话/).waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByLabel('素材文件夹').fill(fixtureDir);
     await page.getByRole('button', { name: '扫描文件夹' }).click();
     try { await page.getByText(/扫描完成：可用 5 个视频/).waitFor({ state: 'visible', timeout: 45_000 }); }
