@@ -31,7 +31,7 @@ async function createAndApprovePublish(page: Page, title: string, description: s
 test('operator browser completes Fake Publisher success, retry, human-action and reconciliation journeys', async () => {
   assert.ok(baseUrl, 'test:browser must start an isolated operator');
   assert.ok(fixtureVideo, 'test:browser must provide a playable upload fixture');
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, ...(process.env.CONTENTOS_BROWSER_EXECUTABLE ? { executablePath: process.env.CONTENTOS_BROWSER_EXECUTABLE } : {}) });
   const page = await browser.newPage();
   try {
     await openOperatorHome(page, baseUrl);

@@ -13,5 +13,5 @@ export function ClipPreview({ src, sourceInMs, durationMs, label }: { src?: stri
     return () => { video.removeEventListener('loadedmetadata', seek); video.removeEventListener('timeupdate', stop); };
   }, [src, sourceInMs, durationMs]);
   if (!src) return <div className="feedback">选择镜头后预览源素材</div>;
-  return <video ref={ref} className="media-preview clip-preview" controls preload="metadata" src={src}>{label}</video>;
+  return <video ref={ref} className="media-preview clip-preview" controls preload="metadata" aria-label={label ? '当前镜头源素材' : undefined} src={src} />;
 }

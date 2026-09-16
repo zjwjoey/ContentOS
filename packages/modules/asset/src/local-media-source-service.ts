@@ -96,7 +96,6 @@ export class LocalMediaSourceService {
   async createScan(input: { id: string; projectId: string; sourceRoot: string; recursive: boolean; sourceRootId?: string }): Promise<void> {
     if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED');
     const authorized = this.authorizeRoot(input.sourceRoot);
-    await this.db.query("insert into video_workspaces (id, type, project_id) values ($1, 'PROJECT', $2) on conflict (project_id) do nothing", [`workspace-project-${input.projectId}`, input.projectId]);
     await this.db.query('insert into local_media_scans (id, project_id, source_root, source_root_id, recursive, status) values ($1, $2, $3, $4, $5, $6)', [input.id, input.projectId, authorized.root, input.sourceRootId || authorized.sourceRootId, input.recursive, 'QUEUED']);
   }
 

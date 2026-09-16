@@ -14,9 +14,8 @@ const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL ?? process.env.DA
 
 function pnpmInvocation(args: string[]): { command: string; args: string[] } {
   if (process.platform !== 'win32') return { command: 'pnpm', args };
-  const localAppData = process.env.LOCALAPPDATA;
-  if (!localAppData) throw new Error('LOCALAPPDATA is required to launch pnpm on Windows');
-  return { command: process.execPath, args: [join(localAppData, 'nodejs', 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'), ...args] };
+  const commandLine = ['pnpm.cmd', ...args].join(' ');
+  return { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', commandLine] };
 }
 
 function scopedDatabaseUrl(schema: string): string {
@@ -111,7 +110,7 @@ async function main(): Promise<void> {
   const admin = new pg.Pool({ connectionString: adminUrl });
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'contentos-browser-acceptance-'));
   const storageRoot = join(temporaryRoot, 'storage');
-  const fixtureVideos = ['source.mp4', 'source-2.mp4', 'source-3.mp4', 'source-4.mp4'].map((name) => join(temporaryRoot, name));
+  const fixtureVideos = ['source.mp4', 'source-2.mp4', 'source-3.mp4', 'source-4.mp4', 'source-5.mp4'].map((name) => join(temporaryRoot, name));
   const fixtureAudio = join(temporaryRoot, 'voice.wav');
   const apiPort = await freePort();
   const webPort = await freePort();
@@ -137,19 +136,25 @@ async function main(): Promise<void> {
       WEB_PORT: String(webPort),
       CONTENTOS_API_URL: apiUrl,
       CONTENTOS_FAKE_PUBLISHER_CONTROLS: '1',
+      CONTENTOS_LOCAL_MEDIA_ROOTS: temporaryRoot,
     };
     operator = spawnPnpm(['dev:operator'], environment);
     await waitForHealth(apiUrl);
     const testArgs = ['tsx', '--test', '--test-concurrency=1'];
     if (process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN) testArgs.push('--test-name-pattern', process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN);
-    testArgs.push('tests/e2e/operator-browser.test.ts');
+    const browserTests = (process.env.CONTENTOS_BROWSER_TEST_FILES || 'tests/e2e/auto-edit-v1-browser.test.ts').split(';').map((file) => file.trim()).filter(Boolean);
+    testArgs.push(...browserTests);
     const invocation = pnpmInvocation(testArgs);
     await run(invocation.command, invocation.args, {
       ...environment,
       CONTENTOS_OPERATOR_URL: webUrl,
-       CONTENTOS_BROWSER_FIXTURE_VIDEO: fixtureVideos[0]!,
-       CONTENTOS_BROWSER_FIXTURE_VIDEOS: JSON.stringify(fixtureVideos),
-       CONTENTOS_BROWSER_FIXTURE_AUDIO: fixtureAudio,
+      CONTENTOS_BROWSER_FIXTURE_VIDEO: fixtureVideos[0]!,
+      CONTENTOS_BROWSER_FIXTURE_VIDEOS: JSON.stringify(fixtureVideos),
+      CONTENTOS_BROWSER_FIXTURE_AUDIO: fixtureAudio,
+      CONTENTOS_LOCAL_MEDIA_ROOTS: temporaryRoot,
+      CONTENTOS_BROWSER_FIXTURE_DIR: temporaryRoot,
+      CONTENTOS_BROWSER_DATABASE_URL: databaseUrl,
+      CONTENTOS_BROWSER_EXECUTABLE: process.env.CONTENTOS_BROWSER_EXECUTABLE || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
     });
   } finally {
     if (operator) await stopOwnedTree(operator);

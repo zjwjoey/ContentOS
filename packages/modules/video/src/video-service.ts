@@ -33,7 +33,7 @@ export class VideoService {
     this.assets = (maybeJobs && !('create' in maybeJobs) ? maybeJobs : maybeAssets) || null;
   }
 
-  private async ensureProjectWorkspace(projectId: string): Promise<void> {
+  async ensureProjectWorkspace(projectId: string): Promise<void> {
     await this.db.query("insert into video_workspaces (id, type, project_id) values ($1, 'PROJECT', $2) on conflict (project_id) do nothing", [projectWorkspaceId(projectId), projectId]);
   }
 

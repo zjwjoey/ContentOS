@@ -122,6 +122,7 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
       if (existing) return reply.code(202).send({ scanId: (existing.payload as { scanId?: string }).scanId, jobId: existing.id, state: existing.state, sourceRootId: authorized.sourceRootId, progress: existing.progress });
       const scanId = `scan-${randomUUID()}`;
       if (!parsed.data.projectId) return reply.code(422).send({ error: { code: 'LOCAL_MEDIA_SCAN_PROJECT_REQUIRED', message: '素材扫描需要绑定项目。', details: [] } });
+      await video.ensureProjectWorkspace(parsed.data.projectId);
       await dependencies.localMedia.createScan({ id: scanId, projectId: parsed.data.projectId, sourceRoot: authorized.root, recursive: parsed.data.recursive, sourceRootId: authorized.sourceRootId });
       const job = await jobs.createIdempotent({ id: `job-${randomUUID()}`, type: 'LOCAL_MEDIA_SCAN', projectId: parsed.data.projectId, workspaceId: `workspace-project-${parsed.data.projectId}`, payload: { schemaVersion: 'LOCAL_MEDIA_SCAN_V1', projectId: parsed.data.projectId, scanId, sourceRoot: authorized.root, sourceRootId: authorized.sourceRootId, recursive: parsed.data.recursive }, idempotencyKey: key, maxAttempts: 3 });
       return reply.code(202).send({ scanId, jobId: job.id, state: job.state, sourceRootId: authorized.sourceRootId, progress: job.progress });
@@ -154,13 +155,13 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: '项目不存在。', details: [] } });
     try {
       let plannerAssets: Array<{ id: string; storageKey: string; sourcePath: string; durationMs: number; originalName?: string; tags?: string[]; metadata?: Record<string, unknown> }>;
-      let localPoolMeta: { sourceRootId: string; scanId: string } | null = null;
+      let localPoolMeta: { localMediaSourceRootId: string; localMediaScanId: string } | null = null;
       if (parsed.data.sourceRoot || parsed.data.scanId) {
         if (!dependencies.localMedia) throw new Error('LOCAL_MEDIA_ROOT_UNAUTHORIZED');
         const scan = parsed.data.scanId ? await dependencies.localMedia.getScan(parsed.data.scanId, projectId) : await dependencies.localMedia.getLatestScan(projectId, dependencies.localMedia.authorizeRoot(parsed.data.sourceRoot!).sourceRootId);
         if (!scan || scan.status !== 'SUCCEEDED') throw new Error('LOCAL_MEDIA_SCAN_NOT_READY');
         plannerAssets = scan.files.filter((file) => file.available).map((file) => ({ id: `${scan.sourceRootId}:${file.relativePath}`, storageKey: `${scan.sourceRootId}:${file.relativePath}`, sourcePath: file.sourcePath, durationMs: file.durationMs, originalName: file.fileName, metadata: { width: file.width, height: file.height, format: file.format, relativePath: file.relativePath } }));
-        localPoolMeta = { sourceRootId: scan.sourceRootId, scanId: scan.id };
+        localPoolMeta = { localMediaSourceRootId: scan.sourceRootId, localMediaScanId: scan.id };
       } else {
         const selected = await assets.listReadySourceAssets(projectId, parsed.data.videoAssetIds, 'VIDEO');
         if (selected.length !== new Set(parsed.data.videoAssetIds).size) throw new Error('VIDEO_SOURCE_ASSET_INVALID');
