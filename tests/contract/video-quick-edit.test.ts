@@ -105,3 +105,13 @@ test('rematch chooses the next eligible semantic match and records the reason', 
   assert.equal(next.timeline[0]?.matching?.fallback, false);
   assert.match(next.timeline[0]?.matching?.matchingReason || '', /匹配/);
 });
+
+test('branding clips cannot be rerolled or rematched, while content edits become manual', () => {
+  const parent = fixture();
+  parent.timeline[0]!.role = 'INTRO';
+  assert.throws(() => applyQuickEditOperations(parent, [{ type: 'REROLL', clipIndex: 0 }], [{ id: 'asset-b', durationMs: 2_000 }]), /branding/i);
+  assert.throws(() => applyQuickEditOperations(parent, [{ type: 'REMATCH', clipIndex: 0 }], [{ id: 'asset-b', durationMs: 2_000 }]), /branding/i);
+  parent.timeline[0]!.role = 'CONTENT';
+  const next = applyQuickEditOperations(parent, [{ type: 'TRIM', clipIndex: 0, sourceInMs: 10, durationMs: 800 }]);
+  assert.equal(next.timeline[0]?.reviewStatus, 'MANUAL');
+});

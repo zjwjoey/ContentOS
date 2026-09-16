@@ -42,7 +42,15 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
         if (!completed) throw Object.assign(new Error('Current Job attempt could not complete its Render'), { code: 'RENDER_FENCE_REJECTED', retryable: true });
         return { manifestId: planned.manifestId, renderId: planned.renderId, outputAssetId: outputAsset.id, diagnostics: rendered };
       });
-      if (finalized.executed) return finalized.value;
+      if (finalized.executed) {
+        if (deps.localMedia && job.projectId) {
+          const mediaIds = planned.manifest.timeline
+            .filter((clip) => clip.assetId.startsWith('local-'))
+            .map((clip) => clip.assetId);
+          if (mediaIds.length > 0) await deps.localMedia.recordUsage({ projectId: job.projectId, manifestId: planned.manifestId, renderId: planned.renderId, mediaIds });
+        }
+        return finalized.value;
+      }
       await deps.jobs.cancelAttempt(job.id, attemptId, async (scope) => { await deps.video.cancelRender(planned.renderId, scope, { code: 'RENDER_CANCELLED', message: 'Cancellation won before final commit' }); });
       return { manifestId: planned.manifestId, renderId: planned.renderId, staleAttempt: true };
     } catch (error) {
@@ -66,6 +74,10 @@ export function createLocalMediaScanJobHandler(deps: VideoHandlerDeps): (job: Jo
     try {
       const result = await deps.localMedia.scan({ sourceRoot: payload.sourceRoot, recursive: payload.recursive !== false, signal, onProgress: async (progress) => { await deps.jobs.updateProgress(job.id, attemptId, progress); await deps.localMedia!.updateScanProgress(payload.scanId!, progress); } });
       await deps.localMedia.completeScan(payload.scanId, result);
+      for (const file of result.files.filter((item) => item.available)) {
+        if (signal.aborted) throw new Error('LOCAL_MEDIA_SCAN_CANCELLED');
+        try { await deps.localMedia.generateThumbnail(`${result.sourceRootId}:${file.relativePath}`, deps.ffmpegPath); } catch { /* thumbnail failure is recorded and must not hide a usable scan */ }
+      }
       return { scanId: payload.scanId, sourceRootId: result.sourceRootId, totalCount: result.totalCount, availableCount: result.availableCount, unavailableCount: result.unavailableCount };
     } catch (error) {
       const cancelled = signal.aborted || (error instanceof Error && error.message === 'LOCAL_MEDIA_SCAN_CANCELLED');

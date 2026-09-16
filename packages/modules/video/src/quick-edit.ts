@@ -116,8 +116,10 @@ export function applyQuickEditOperations(parent: EditManifestV0, operations: Qui
     if (operation.type === 'TRIM') {
       assertClipIndex(operation.clipIndex, next.timeline.length);
       const clip = next.timeline[operation.clipIndex]!;
+      if (clip.voiceStartMs !== undefined && clip.voiceEndMs !== undefined && operation.durationMs !== clip.voiceEndMs - clip.voiceStartMs) throw new Error('Voice-synced clip duration is read-only');
       clip.sourceInMs = operation.sourceInMs;
       clip.durationMs = operation.durationMs;
+      clip.reviewStatus = 'MANUAL';
     } else if (operation.type === 'REMOVE') {
       assertClipIndex(operation.clipIndex, next.timeline.length);
       next.timeline.splice(operation.clipIndex, 1);
@@ -132,9 +134,10 @@ export function applyQuickEditOperations(parent: EditManifestV0, operations: Qui
       if (assets.length > 0 && !replacement) throw new Error(`Quick Edit REPLACE asset ${operation.assetId} is unavailable`);
       const sourceInMs = operation.sourceInMs ?? clip.sourceInMs;
       if (replacement && (sourceInMs < 0 || sourceInMs + clip.durationMs > replacement.durationMs)) throw new Error(`Quick Edit REPLACE asset ${operation.assetId} is too short`);
-      next.timeline[operation.clipIndex] = { ...clip, assetId: operation.assetId, sourceInMs, ...(replacement?.sourcePath ? { sourcePath: replacement.sourcePath } : {}) };
+      next.timeline[operation.clipIndex] = { ...clip, assetId: operation.assetId, sourceInMs, reviewStatus: 'MANUAL', ...(replacement?.sourcePath ? { sourcePath: replacement.sourcePath } : {}) };
     } else if (operation.type === 'REROLL') {
       assertClipIndex(operation.clipIndex, next.timeline.length);
+      if (next.timeline[operation.clipIndex]!.role && next.timeline[operation.clipIndex]!.role !== 'CONTENT') throw new Error('Branding clips cannot be rerolled');
       if (assets.length === 0) throw new Error('Quick Edit REROLL requires available READY video assets');
       const random = seededRandom(operation.seed ?? next.seed + operation.clipIndex);
       const current = next.timeline[operation.clipIndex]!;
@@ -148,9 +151,10 @@ export function applyQuickEditOperations(parent: EditManifestV0, operations: Qui
       const replacement = pool[Math.floor(random() * pool.length)]!;
       const maxIn = Math.max(0, replacement.durationMs - current.durationMs);
       const sourceInMs = maxIn === 0 ? 0 : Math.floor(random() * (maxIn + 1));
-      next.timeline[operation.clipIndex] = { ...current, assetId: replacement.id, sourceInMs, ...(replacement.sourcePath ? { sourcePath: replacement.sourcePath } : {}) };
+      next.timeline[operation.clipIndex] = { ...current, assetId: replacement.id, sourceInMs, reviewStatus: 'MANUAL', ...(replacement.sourcePath ? { sourcePath: replacement.sourcePath } : {}) };
     } else {
       assertClipIndex(operation.clipIndex, next.timeline.length);
+      if (next.timeline[operation.clipIndex]!.role && next.timeline[operation.clipIndex]!.role !== 'CONTENT') throw new Error('Branding clips cannot be rematched');
       if (assets.length === 0) throw new Error('Quick Edit REMATCH requires available video assets');
       const current = next.timeline[operation.clipIndex]!;
       const ranked = rankAdjustmentAssets(current.sentenceText || '', assets);
@@ -164,7 +168,7 @@ export function applyQuickEditOperations(parent: EditManifestV0, operations: Qui
       const random = seededRandom(operation.seed ?? next.seed + operation.clipIndex);
       const sourceInMs = maxIn === 0 ? 0 : Math.floor(random() * (maxIn + 1));
       const fallback = selected.matchScore === 0;
-      next.timeline[operation.clipIndex] = { ...current, assetId: selected.asset.id, sourceInMs, ...(selected.asset.sourcePath ? { sourcePath: selected.asset.sourcePath } : {}), matching: { matchedKeywords: selected.matchedKeywords, matchScore: selected.matchScore, fallback, matchingReason: fallback ? '重新匹配未命中关键词，已使用规则兜底素材' : `重新匹配命中关键词：${selected.matchedKeywords.join('、')}` } };
+      next.timeline[operation.clipIndex] = { ...current, assetId: selected.asset.id, sourceInMs, reviewStatus: 'MANUAL', ...(selected.asset.sourcePath ? { sourcePath: selected.asset.sourcePath } : {}), matching: { matchedKeywords: selected.matchedKeywords, matchScore: selected.matchScore, fallback, matchingReason: fallback ? '重新匹配未命中关键词，已使用规则兜底素材' : `重新匹配命中关键词：${selected.matchedKeywords.join('、')}` } };
     }
   }
   validateEditManifest(next);

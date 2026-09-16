@@ -8,7 +8,7 @@ import { LocalMediaSourceService } from '../../../packages/modules/asset/src/ind
 import type { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
 import type { ApprovalService } from '../../../packages/modules/approval/src/index.js';
 import type { DirectorV1Service } from '../../../packages/modules/director/src/index.js';
-import { buildRandomSentenceMontageManifest, buildScriptMontageManifest, segmentScriptSentences } from '../../../packages/modules/video/src/index.js';
+import { assembleBrandedTimeline, buildRandomSentenceMontageManifest, buildScriptMontageManifest, segmentScriptSentences } from '../../../packages/modules/video/src/index.js';
 import type { DirectorVideoService, VideoProjectReadService, VideoAdjustmentService, StandaloneQuickEditService, VideoService, QuickEditOperation, TimedScriptSentence } from '../../../packages/modules/video/src/index.js';
 import type { JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
@@ -33,7 +33,9 @@ const standaloneSettingsInput = z.object({ seed: z.number().int().optional(), ta
 const sentencePreviewInput = z.object({ script: z.string().max(100_000), splitSemicolon: z.boolean().optional() });
 const localMediaScanInput = z.object({ projectId: z.string().trim().min(1).optional(), sourceRoot: z.string().trim().min(1), recursive: z.boolean().default(true), idempotencyKey: z.string().trim().min(1).max(200).optional() });
 const localMediaContentInput = z.object({ projectId: z.string().trim().min(1).optional(), sourceRootId: z.string().trim().min(1), fileId: z.string().trim().min(1) });
-const montagePlanInput = z.object({ mode: z.enum(['SCRIPT', 'RANDOM']), script: z.string().max(100_000).optional(), sentences: z.array(z.object({ index: z.number().int().nonnegative().optional(), text: z.string().trim().min(1), normalizedText: z.string().optional(), voiceStartMs: z.number().nonnegative().optional(), voiceEndMs: z.number().nonnegative().optional(), durationMs: z.number().positive().optional() })).optional(), videoAssetIds: z.array(z.string().trim().min(1)).max(256).default([]), sourceRoot: z.string().trim().min(1).optional(), scanId: z.string().trim().min(1).optional(), recursive: z.boolean().default(true), seed: z.number().int().default(1), minClipDurationMs: z.number().int().positive().default(2_000), maxClipDurationMs: z.number().int().positive().default(5_000), voiceAssetId: z.string().trim().min(1).optional() }).superRefine((value, context) => { if (!value.script?.trim() && !value.sentences?.length) context.addIssue({ code: z.ZodIssueCode.custom, path: ['script'], message: 'script or sentences is required' }); if (!value.sourceRoot && !value.scanId && value.videoAssetIds.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ['videoAssetIds'], message: 'videoAssetIds or sourceRoot/scanId is required' }); });
+const localMediaIndexQuery = z.object({ projectId: z.string().trim().min(1), query: z.string().max(200).optional(), orientation: z.enum(['ALL', 'VERTICAL', 'HORIZONTAL', 'SQUARE', 'UNKNOWN']).optional(), category: z.string().max(100).optional(), usage: z.enum(['ALL', 'UNUSED', 'RECENT', 'FREQUENT']).optional(), sort: z.enum(['NAME', 'UPDATED', 'DURATION', 'USAGE', 'RECENT']).optional() });
+const localMediaMetaInput = z.object({ category: z.string().max(100).nullable().optional(), tags: z.array(z.string().max(80)).max(64).optional() });
+const montagePlanInput = z.object({ mode: z.enum(['SCRIPT', 'RANDOM']), script: z.string().max(100_000).optional(), sentences: z.array(z.object({ index: z.number().int().nonnegative().optional(), text: z.string().trim().min(1), normalizedText: z.string().optional(), voiceStartMs: z.number().nonnegative().optional(), voiceEndMs: z.number().nonnegative().optional(), durationMs: z.number().positive().optional() })).optional(), videoAssetIds: z.array(z.string().trim().min(1)).max(256).default([]), sourceRoot: z.string().trim().min(1).optional(), scanId: z.string().trim().min(1).optional(), recursive: z.boolean().default(true), seed: z.number().int().default(1), minClipDurationMs: z.number().int().positive().default(2_000), maxClipDurationMs: z.number().int().positive().default(5_000), voiceAssetId: z.string().trim().min(1).optional(), introAssetId: z.string().trim().min(1).optional(), outroAssetId: z.string().trim().min(1).optional(), introDurationMs: z.number().int().positive().max(10_000).optional(), outroDurationMs: z.number().int().positive().max(10_000).optional() }).superRefine((value, context) => { if (!value.script?.trim() && !value.sentences?.length) context.addIssue({ code: z.ZodIssueCode.custom, path: ['script'], message: 'script or sentences is required' }); if (!value.sourceRoot && !value.scanId && value.videoAssetIds.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ['videoAssetIds'], message: 'videoAssetIds or sourceRoot/scanId is required' }); });
 
 export interface VideoRouteDependencies {
   projects: ProjectService;
@@ -134,6 +136,29 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     if (!scan) return reply.code(404).send({ error: { code: 'LOCAL_MEDIA_SCAN_NOT_FOUND', message: '素材扫描任务不存在。', details: [] } });
     return { id: scan.id, projectId: scan.projectId, sourceRootId: scan.sourceRootId, recursive: scan.recursive, status: scan.status, progress: scan.progress, error: scan.error, files: scan.files.map(LocalMediaSourceService.toPublicFile) };
   });
+  app.get('/api/v1/video/local-media/index', async (request, reply) => {
+    const parsed = localMediaIndexQuery.safeParse(request.query || {});
+    if (!parsed.success || !dependencies.localMedia) return reply.code(422).send({ error: { code: 'LOCAL_MEDIA_INDEX_INVALID', message: '素材索引参数不完整。', details: parsed.success ? [] : parsed.error.issues } });
+    const assets = await dependencies.localMedia.listIndex(parsed.data.projectId, { ...(parsed.data.query !== undefined ? { query: parsed.data.query } : {}), ...(parsed.data.orientation !== undefined ? { orientation: parsed.data.orientation } : {}), ...(parsed.data.category !== undefined ? { category: parsed.data.category } : {}), ...(parsed.data.usage !== undefined ? { usage: parsed.data.usage } : {}), ...(parsed.data.sort !== undefined ? { sort: parsed.data.sort } : {}) });
+    return { items: assets.map(LocalMediaSourceService.toPublicFile), total: assets.length };
+  });
+  app.patch('/api/v1/video/local-media/index/:fileId', async (request, reply) => {
+    const parsed = localMediaMetaInput.safeParse(request.body || {});
+    if (!parsed.success || !dependencies.localMedia) return reply.code(422).send({ error: { code: 'LOCAL_MEDIA_INDEX_INVALID', message: '素材标签参数不正确。', details: parsed.success ? [] : parsed.error.issues } });
+    const fileId = (request.params as { fileId: string }).fileId;
+    if (parsed.data.category !== undefined) await dependencies.localMedia.updateCategory(fileId, parsed.data.category);
+    if (parsed.data.tags !== undefined) await dependencies.localMedia.updateTags(fileId, parsed.data.tags);
+    return { ok: true };
+  });
+  app.get('/api/v1/video/local-media/thumbnails/:fileId', async (request, reply) => {
+    if (!dependencies.localMedia) return reply.code(403).send({ error: { code: 'LOCAL_MEDIA_ROOT_UNAUTHORIZED', message: '服务端尚未配置本地素材授权根目录。', details: [] } });
+    const query = request.query as { projectId?: string };
+    if (!query.projectId) return reply.code(422).send({ error: { code: 'PROJECT_REQUIRED', message: '缺少项目标识。', details: [] } });
+    const result = await dependencies.localMedia.getThumbnail((request.params as { fileId: string }).fileId, query.projectId);
+    if (!result) return reply.code(404).send({ error: { code: 'THUMBNAIL_NOT_FOUND', message: '缩略图尚未生成。', details: [] } });
+    reply.header('content-type', 'image/jpeg').header('cache-control', 'public, max-age=31536000, immutable');
+    return reply.send(createReadStream(result.path));
+  });
   app.get('/api/v1/video/local-media/content', async (request, reply) => {
     const parsed = localMediaContentInput.safeParse(request.query || {});
     if (!parsed.success || !dependencies.localMedia) return reply.code(404).send({ error: { code: 'LOCAL_MEDIA_FILE_NOT_FOUND', message: '本地视频不存在。', details: [] } });
@@ -170,12 +195,27 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
       const sentences = (parsed.data.sentences || []).map((sentence, index) => ({ index, text: sentence.text, normalizedText: sentence.normalizedText || sentence.text.normalize('NFKC').toLowerCase(), ...(sentence.voiceStartMs !== undefined ? { voiceStartMs: sentence.voiceStartMs } : {}), ...(sentence.voiceEndMs !== undefined ? { voiceEndMs: sentence.voiceEndMs } : {}), ...(sentence.durationMs !== undefined ? { durationMs: sentence.durationMs } : {}) })) as TimedScriptSentence[];
       const effectiveSentences = sentences.length > 0 ? sentences : segmentScriptSentences(parsed.data.script || '');
       const result = parsed.data.mode === 'SCRIPT' ? buildScriptMontageManifest({ projectId, ...(parsed.data.script ? { script: parsed.data.script } : {}), sentences: effectiveSentences, assets: plannerAssets, seed: parsed.data.seed, minClipDurationMs: parsed.data.minClipDurationMs, maxClipDurationMs: parsed.data.maxClipDurationMs, ...(parsed.data.voiceAssetId ? { voiceAssetId: parsed.data.voiceAssetId } : {}) }) : buildRandomSentenceMontageManifest({ projectId, sentences: effectiveSentences, assets: plannerAssets, seed: parsed.data.seed, minClipDurationMs: parsed.data.minClipDurationMs, maxClipDurationMs: parsed.data.maxClipDurationMs, ...(parsed.data.voiceAssetId ? { voiceAssetId: parsed.data.voiceAssetId } : {}) });
+      if (parsed.data.introAssetId || parsed.data.outroAssetId) {
+        const brandingIds = [parsed.data.introAssetId, parsed.data.outroAssetId].filter((id): id is string => Boolean(id));
+        const projectBrandingIds = brandingIds.filter((id) => !id.startsWith('local-'));
+        const brandingAssets = projectBrandingIds.length ? await assets.listReadySourceAssets(projectId, projectBrandingIds, 'VIDEO') : [];
+        const byId = new Map(brandingAssets.map((asset) => [asset.id, asset]));
+        const toBranding = (id: string, durationMs: number | undefined) => {
+          const asset = byId.get(id);
+          if (asset) { const sourcePath = storage.objectPath(asset.storageKey); return { id: asset.id, storageKey: asset.storageKey, sourcePath, durationMs: durationMs || Number(asset.metadata.durationMs || 0), role: id === parsed.data.introAssetId ? 'INTRO' as const : 'OUTRO' as const }; }
+          if (dependencies.localMedia && id.startsWith('local-')) { const rootId = id.split(':', 1)[0]!; return dependencies.localMedia.getFile(rootId, id, projectId).then((file) => { if (!file?.available) throw new Error('VIDEO_BRANDING_ASSET_INVALID'); return { id, storageKey: id, sourcePath: file.sourcePath, durationMs: durationMs || file.durationMs, role: id === parsed.data.introAssetId ? 'INTRO' as const : 'OUTRO' as const }; }); }
+          throw new Error('VIDEO_BRANDING_ASSET_INVALID');
+        };
+        const intro = parsed.data.introAssetId ? await toBranding(parsed.data.introAssetId, parsed.data.introDurationMs) : undefined;
+        const outro = parsed.data.outroAssetId ? await toBranding(parsed.data.outroAssetId, parsed.data.outroDurationMs) : undefined;
+        result.manifest = assembleBrandedTimeline(result.manifest, { ...(intro ? { intro } : {}), ...(outro ? { outro } : {}) });
+      }
       if (localPoolMeta) result.manifest.metadata = { ...(result.manifest.metadata || {}), ...localPoolMeta };
       const record = await quickEdit.createPlannedManifest({ projectId, manifest: result.manifest, createdBy: 'operator' });
       return reply.code(201).send({ ...safeManifestRecord(record) as Record<string, unknown>, decisions: result.decisions, sentences: result.sentences });
     } catch (error) {
       const message = error instanceof Error ? error.message : '剪辑方案生成失败。'; const code = message.includes('UNAUTHORIZED') ? 403 : message.includes('NOT_FOUND') ? 404 : 422;
-      return reply.code(code).send({ error: { code: message, message: message === 'VIDEO_SOURCE_ASSET_INVALID' ? '所选视频素材不可用。' : message === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? '该本地文件夹未被授权。' : '剪辑方案生成失败，请检查素材和脚本文案。', details: [] } });
+      return reply.code(code).send({ error: { code: message, message: message === 'VIDEO_SOURCE_ASSET_INVALID' || message === 'VIDEO_BRANDING_ASSET_INVALID' ? '所选视频素材不可用。' : message === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? '该本地文件夹未被授权。' : '剪辑方案生成失败，请检查素材和脚本文案。', details: [] } });
     }
   });
 

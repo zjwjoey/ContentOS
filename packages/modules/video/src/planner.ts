@@ -165,6 +165,8 @@ export interface SentenceMontageDecision {
   matchingReason: string;
 }
 export interface SentenceMontageResult { manifest: EditManifestV0; decisions: SentenceMontageDecision[]; sentences: TimedScriptSentence[]; }
+export interface BrandingAsset extends PlannerAsset { role: 'INTRO' | 'OUTRO'; }
+export interface BrandingConfig { intro?: BrandingAsset; outro?: BrandingAsset; }
 
 export interface ScriptMontageInput extends SentenceMontageBaseInput {
   script?: string;
@@ -196,6 +198,9 @@ function sentenceDurationMs(sentence: TimedScriptSentence, minMs: number, maxMs:
   return Math.max(minMs, Math.min(maxMs, Math.round(Math.max(1, units) * 260)));
 }
 
+function validVoiceTiming(sentence: TimedScriptSentence): boolean { return sentence.voiceStartMs !== undefined && sentence.voiceEndMs !== undefined && Number.isFinite(sentence.voiceStartMs) && Number.isFinite(sentence.voiceEndMs) && sentence.voiceEndMs > sentence.voiceStartMs; }
+function validateVoiceTimeline(sentences: TimedScriptSentence[]): void { const timed = sentences.filter(validVoiceTiming).sort((a, b) => (a.voiceStartMs || 0) - (b.voiceStartMs || 0)); for (let index = 1; index < timed.length; index += 1) if ((timed[index]!.voiceStartMs || 0) < (timed[index - 1]!.voiceEndMs || 0)) throw new Error('Voice sentence timings overlap'); }
+
 function assetText(asset: SentenceMontageAsset): string {
   const metadata = Object.values(asset.metadata || {}).flatMap((value) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : typeof value === 'string' ? [value] : []);
   return [asset.originalName || '', ...(asset.tags || []), ...metadata].join(' ');
@@ -208,11 +213,12 @@ function boundedAssetClip(asset: SentenceMontageAsset, requestedDurationMs: numb
 }
 
 function sentenceManifest(input: SentenceMontageBaseInput, sentences: TimedScriptSentence[], mode: 'SCRIPT' | 'RANDOM', decisions: SentenceMontageDecision[], timeline: EditManifestV0['timeline']): EditManifestV0 {
+  validateVoiceTimeline(sentences);
   const owner = ownerOf(input); const manifest: EditManifestV0 = {
     schemaVersion: 'EDIT_MANIFEST_V0', ...owner, seed: input.seed,
     canvas: { width: 1080, height: 1920, aspectRatio: '9:16', fps: 30 }, timeline,
     audio: { ...(input.voiceAssetId ? { voiceAssetId: input.voiceAssetId } : {}), ...(input.voicePath ? { voicePath: input.voicePath } : {}), volume: 1 },
-    metadata: { editMode: mode, sentences: sentences.map(({ index, text, normalizedText }) => ({ index, text, normalizedText })) },
+    metadata: { editMode: mode, sentences: sentences.map(({ index, text, normalizedText, voiceStartMs, voiceEndMs, durationMs }) => ({ index, text, normalizedText, ...(voiceStartMs !== undefined ? { voiceStartMs } : {}), ...(voiceEndMs !== undefined ? { voiceEndMs } : {}), ...(durationMs !== undefined ? { durationMs } : {}) })) },
     output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' },
   };
   // A one-asset library is a valid fallback case for sentence montage. V0's
@@ -230,11 +236,11 @@ export function buildScriptMontageManifest(input: ScriptMontageInput): SentenceM
   const random = seededRandom(input.seed); const assets = [...input.assets].sort((a, b) => a.id.localeCompare(b.id)); const timeline: EditManifestV0['timeline'] = []; const decisions: SentenceMontageDecision[] = [];
   for (const sentence of sentences) {
     const required = sentenceTokens(sentence.text); const previous = timeline.at(-1)?.assetId;
-    const ranked = assets.map((asset) => { const available = sentenceTokens(assetText(asset)); const matchedKeywords = required.filter((token) => available.includes(token)); const matchScore = required.length ? Math.round((matchedKeywords.length / required.length) * 100) : 0; return { asset, matchedKeywords, matchScore }; }).sort((a, b) => b.matchScore - a.matchScore || a.asset.id.localeCompare(b.asset.id));
+    const ranked = assets.map((asset) => { const available = sentenceTokens(assetText(asset)); const matchedKeywords = required.filter((token) => available.includes(token)); const matchScore = required.length ? Math.round((matchedKeywords.length / required.length) * 100) : 0; const usageCount = Number(asset.metadata?.usageCount || 0); return { asset, matchedKeywords, matchScore, usageCount }; }).sort((a, b) => b.matchScore - a.matchScore || a.usageCount - b.usageCount || a.asset.id.localeCompare(b.asset.id));
     const nonAdjacent = ranked.filter((item) => item.asset.id !== previous); const selected = (nonAdjacent[0] || ranked[0])!; const timing = boundedAssetClip(selected.asset, sentenceDurationMs(sentence, minMs, maxMs), random); const fallback = selected.matchScore === 0;
     const sceneId = `scene-${String(sentence.index + 1).padStart(3, '0')}`;
     const matching: ClipMatchingV1 = { matchedKeywords: selected.matchedKeywords, matchScore: selected.matchScore, fallback, matchingReason: fallback ? '未找到关键词匹配，已使用规则兜底素材' : `命中关键词：${selected.matchedKeywords.join('、')}` };
-    timeline.push({ assetId: selected.asset.id, sourcePath: selected.asset.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, transition: timeline.length ? 'cut' : 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching });
+    timeline.push({ assetId: selected.asset.id, sourcePath: selected.asset.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, transition: timeline.length ? 'cut' : 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching, role: 'CONTENT', reviewStatus: fallback || selected.matchScore < 30 ? 'REVIEW' : 'GOOD', ...(validVoiceTiming(sentence) ? { voiceStartMs: sentence.voiceStartMs, voiceEndMs: sentence.voiceEndMs } : {}) });
     decisions.push({ sentenceIndex: sentence.index, sceneId, assetId: selected.asset.id, durationMs: timing.durationMs, ...matching });
   }
   return { manifest: sentenceManifest(input, sentences, 'SCRIPT', decisions, timeline), decisions, sentences };
@@ -250,10 +256,28 @@ export function buildRandomSentenceMontageManifest(input: RandomSentenceMontageI
   const random = seededRandom(input.seed); const assets = [...input.assets].sort((a, b) => a.id.localeCompare(b.id)); const usage = new Map(assets.map((asset) => [asset.id, 0])); const timeline: EditManifestV0['timeline'] = []; const decisions: SentenceMontageDecision[] = [];
   for (const sentence of sentences) {
     const previous = timeline.at(-1)?.assetId; const lowest = Math.min(...assets.map((asset) => usage.get(asset.id) || 0)); const pool = assets.filter((asset) => (usage.get(asset.id) || 0) === lowest && (assets.length === 1 || asset.id !== previous)); const selected = pool[Math.floor(random() * pool.length)] || assets[0]!; const timing = boundedAssetClip(selected, sentenceDurationMs(sentence, minMs, maxMs), random); const sceneId = `scene-${String(sentence.index + 1).padStart(3, '0')}`; const fallback = assets.length === 1 && previous === selected.id; const matching: ClipMatchingV1 = { matchedKeywords: [], matchScore: 0, fallback, matchingReason: fallback ? '素材不足，允许重复使用同一素材' : '按随机种子选择素材' };
-    usage.set(selected.id, (usage.get(selected.id) || 0) + 1); timeline.push({ assetId: selected.id, sourcePath: selected.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, transition: 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching }); decisions.push({ sentenceIndex: sentence.index, sceneId, assetId: selected.id, durationMs: timing.durationMs, ...matching });
+    usage.set(selected.id, (usage.get(selected.id) || 0) + 1); timeline.push({ assetId: selected.id, sourcePath: selected.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, transition: 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching, role: 'CONTENT', reviewStatus: fallback ? 'REVIEW' : 'GOOD', ...(validVoiceTiming(sentence) ? { voiceStartMs: sentence.voiceStartMs, voiceEndMs: sentence.voiceEndMs } : {}) }); decisions.push({ sentenceIndex: sentence.index, sceneId, assetId: selected.id, durationMs: timing.durationMs, ...matching });
   }
   return { manifest: sentenceManifest(input, sentences, 'RANDOM', decisions, timeline), decisions, sentences };
 }
 
 export const buildRandomSentenceManifest = buildRandomSentenceMontageManifest;
 export const buildScriptManifest = buildScriptMontageManifest;
+
+/** Assemble fixed branding clips around CONTENT clips before persistence/render. */
+export function assembleBrandedTimeline(manifest: EditManifestV0, branding: BrandingConfig): EditManifestV0 {
+  if (!branding.intro && !branding.outro) return manifest;
+  const maxBrandingMs = 10_000;
+  const intro = branding.intro ? { ...branding.intro, durationMs: Math.min(maxBrandingMs, Math.floor(branding.intro.durationMs)) } : null;
+  const outro = branding.outro ? { ...branding.outro, durationMs: Math.min(maxBrandingMs, Math.floor(branding.outro.durationMs)) } : null;
+  if (intro && intro.durationMs <= 0) throw new Error('Intro duration must be positive');
+  if (outro && outro.durationMs <= 0) throw new Error('Outro duration must be positive');
+  const content = manifest.timeline.map((clip) => ({ ...clip, role: clip.role || 'CONTENT' as const }));
+  const timeline: EditManifestV0['timeline'] = [
+    ...(intro ? [{ assetId: intro.id, sourcePath: intro.sourcePath, sourceInMs: 0, durationMs: intro.durationMs, transition: 'cut' as const, role: 'INTRO' as const, reviewStatus: 'GOOD' as const }] : []),
+    ...content,
+    ...(outro ? [{ assetId: outro.id, sourcePath: outro.sourcePath, sourceInMs: 0, durationMs: outro.durationMs, transition: 'cut' as const, role: 'OUTRO' as const, reviewStatus: 'GOOD' as const }] : []),
+  ];
+  const offset = intro?.durationMs || 0;
+  return validateAndReturn({ ...manifest, timeline, ...(manifest.subtitles ? { subtitles: manifest.subtitles.map((subtitle) => ({ ...subtitle, startMs: subtitle.startMs + offset, endMs: subtitle.endMs + offset })) } : {}) });
+}

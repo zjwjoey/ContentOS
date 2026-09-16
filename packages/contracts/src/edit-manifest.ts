@@ -4,6 +4,9 @@ export interface ScriptSentenceV1 {
   index: number;
   text: string;
   normalizedText: string;
+  voiceStartMs?: number;
+  voiceEndMs?: number;
+  durationMs?: number;
 }
 
 export interface ClipMatchingV1 {
@@ -24,6 +27,10 @@ export interface ManifestClip {
   sentenceText?: string;
   sceneId?: string;
   matching?: ClipMatchingV1;
+  role?: 'INTRO' | 'CONTENT' | 'OUTRO';
+  reviewStatus?: 'GOOD' | 'REVIEW' | 'MANUAL';
+  voiceStartMs?: number;
+  voiceEndMs?: number;
 }
 
 export interface EditManifestV0 {
@@ -59,7 +66,10 @@ export function validateEditManifest(manifest: EditManifestV0): void {
   if (manifest.metadata?.editMode !== 'RANDOM' && manifest.timeline.some((clip, index) => index > 0 && clip.assetId === manifest.timeline[index - 1]?.assetId && manifest.timeline.length > 1)) throw new Error('Adjacent duplicate clips are not allowed');
   if (manifest.output.format !== 'mp4') throw new Error('Only MP4 output is supported in V0');
   if (manifest.timeline.some((clip) => clip.sentenceIndex !== undefined && (!Number.isInteger(clip.sentenceIndex) || clip.sentenceIndex < 0))) throw new Error('Edit manifest sentenceIndex must be a non-negative integer');
+  if (manifest.timeline.some((clip) => clip.role && !['INTRO', 'CONTENT', 'OUTRO'].includes(clip.role))) throw new Error('Edit manifest clip role is invalid');
+  if (manifest.timeline.some((clip) => clip.reviewStatus && !['GOOD', 'REVIEW', 'MANUAL'].includes(clip.reviewStatus))) throw new Error('Edit manifest review status is invalid');
+  if (manifest.timeline.some((clip) => (clip.voiceStartMs !== undefined || clip.voiceEndMs !== undefined) && (clip.voiceStartMs === undefined || clip.voiceEndMs === undefined || clip.voiceEndMs <= clip.voiceStartMs))) throw new Error('Edit manifest clip voice timing is invalid');
   if (manifest.timeline.some((clip) => clip.matching && (clip.matching.matchScore < 0 || clip.matching.matchScore > 100 || !Array.isArray(clip.matching.matchedKeywords)))) throw new Error('Edit manifest matching metadata is invalid');
-  if (manifest.metadata?.sentences && manifest.metadata.sentences.some((sentence) => !Number.isInteger(sentence.index) || sentence.index < 0 || !sentence.text.trim() || !sentence.normalizedText.trim())) throw new Error('Edit manifest sentence metadata is invalid');
+  if (manifest.metadata?.sentences && manifest.metadata.sentences.some((sentence) => !Number.isInteger(sentence.index) || sentence.index < 0 || !sentence.text.trim() || !sentence.normalizedText.trim() || (sentence.voiceStartMs !== undefined && sentence.voiceEndMs !== undefined && sentence.voiceEndMs <= sentence.voiceStartMs))) throw new Error('Edit manifest sentence metadata is invalid');
   if (manifest.metadata && Object.values(manifest.metadata).some((value) => value !== undefined && !String(value).trim())) throw new Error('Edit manifest provenance metadata must be non-empty when present');
 }

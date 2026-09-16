@@ -59,7 +59,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const jobs = new JobService(db);
   const benchmark = new BenchmarkService(db, jobs);
   const assets = new AssetCatalogService(db);
-  const localMedia = new LocalMediaSourceService({ db });
+  const localMedia = new LocalMediaSourceService({ db, thumbnailRoot: `${storage.root}/thumbnails` });
   const video = new VideoService(db, storage, jobs, assets);
   const videoFromDirector = new DirectorVideoService(directorV1, video, director);
   const quickEdit = new VideoAdjustmentService(db, assets, localMedia);

@@ -7,6 +7,12 @@ import type { EditManifestV0 } from '../../../contracts/src/index.js';
 export interface RenderOptions { manifest: EditManifestV0; outputPath: string; ffmpegPath: string; ffprobePath: string; fontFile?: string; signal?: AbortSignal; }
 export interface RenderResult { outputPath: string; durationMs: number; width: number; height: number; format: string; audio: boolean; checksum?: string; }
 export interface ProbeResult { format: string; durationMs: number; width: number; height: number; audio: boolean; videoCodec?: string; audioCodec?: string; }
+export async function generateVideoThumbnail(inputPath: string, outputPath: string, ffmpegPath: string, durationMs: number, signal?: AbortSignal): Promise<void> {
+  await mkdir(dirname(outputPath), { recursive: true });
+  const seekMs = Math.min(1_000, Math.max(0, Math.round(durationMs * 0.25)));
+  const tempOutput = `${outputPath}.${randomUUID()}.part.jpg`;
+  try { await run(ffmpegPath, ['-y', '-ss', String(seekMs / 1000), '-i', inputPath, '-frames:v', '1', '-vf', 'scale=320:-2:force_original_aspect_ratio=decrease', '-q:v', '4', tempOutput], signal); await rename(tempOutput, outputPath); } catch (error) { await rm(tempOutput, { force: true }); throw error; }
+}
 
 function run(binary: string, args: string[], signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
   const execute = (executable: string): Promise<{ stdout: string; stderr: string }> => new Promise((resolve, reject) => {
