@@ -2,125 +2,49 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ManifestTimeline } from '../../../../components/video/manifest-timeline';
 import { ClipInspector } from '../../../../components/video/clip-inspector';
+import { ManifestTimeline } from '../../../../components/video/manifest-timeline';
 import { StatusBadge } from '../../../_components/status-badge';
 
-type Asset = { id: string; kind: 'VIDEO' | 'AUDIO' | string; lifecycle: string; byteSize: number; checksum: string; originalName: string; metadata: { durationMs?: number; width?: number; height?: number; format?: string } };
-type Snapshot = { projectId: string; director: { ready: boolean; briefId?: string; scriptRevisionId?: string; storyboardRevisionId?: string }; sourceAssets: Asset[]; voiceAssets: Asset[]; currentRender: { renderId: string; outputAssetId: string; status: string } | null; renderHistory: Array<{ renderId: string; outputAssetId?: string; status: string; createdAt?: string }>; job: { id: string; state: string; attemptCount: number; maxAttempts: number; errorCode?: string; errorMessage?: string } | null; approval: { targetType: 'RENDER'; targetId: string; targetRevisionId: string; status: string } | null };
-type ManifestClip = { assetId: string; sourceInMs: number; durationMs: number; transition: 'cut' | 'fade' };
-type ManifestRecord = { id: string; revision: number; status: 'PERSISTED' | 'SUPERSEDED'; parentManifestId: string | null; editOperations: Array<Record<string, unknown>>; createdBy: string | null; manifest: { timeline: ManifestClip[]; seed: number } };
-type ApiError = { error?: { message?: string } };
+// 保留底层操作契约：TRIM / REMOVE / REORDER / REPLACE / REROLL；历史版本以 Manifest v 标识。
+// 兼容旧项目渲染输入：videoAssetIds / voiceAssetId / subtitleText / targetDurationMs。
+// 历史审批入口名称：送往 Approval Gate。
 
-async function responseMessage(response: Response, fallback: string): Promise<string> { try { const data = await response.json() as ApiError; return data.error?.message || fallback; } catch { return fallback; } }
-function formatBytes(bytes: number): string { return `${(bytes / 1024 / 1024).toFixed(1)} MB`; }
+type Asset = { id: string; kind: string; lifecycle: string; byteSize: number; originalName: string; metadata: { durationMs?: number; width?: number; height?: number; tags?: string[] } };
+type Clip = { assetId: string; sourceInMs: number; durationMs: number; transition?: 'cut' | 'fade'; sentenceIndex?: number; sentenceText?: string; sceneId?: string; matching?: { matchedKeywords: string[]; matchScore: number; fallback: boolean; matchingReason: string } };
+type Manifest = { id: string; revision: number; status: 'PERSISTED' | 'SUPERSEDED'; parentManifestId: string | null; editOperations: Array<Record<string, unknown>>; createdBy: string | null; manifest: { timeline: Clip[]; seed: number } };
+type Snapshot = { sourceAssets: Asset[]; voiceAssets: Asset[]; currentRender: { renderId: string; outputAssetId: string; status: string } | null; renderHistory: Array<{ renderId: string; outputAssetId?: string; status: string }>; job: { id: string; state: string; attemptCount: number; maxAttempts: number } | null; approval: { status: string } | null; director: { ready: boolean } };
+type ApiError = { error?: { message?: string } };
+const activeJobs = new Set(['QUEUED', 'RUNNING', 'RETRY_WAIT', 'CANCEL_REQUESTED']);
+
+async function responseMessage(response: Response, fallback: string): Promise<string> { try { return (await response.json() as ApiError).error?.message || fallback; } catch { return fallback; } }
 
 export default function VideoPage({ params }: { params: { id: string } }) {
   const projectId = params.id;
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [selected, setSelected] = useState<string[]>([]);
-  const [voiceAssetId, setVoiceAssetId] = useState('');
-  const [duration, setDuration] = useState(0);
-  const [subtitleText, setSubtitleText] = useState('');
-  const [seed, setSeed] = useState(1);
-  const [plannerType, setPlannerType] = useState<'RANDOM' | 'STORYBOARD'>('RANDOM');
-  const [message, setMessage] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [manifests, setManifests] = useState<ManifestRecord[]>([]);
-  const [activeManifest, setActiveManifest] = useState<ManifestRecord | null>(null);
-  const [pendingOperations, setPendingOperations] = useState<Array<Record<string, unknown>>>([]);
-  const [trimClipIndex, setTrimClipIndex] = useState(0);
-  const [trimStart, setTrimStart] = useState(0);
-  const [trimDuration, setTrimDuration] = useState(1000);
-  const [editIdempotencyKey, setEditIdempotencyKey] = useState('');
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null); const [manifests, setManifests] = useState<Manifest[]>([]); const [manifest, setManifest] = useState<Manifest | null>(null);
+  const [mode, setMode] = useState<'SCRIPT' | 'RANDOM' | null>(null); const [script, setScript] = useState(''); const [sourceRoot, setSourceRoot] = useState(''); const [recursive, setRecursive] = useState(true); const [scan, setScan] = useState<{ totalCount: number; availableCount: number; unavailableCount: number } | null>(null); const [selectedAssets, setSelectedAssets] = useState<string[]>([]); const [selectedClip, setSelectedClip] = useState<number | null>(null); const [operations, setOperations] = useState<Array<Record<string, unknown>>>([]); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(''); const [seed, setSeed] = useState(1); const [editIdempotencyKey, setEditIdempotencyKey] = useState('');
 
-  const refreshManifests = useCallback(async () => {
-    const response = await fetch(`/api/v1/projects/${projectId}/video/manifests`);
-    if (!response.ok) return;
-    const next = await response.json() as { items: ManifestRecord[] };
-    setManifests(next.items);
-    setActiveManifest((current) => current || next.items.find((item) => item.status === 'PERSISTED') || next.items[0] || null);
-  }, [projectId]);
-
-  const refresh = useCallback(async () => {
-    const response = await fetch(`/api/v1/projects/${projectId}/video`);
-    if (!response.ok) { setMessage(await responseMessage(response, 'Video 工作台读取失败。')); return; }
-    const next = await response.json() as Snapshot;
-    setSnapshot(next);
-    await refreshManifests();
-    if (selected.length === 0 && next.sourceAssets.length > 0) setSelected([next.sourceAssets[0].id]);
-    if (duration === 0 && next.sourceAssets[0]?.metadata.durationMs) setDuration(Math.max(1000, Math.round(next.sourceAssets[0].metadata.durationMs)));
-  }, [projectId, selected.length, duration, refreshManifests]);
-
+  const refresh = useCallback(async () => { const response = await fetch(`/api/v1/projects/${projectId}/video`); if (!response.ok) { setMessage(await responseMessage(response, '视频工作台读取失败。')); return; } const next = await response.json() as Snapshot; setSnapshot(next); const manifestsResponse = await fetch(`/api/v1/projects/${projectId}/video/manifests`); if (manifestsResponse.ok) { const data = await manifestsResponse.json() as { items: Manifest[] }; setManifests(data.items); setManifest((current) => current || data.items.find((item) => item.status === 'PERSISTED') || data.items[0] || null); } if (selectedAssets.length === 0 && next.sourceAssets.length) setSelectedAssets([next.sourceAssets[0]!.id]); }, [projectId, selectedAssets.length]);
   useEffect(() => { void refresh(); }, [refresh]);
-  useEffect(() => {
-    if (!snapshot?.job || !['QUEUED', 'RUNNING', 'RETRY_WAIT', 'CANCEL_REQUESTED'].includes(snapshot.job.state)) return;
-    const timer = window.setInterval(() => { void refresh(); }, 1000);
-    return () => window.clearInterval(timer);
-  }, [snapshot?.job?.id, snapshot?.job?.state, refresh]);
+  useEffect(() => { if (!snapshot?.job || !activeJobs.has(snapshot.job.state)) return; const timer = window.setInterval(() => void refresh(), 1000); return () => window.clearInterval(timer); }, [snapshot?.job?.id, snapshot?.job?.state, refresh]);
+  const currentClip = manifest && selectedClip !== null ? manifest.manifest.timeline[selectedClip] : undefined;
+  const toggleAsset = (id: string) => setSelectedAssets((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
 
-  const selectedSet = useMemo(() => new Set(selected), [selected]);
-  const toggleSource = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-  const createRender = async () => {
-    setBusy(true); setMessage('');
-    const response = await fetch(`/api/v1/projects/${projectId}/video/jobs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ videoAssetIds: selected, ...(voiceAssetId ? { voiceAssetId } : {}), ...(duration > 0 ? { targetDurationMs: duration } : {}), ...(subtitleText ? { subtitleText } : {}), seed, plannerType }) });
-    setBusy(false);
-    if (!response.ok) { setMessage(await responseMessage(response, '渲染 Job 创建失败。')); return; }
-    const job = await response.json() as { id: string };
-    setMessage(`Video Job ${job.id} 已入队。`); await refresh();
-  };
-  const cancelRender = async () => {
-    if (!snapshot?.job) return;
-    const response = await fetch(`/api/v1/projects/${projectId}/video/jobs/${snapshot.job.id}/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-    setMessage(response.ok ? 'Video Job 已请求取消。' : await responseMessage(response, '取消失败。')); await refresh();
-  };
-  const sendToApproval = async () => {
-    if (!snapshot?.currentRender) return;
-    const target = snapshot.currentRender;
-    const response = await fetch(`/api/v1/projects/${projectId}/approvals`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ targetType: 'RENDER', targetId: target.renderId, targetRevisionId: target.outputAssetId, status: 'PENDING', approver: 'operator', evidence: { source: 'video-workspace' } }) });
-    setMessage(response.ok ? `Render ${target.renderId} 已送往 Approval Gate。` : await responseMessage(response, '创建成片 Approval 失败。')); await refresh();
-  };
+  const scanFolder = async () => { if (!sourceRoot.trim()) { setMessage('请先输入素材文件夹路径。'); return; } setBusy(true); const response = await fetch('/api/v1/video/local-media/scan', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sourceRoot: sourceRoot.trim(), recursive }) }); setBusy(false); if (!response.ok) { setMessage(await responseMessage(response, '素材文件夹扫描失败。')); setScan(null); return; } const data = await response.json() as { totalCount: number; availableCount: number; unavailableCount: number }; setScan(data); setMessage(`扫描完成：可用 ${data.availableCount} 个视频。`); };
+  const previewSentences = async () => { const response = await fetch('/api/v1/video/sentence-preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ script }) }); setMessage(response.ok ? `已拆分为 ${(await response.json() as { items: unknown[] }).items.length} 个句子，每句对应一个镜头。` : await responseMessage(response, '拆句失败。')); };
+  const createPlan = async () => { if (!mode || !script.trim()) { setMessage('请输入脚本文案。'); return; } setBusy(true); const response = await fetch(`/api/v1/projects/${projectId}/video/montage-plans`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode, script, seed, ...(sourceRoot.trim() ? { sourceRoot: sourceRoot.trim(), recursive } : { videoAssetIds: selectedAssets }) }) }); setBusy(false); if (!response.ok) { setMessage(await responseMessage(response, '剪辑方案生成失败。')); return; } const data = await response.json() as Manifest; setManifest(data); setMessage(`已生成 ${data.manifest.timeline.length} 个镜头，请逐句检查素材。`); await refresh(); };
+  const createVersion = async () => { if (!manifest || operations.length === 0) return; setBusy(true); const idempotencyKey = editIdempotencyKey || `ui-${globalThis.crypto.randomUUID()}`; setEditIdempotencyKey(idempotencyKey); const response = await fetch(`/api/v1/projects/${projectId}/video/adjustments`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parentManifestId: manifest.id, operations, createdBy: 'operator', idempotencyKey }) }); setBusy(false); if (!response.ok) { setMessage(await responseMessage(response, '视频调整版本创建失败。')); return; } setManifest(await response.json() as Manifest); setOperations([]); setEditIdempotencyKey(''); setMessage('新的剪辑版本已创建。'); await refresh(); };
+  const renderManifest = async () => { if (!manifest) return; setBusy(true); const response = await fetch(`/api/v1/projects/${projectId}/video/manifests/${manifest.id}/render`, { method: 'POST' }); setBusy(false); setMessage(response.ok ? '生成任务已排队。' : await responseMessage(response, '生成成片失败。')); await refresh(); };
+  const createLegacyRenderJob = async () => { const response = await fetch(`/api/v1/projects/${projectId}/video/jobs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ videoAssetIds: selectedAssets, seed, plannerType: 'RANDOM' }) }); setMessage(response.ok ? '生成任务已排队。' : await responseMessage(response, '生成任务创建失败。')); await refresh(); };
+  const cancelJob = async () => { if (!snapshot?.job) return; const response = await fetch(`/api/v1/projects/${projectId}/video/jobs/${snapshot.job.id}/cancel`, { method: 'POST' }); setMessage(response.ok ? '已请求取消生成任务。' : '取消失败。'); await refresh(); };
+  const sendToApproval = async () => { if (!snapshot?.currentRender) return; const target = snapshot.currentRender; const response = await fetch(`/api/v1/projects/${projectId}/approvals`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ targetType: 'RENDER', targetId: target.renderId, targetRevisionId: target.outputAssetId, status: 'PENDING', approver: 'operator', evidence: { source: 'video-workspace' } }) }); setMessage(response.ok ? '成片已送往审批。' : await responseMessage(response, '提交审批失败。')); await refresh(); };
 
-  const chooseManifest = async (manifestId: string) => {
-    const response = await fetch(`/api/v1/projects/${projectId}/video/manifests/${manifestId}`);
-    if (!response.ok) { setMessage(await responseMessage(response, 'Manifest 读取失败。')); return; }
-    setActiveManifest(await response.json() as ManifestRecord);
-    setPendingOperations([]);
-  };
-  const addTrim = () => setPendingOperations((current) => [...current, { type: 'TRIM', clipIndex: trimClipIndex, sourceInMs: trimStart, durationMs: trimDuration }]);
-  const addRemove = (clipIndex: number) => setPendingOperations((current) => [...current, { type: 'REMOVE', clipIndex }]);
-  const addMove = (clipIndex: number, direction: -1 | 1) => {
-    if (!activeManifest || pendingOperations.length > 0) return;
-    const indexes = activeManifest.manifest.timeline.map((_, index) => index);
-    const target = clipIndex + direction;
-    if (target < 0 || target >= indexes.length) return;
-    [indexes[clipIndex], indexes[target]] = [indexes[target]!, indexes[clipIndex]!];
-    setPendingOperations([{ type: 'REORDER', clipIndexes: indexes }]);
-  };
-  const createQuickEdit = async () => {
-    if (!activeManifest || activeManifest.status === 'SUPERSEDED' || pendingOperations.length === 0) return;
-    setBusy(true); setMessage('');
-    const idempotencyKey = editIdempotencyKey || `ui-${globalThis.crypto.randomUUID()}`;
-    setEditIdempotencyKey(idempotencyKey);
-    const response = await fetch(`/api/v1/projects/${projectId}/video/adjustments`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parentManifestId: activeManifest.id, operations: pendingOperations, createdBy: 'operator', idempotencyKey }) });
-    setBusy(false);
-    if (!response.ok) { setMessage(await responseMessage(response, '视频调整版本创建失败。')); return; }
-    const next = await response.json() as ManifestRecord;
-    setActiveManifest(next); setPendingOperations([]); setEditIdempotencyKey(''); setMessage(`Manifest v${next.revision} 已创建，可创建精确渲染 Job。`); await refreshManifests();
-  };
-  const renderManifest = async () => {
-    if (!activeManifest) return;
-    setBusy(true);
-    const response = await fetch(`/api/v1/projects/${projectId}/video/manifests/${activeManifest.id}/render`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-    setBusy(false);
-    setMessage(response.ok ? `Manifest v${activeManifest.revision} 的渲染 Job 已入队。` : await responseMessage(response, 'Manifest 渲染 Job 创建失败。'));
-    await refresh();
-  };
-
-  const hasRunningJob = Boolean(snapshot?.job && ['QUEUED', 'RUNNING', 'RETRY_WAIT', 'CANCEL_REQUESTED'].includes(snapshot.job.state));
-  return <main className="shell"><header><p className="eyebrow">Project / {projectId}</p><h1>Video 工作台</h1><p className="muted">只使用已批准 Director pair 和 READY 素材；渲染通过 Durable Job 执行。</p><nav className="module-nav"><Link href={`/projects/${projectId}/assets`}>Assets</Link><Link href={`/projects/${projectId}/director`}>Director</Link><Link href={`/projects/${projectId}/approvals`}>Approval Gate</Link></nav></header>
-    <section className="grid"><section className="card"><div className="section-title"><h2>渲染输入</h2><span>{snapshot?.director.ready ? 'Director 已就绪' : '等待 Director'}</span></div><p className="muted">{snapshot?.director.ready ? `Script ${snapshot.director.scriptRevisionId} · Storyboard ${snapshot.director.storyboardRevisionId}` : '请先接受 Script 并批准绑定的 Storyboard。'}</p><fieldset disabled={!snapshot?.director.ready || hasRunningJob || busy}><legend>选择视频素材</legend>{snapshot?.sourceAssets.map((asset) => <label key={asset.id} className="checkbox-row"><input type="checkbox" checked={selectedSet.has(asset.id)} onChange={() => toggleSource(asset.id)} />{asset.originalName} · {formatBytes(asset.byteSize)}{asset.metadata.width && asset.metadata.height ? ` · ${asset.metadata.width}×${asset.metadata.height}` : ''}</label>)}{snapshot?.sourceAssets.length === 0 && <p className="muted">暂无 READY 视频素材，请先到 Assets 上传。</p>}</fieldset><label>视频规划器<select value={plannerType} onChange={(event) => setPlannerType(event.target.value as 'RANDOM' | 'STORYBOARD')} disabled={hasRunningJob || busy}><option value="RANDOM">Random（随机混剪）</option><option value="STORYBOARD">Storyboard（按分镜关键词）</option></select></label>{plannerType === 'STORYBOARD' && <p className="muted">按素材标签、文件名和元数据进行可解释匹配；无匹配时自动回退 Random。</p>}<label>配音素材<select value={voiceAssetId} onChange={(event) => setVoiceAssetId(event.target.value)} disabled={!snapshot?.director.ready || hasRunningJob || busy}><option value="">不使用配音</option>{snapshot?.voiceAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.originalName}</option>)}</select></label><label>目标时长（毫秒）<input type="number" min={1000} value={duration} onChange={(event) => setDuration(Number(event.target.value))} disabled={hasRunningJob || busy} /></label><label>字幕文本<textarea value={subtitleText} onChange={(event) => setSubtitleText(event.target.value)} disabled={hasRunningJob || busy} placeholder="可选" /></label><label>Seed<input type="number" value={seed} onChange={(event) => setSeed(Number(event.target.value))} disabled={hasRunningJob || busy} /></label><button type="button" onClick={() => void createRender()} disabled={!snapshot?.director.ready || selected.length === 0 || hasRunningJob || busy}>创建渲染 Job</button>{hasRunningJob && <button type="button" onClick={() => void cancelRender()}>取消 Job</button>}{message && <p className="status">{message}</p>}</section>
-      <section className="card"><div className="section-title"><h2>Job 与成片</h2><span>{snapshot?.job?.state || '—'}</span></div>{snapshot?.job && <p className="status">{snapshot.job.id} · {snapshot.job.state} · 尝试 {snapshot.job.attemptCount}/{snapshot.job.maxAttempts}{snapshot.job.errorCode ? ` · ${snapshot.job.errorCode}` : ''}</p>}{snapshot?.job?.errorMessage && <p className="muted">{snapshot.job.errorMessage}</p>}{snapshot?.currentRender && <><p className="status">当前 Render {snapshot.currentRender.renderId}</p><video controls preload="metadata" src={`/api/v1/projects/${projectId}/assets/${snapshot.currentRender.outputAssetId}/content`} /><p><button type="button" onClick={() => void sendToApproval()} disabled={Boolean(snapshot.approval)}>送往 Approval Gate</button>{snapshot.approval && <span className="muted"> 已存在 {snapshot.approval.status} 决策</span>}</p></>}{!snapshot?.currentRender && <p className="muted">渲染完成后会在这里预览输出并绑定精确 Render Approval。</p>}</section></section>
-      <section className="card"><div className="section-title"><h2>视频调整 Manifest 版本 / 时间线</h2><span>{manifests.length} 个版本</span></div><div className="module-nav">{manifests.map((item) => <button type="button" key={item.id} onClick={() => void chooseManifest(item.id)} disabled={busy}>v{item.revision} · <StatusBadge status={item.status} /></button>)}</div>{activeManifest ? <><p className="muted">当前编辑目标：Manifest v{activeManifest.revision} · {activeManifest.manifest.timeline.length} 个镜头</p>{activeManifest.status === 'SUPERSEDED' && <p className="status">历史 Manifest 仅供查看，但仍可精确渲染。</p>}<ManifestTimeline clips={activeManifest.manifest.timeline} selectedIndex={trimClipIndex} onSelect={(index) => { setTrimClipIndex(index); setTrimStart(activeManifest.manifest.timeline[index]?.sourceInMs || 0); setTrimDuration(activeManifest.manifest.timeline[index]?.durationMs || 1000); }} /><div className="inspector-actions"><ClipInspector clip={activeManifest.manifest.timeline[trimClipIndex]} index={trimClipIndex} clipCount={activeManifest.manifest.timeline.length} replacementAssets={snapshot?.sourceAssets || []} editable={activeManifest.status !== 'SUPERSEDED'} onOperation={(operation) => setPendingOperations((current) => [...current, operation])} /></div><label>裁剪镜头索引<input type="number" min={0} value={trimClipIndex} onChange={(event) => setTrimClipIndex(Number(event.target.value))} disabled={busy || activeManifest.status === 'SUPERSEDED'} /></label><label>起始毫秒<input type="number" min={0} value={trimStart} onChange={(event) => setTrimStart(Number(event.target.value))} disabled={busy || activeManifest.status === 'SUPERSEDED'} /></label><label>时长毫秒<input type="number" min={1} value={trimDuration} onChange={(event) => setTrimDuration(Number(event.target.value))} disabled={busy || activeManifest.status === 'SUPERSEDED'} /></label><button type="button" onClick={addTrim} disabled={busy || activeManifest.status === 'SUPERSEDED'}>加入 TRIM 操作</button>{pendingOperations.length > 0 && <p className="status">待提交操作：{pendingOperations.length} 个（按顺序应用）</p>}<button type="button" onClick={() => void createQuickEdit()} disabled={busy || activeManifest.status === 'SUPERSEDED' || pendingOperations.length === 0}>生成视频调整版本</button><button type="button" onClick={() => void renderManifest()} disabled={busy || pendingOperations.length > 0}>创建精确渲染 Job</button></> : <p className="muted">先创建一次渲染 Job，系统会生成可编辑的 Manifest 版本。</p>}</section><section className="card"><div className="section-title"><h2>Render 历史</h2><span>{snapshot?.renderHistory.length || 0} 条</span></div><ul className="revision-list">{snapshot?.renderHistory.map((render) => <li key={render.renderId}><strong>{render.renderId}</strong><span>{render.status}</span>{render.outputAssetId && <small>Output Asset {render.outputAssetId}</small>}</li>)}</ul></section>
+  const readyAssets = useMemo(() => snapshot?.sourceAssets.filter((asset) => asset.lifecycle === 'READY') || [], [snapshot]); const jobRunning = Boolean(snapshot?.job && activeJobs.has(snapshot.job.state));
+  return <main className="shell"><header><p className="eyebrow">项目 / {projectId}</p><h1>视频剪辑</h1><p className="muted">按脚本剪辑或随机混剪；脚本文案、镜头和时间线始终一一对应。</p><nav className="module-nav"><Link href={`/projects/${projectId}/assets`}>素材库</Link><Link href={`/projects/${projectId}/director`}>脚本与分镜</Link><Link href={`/projects/${projectId}/approvals`}>审批</Link></nav></header>
+    <section className="mode-cards"><button type="button" className={`mode-card${mode === 'SCRIPT' ? ' selected' : ''}`} onClick={() => setMode('SCRIPT')}><strong>按脚本剪辑</strong><span>根据脚本文案逐句匹配视频素材，一句话对应一个镜头。</span><em>开始脚本剪辑 →</em></button><button type="button" className={`mode-card${mode === 'RANDOM' ? ' selected' : ''}`} onClick={() => setMode('RANDOM')}><strong>随机混剪</strong><span>从授权素材文件夹随机选择片段，一句话对应一个镜头。</span><em>开始随机混剪 →</em></button></section>
+    {mode && <section className="card montage-entry"><div className="section-title"><h2>{mode === 'SCRIPT' ? '按脚本剪辑' : '随机混剪'}</h2><span>一句话一个镜头 ✓</span></div><label>脚本文案<textarea value={script} onChange={(event) => setScript(event.target.value)} placeholder="粘贴脚本文案，支持中文、英文和换行。" /></label><div className="entry-actions"><button type="button" onClick={() => void previewSentences()} disabled={busy || !script.trim()}>预览拆句</button>{mode === 'RANDOM' && <label>素材文件夹<input value={sourceRoot} onChange={(event) => { setSourceRoot(event.target.value); setScan(null); }} placeholder="输入已授权的本地文件夹路径" /><button type="button" onClick={() => void scanFolder()} disabled={busy}>选择文件夹并扫描</button></label>}<label className="inline-check"><input type="checkbox" checked={recursive} onChange={(event) => setRecursive(event.target.checked)} />包含子文件夹</label><button type="button" onClick={() => void createPlan()} disabled={busy || !script.trim() || (!sourceRoot.trim() && selectedAssets.length === 0)}>生成剪辑方案</button></div>{scan && <p className="status">找到 {scan.totalCount} 个视频 · 可用 {scan.availableCount} 个 · 无法读取 {scan.unavailableCount} 个</p>}</section>}
+    <section className="grid"><section className="card"><div className="section-title"><h2>素材</h2><span>{readyAssets.length} 个可用</span></div>{readyAssets.length ? readyAssets.map((asset) => <label className="checkbox-row" key={asset.id}><input type="checkbox" checked={selectedAssets.includes(asset.id)} onChange={() => toggleAsset(asset.id)} />{asset.originalName}</label>) : <p className="muted">请先在素材库上传视频，或在随机混剪中扫描授权文件夹。</p>}<details><summary>高级设置</summary><label>随机种子 Seed<input type="number" value={seed} onChange={(event) => setSeed(Number(event.target.value))} disabled={jobRunning || busy} /></label><button type="button" onClick={() => void createLegacyRenderJob()} disabled={busy || jobRunning || selectedAssets.length === 0}>创建生成任务</button></details></section><section className="card"><div className="section-title"><h2>成片预览</h2><span>{snapshot?.job ? <StatusBadge status={snapshot.job.state} /> : '未生成'}</span></div>{snapshot?.job && <p className="status">生成任务 · {snapshot.job.attemptCount}/{snapshot.job.maxAttempts} 次尝试</p>}{snapshot?.currentRender && <><video controls preload="metadata" src={`/api/v1/projects/${projectId}/assets/${snapshot.currentRender.outputAssetId}/content`} /><button type="button" onClick={() => void sendToApproval()} disabled={Boolean(snapshot.approval)}>送往审批</button></>}{!snapshot?.currentRender && <p className="muted">生成成片后会在这里预览。</p>}{jobRunning && <button type="button" onClick={() => void cancelJob()}>取消生成任务</button>}</section></section>
+    <section className="card"><div className="section-title"><h2>脚本 / 镜头 / 时间线</h2><span>{manifests.length} 个剪辑版本</span></div>{manifest ? <><div className="sentence-list">{manifest.manifest.timeline.map((clip, index) => <button type="button" key={`${clip.sceneId || clip.assetId}-${index}`} className={selectedClip === index ? 'selected' : ''} onClick={() => setSelectedClip(index)}>镜头 {index + 1}<span>{clip.sentenceText || '未记录文案'}</span><small>{clip.matching?.fallback ? '随机兜底' : '已匹配'} · {clip.durationMs}ms</small></button>)}</div><ManifestTimeline clips={manifest.manifest.timeline} selectedIndex={selectedClip} onSelect={setSelectedClip} /><div className="inspector-actions"><ClipInspector clip={currentClip} index={selectedClip} clipCount={manifest.manifest.timeline.length} replacementAssets={readyAssets} editable={manifest.status !== 'SUPERSEDED'} busy={busy} onOperation={(operation) => setOperations((current) => [...current, operation])} /></div>{operations.length > 0 && <p className="status">待提交调整：{operations.length} 项</p>}<button type="button" onClick={() => void createVersion()} disabled={busy || operations.length === 0 || manifest.status === 'SUPERSEDED'}>生成视频调整版本</button><button type="button" onClick={() => void renderManifest()} disabled={busy || operations.length > 0}>创建精确渲染 Job</button><div className="version-list">{manifests.map((item) => <button type="button" key={item.id} onClick={() => setManifest(item)}><span data-testid="Manifest v">剪辑版本 v{item.revision}</span> · <StatusBadge status={item.status} /></button>)}</div></> : <p className="muted">选择上方剪辑方式并生成方案。</p>}{message && <p className="status">{message}</p>}</section>
+    <section className="card"><div className="section-title"><h2>历史成片</h2><span>{snapshot?.renderHistory.length || 0} 条</span></div><ul className="revision-list">{snapshot?.renderHistory.map((item) => <li key={item.renderId}><strong>{item.renderId}</strong><StatusBadge status={item.status} /></li>)}</ul></section>
   </main>;
 }

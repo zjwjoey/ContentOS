@@ -72,6 +72,25 @@ export class VideoAdjustmentService {
     return result.rows[0] ? mapRecord(result.rows[0] as Record<string, unknown>) : null;
   }
 
+  /** Persist a freshly planned V1 manifest as the current editable version. */
+  async createPlannedManifest(input: { projectId?: string; workspaceId?: string; manifest: EditManifestV0; createdBy?: string }): Promise<QuickEditManifestRecord> {
+    if ((input.projectId === undefined) === (input.workspaceId === undefined)) throw new Error('VIDEO_ADJUSTMENT_OWNER_REQUIRED');
+    validateEditManifest(input.manifest);
+    if (input.projectId && input.manifest.projectId !== input.projectId) throw new Error('VIDEO_MANIFEST_PROJECT_SCOPE_MISMATCH');
+    if (input.workspaceId && input.manifest.workspaceId !== input.workspaceId) throw new Error('VIDEO_MANIFEST_WORKSPACE_SCOPE_MISMATCH');
+    const ownerValue = input.projectId || input.workspaceId!; const client = await this.db.connect();
+    try {
+      await client.query('begin');
+      const scopeColumn = input.projectId ? 'project_id' : 'workspace_id';
+      await client.query(`update edit_manifests set status = 'SUPERSEDED' where ${scopeColumn} = $1 and status = 'PERSISTED'`, [ownerValue]);
+      const revision = Number((await client.query<{ revision: number }>(`select coalesce(max(revision), 0) + 1 as revision from edit_manifests where ${scopeColumn} = $1`, [ownerValue])).rows[0]?.revision || 1);
+      const id = `manifest-${randomUUID()}`;
+      const result = await client.query('insert into edit_manifests (id, project_id, workspace_id, revision, schema_version, manifest, manifest_digest, status, created_by, edit_operations) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *', [id, input.projectId || null, input.workspaceId || null, revision, 'EDIT_MANIFEST_V0', input.manifest, digestEditManifest(input.manifest), 'PERSISTED', input.createdBy?.trim() || 'operator', []]);
+      await client.query('commit');
+      return mapRecord(result.rows[0] as Record<string, unknown>);
+    } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
+  }
+
   async createVersion(input: CreateQuickEditVersionInput): Promise<QuickEditManifestRecord> {
     if ((input.projectId === undefined) === (input.workspaceId === undefined)) throw new Error('VIDEO_ADJUSTMENT_OWNER_REQUIRED');
     const operations = parseQuickEditOperations(input.operations);
@@ -101,6 +120,19 @@ export class VideoAdjustmentService {
       const parentValue = parent.manifest as EditManifestV0;
       validateEditManifest(parentValue);
       const sourceIds = [...new Set(parentValue.timeline.map((clip) => clip.assetId))];
+      const localOnly = !input.workspaceId && sourceIds.every((id) => id.startsWith('local-'));
+      if (localOnly) {
+        const localSources = parentValue.timeline.reduce((map, clip) => map.set(clip.assetId, { id: clip.assetId, durationMs: Math.max(clip.sourceInMs + clip.durationMs, clip.durationMs), sourcePath: clip.sourcePath }), new Map<string, { id: string; durationMs: number; sourcePath: string }>());
+        const next = applyQuickEditOperations(parentValue, operations, [...localSources.values()]);
+        next.timeline = next.timeline.map((clip) => { const source = localSources.get(clip.assetId); if (!source) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`); if (clip.sourceInMs + clip.durationMs > source.durationMs) throw new Error(`VIDEO_MANIFEST_CLIP_OUT_OF_BOUNDS: ${clip.assetId}`); return { ...clip, sourcePath: source.sourcePath }; });
+        validateEditManifest(next);
+        const revisionResult = await client.query<{ revision: number }>(`select coalesce(max(revision), 0) + 1 as revision from edit_manifests where ${ownerColumn} = $1`, [ownerId]);
+        const revision = Number(revisionResult.rows[0]?.revision || 1);
+        await client.query("update edit_manifests set status = 'SUPERSEDED' where id = $1 and status = 'PERSISTED'", [input.parentManifestId]);
+        const id = `manifest-${randomUUID()}`;
+        const inserted = await client.query('insert into edit_manifests (id, project_id, workspace_id, revision, schema_version, manifest, manifest_digest, status, parent_manifest_id, edit_operations, created_by, idempotency_key, input_digest) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning *', [id, input.projectId || null, persistedWorkspaceId, revision, 'EDIT_MANIFEST_V0', next, digestEditManifest(next), 'PERSISTED', input.parentManifestId, JSON.stringify(operations), input.createdBy.trim(), input.idempotencyKey || null, inputDigest]);
+        await client.query('commit'); return mapRecord(inserted.rows[0] as Record<string, unknown>);
+      }
       const sourceRows = input.workspaceId ? await this.assets.listReadyWorkspaceAssets(input.workspaceId, 'VIDEO') : await this.assets.listReadySourceAssets(input.projectId!, sourceIds, 'VIDEO');
       if (!input.workspaceId && sourceRows.length !== sourceIds.length) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
       const allSources = sourceRows.length > 0 && input.workspaceId ? sourceRows : await this.assets.listReadyVideoAssets(input.projectId!);

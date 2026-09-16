@@ -1,5 +1,5 @@
 export { validateEditManifest } from './edit-manifest.js';
-export type { EditManifestV0, ManifestClip } from './edit-manifest.js';
+export type { ClipMatchingV1, EditManifestV0, EditModeV1, ManifestClip, ScriptSentenceV1 } from './edit-manifest.js';
 export { validateDirectorPlan } from './director-plan.js';
 export type { DirectorBrief, DirectorPlanV0, DirectorScene } from './director-plan.js';
 export { validateContentBriefV1, validateScriptRevisionV1, validateStoryboardRevisionV1 } from './director-v1.js';

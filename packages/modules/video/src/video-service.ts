@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { access } from 'node:fs/promises';
+import { resolve, sep } from 'node:path';
 import type { Pool } from 'pg';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import type { AssetCatalogService } from '../../asset/src/index.js';
@@ -12,6 +14,10 @@ export interface VideoJobPayload extends Omit<CreateVideoJobInput, 'projectId'> 
 export interface VideoPlanResult { manifestId: string; renderId: string; manifest: ReturnType<typeof buildVideoManifest>; renderStatus: string; outputAssetId: string | null; }
 
 function projectWorkspaceId(projectId: string): string { return `workspace-project-${projectId}`; }
+function authorizedLocalSource(sourcePath: string): boolean {
+  const roots = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((root) => root.trim()).filter(Boolean).map((root) => resolve(root));
+  const candidate = resolve(sourcePath); return roots.some((root) => candidate.toLowerCase() === root.toLowerCase() || candidate.toLowerCase().startsWith(`${root}${sep}`.toLowerCase()));
+}
 
 export class VideoService {
   private readonly db: Pool;
@@ -139,17 +145,28 @@ export class VideoService {
     const persisted = row.manifest;
     validateEditManifest(persisted);
     const ids = [...new Set(persisted.timeline.map((clip) => clip.assetId))];
+    const localManifest = ids.length > 0 && ids.every((id) => id.startsWith('local-'));
+    const manifest = structuredClone(persisted);
+    if (localManifest) {
+      for (const clip of manifest.timeline) {
+        // The API already authorizes the root when the manifest is created. A
+        // worker may run with a reduced environment, so enforce the root check
+        // when roots are configured and always require the file to exist.
+        const configuredRoots = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((root) => root.trim()).filter(Boolean);
+        if (!clip.sourcePath || (configuredRoots.length > 0 && !authorizedLocalSource(clip.sourcePath))) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
+        try { await access(clip.sourcePath); } catch { throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`); }
+      }
+    } else {
     const sources = await this.assets.listReadySourceAssets(job.projectId!, ids, 'VIDEO');
     if (sources.length !== ids.length) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
     const byId = new Map(sources.map((source) => [source.id, source]));
-    const manifest = structuredClone(persisted);
     manifest.timeline = manifest.timeline.map((clip) => {
       const source = byId.get(clip.assetId);
       if (!source) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`);
       const duration = Number(source.metadata.durationMs);
       if (!Number.isFinite(duration) || clip.sourceInMs + clip.durationMs > duration) throw new Error(`VIDEO_MANIFEST_CLIP_OUT_OF_BOUNDS: ${clip.assetId}`);
       return { ...clip, sourcePath: this.storage!.objectPath(source.storageKey) };
-    });
+    }); }
     if (manifest.audio.voiceAssetId) {
       const voice = await this.assets.getReadySourceAsset(job.projectId!, manifest.audio.voiceAssetId, 'AUDIO');
       if (!voice) throw new Error('VIDEO_MANIFEST_VOICE_UNAVAILABLE');

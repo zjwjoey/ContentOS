@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
 import type { ApprovalService } from '../../../packages/modules/approval/src/index.js';
 import type { DirectorV1Service } from '../../../packages/modules/director/src/index.js';
-import type { DirectorVideoService, VideoProjectReadService, VideoAdjustmentService, StandaloneQuickEditService, VideoService, QuickEditOperation } from '../../../packages/modules/video/src/index.js';
+import { buildRandomSentenceMontageManifest, buildScriptMontageManifest, segmentScriptSentences } from '../../../packages/modules/video/src/index.js';
+import type { DirectorVideoService, VideoProjectReadService, VideoAdjustmentService, StandaloneQuickEditService, VideoService, QuickEditOperation, TimedScriptSentence } from '../../../packages/modules/video/src/index.js';
 import type { JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
 import type { AssetImportKind, AssetSummaryV0 } from '../../../packages/contracts/src/index.js';
@@ -25,6 +27,9 @@ const standaloneCreateInput = z.object({ sourceAssetIds: z.array(z.string().trim
 const standaloneAdjustmentInput = z.object({ operations: z.array(z.record(z.string(), z.unknown())).min(1).max(128), createdBy: z.string().trim().min(1).max(200).optional() });
 const standaloneVoiceInput = z.object({ assetId: z.string().trim().min(1) });
 const standaloneSettingsInput = z.object({ seed: z.number().int().optional(), targetDurationMs: z.number().int().positive().nullable().optional(), minClipDurationMs: z.number().int().positive().optional(), maxClipDurationMs: z.number().int().positive().optional() });
+const sentencePreviewInput = z.object({ script: z.string().max(100_000), splitSemicolon: z.boolean().optional() });
+const localMediaScanInput = z.object({ sourceRoot: z.string().trim().min(1), recursive: z.boolean().default(true) });
+const montagePlanInput = z.object({ mode: z.enum(['SCRIPT', 'RANDOM']), script: z.string().max(100_000).optional(), sentences: z.array(z.object({ index: z.number().int().nonnegative().optional(), text: z.string().trim().min(1), normalizedText: z.string().optional(), voiceStartMs: z.number().nonnegative().optional(), voiceEndMs: z.number().nonnegative().optional(), durationMs: z.number().positive().optional() })).optional(), videoAssetIds: z.array(z.string().trim().min(1)).max(256).default([]), sourceRoot: z.string().trim().min(1).optional(), recursive: z.boolean().default(true), seed: z.number().int().default(1), minClipDurationMs: z.number().int().positive().default(2_000), maxClipDurationMs: z.number().int().positive().default(5_000), voiceAssetId: z.string().trim().min(1).optional() }).superRefine((value, context) => { if (!value.script?.trim() && !value.sentences?.length) context.addIssue({ code: z.ZodIssueCode.custom, path: ['script'], message: 'script or sentences is required' }); if (!value.sourceRoot && value.videoAssetIds.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ['videoAssetIds'], message: 'videoAssetIds or sourceRoot is required' }); });
 
 export interface VideoRouteDependencies {
   projects: ProjectService;
@@ -40,6 +45,7 @@ export interface VideoRouteDependencies {
   assetImports: AssetImportService;
   storage: LocalStorageProvider;
   maxUploadBytes: number;
+  localMedia?: LocalMediaSourceService;
 }
 
 function projectIdOf(request: { params: unknown }): string { return (request.params as { projectId: string }).projectId; }
@@ -87,7 +93,46 @@ function mediaContentType(asset: { kind: string; metadata: { format?: string }; 
 }
 
 export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRouteDependencies): void {
-  const { projects, director, videoFromDirector, videoRead, assets, approvals, jobs, video, quickEdit, standaloneQuickEdit } = dependencies;
+  const { projects, director, videoFromDirector, videoRead, assets, approvals, jobs, video, quickEdit, standaloneQuickEdit, storage } = dependencies;
+
+  app.post('/api/v1/video/sentence-preview', async (request, reply) => {
+    const parsed = sentencePreviewInput.safeParse(request.body || {});
+    if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: '请输入脚本文案。', details: parsed.error.issues } });
+    return { items: segmentScriptSentences(parsed.data.script, parsed.data.splitSemicolon === undefined ? {} : { splitSemicolon: parsed.data.splitSemicolon }) };
+  });
+  app.post('/api/v1/video/local-media/scan', async (request, reply) => {
+    const parsed = localMediaScanInput.safeParse(request.body || {});
+    if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: '请输入素材文件夹路径。', details: parsed.error.issues } });
+    if (!dependencies.localMedia) return reply.code(403).send({ error: { code: 'LOCAL_MEDIA_ROOT_UNAUTHORIZED', message: '服务端尚未配置本地素材授权根目录。', details: [] } });
+    try { const result = await dependencies.localMedia.scan(parsed.data); return { sourceRootId: result.sourceRootId, totalCount: result.totalCount, availableCount: result.availableCount, unavailableCount: result.unavailableCount, files: result.files.map(LocalMediaSourceService.toPublicFile) }; }
+    catch (error) { const message = error instanceof Error ? error.message : '本地素材扫描失败。'; return reply.code(message.includes('UNAUTHORIZED') ? 403 : message.includes('NOT_FOUND') ? 404 : 422).send({ error: { code: message, message: message === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? '该本地文件夹未被授权。' : '本地素材扫描失败，请检查路径和权限。', details: [] } }); }
+  });
+
+  app.post('/api/v1/projects/:projectId/video/montage-plans', async (request, reply) => {
+    const projectId = projectIdOf(request); const parsed = montagePlanInput.safeParse(request.body || {});
+    if (!parsed.success) return reply.code(422).send({ error: { code: 'VIDEO_MONTAGE_INPUT_INVALID', message: '剪辑方案参数不完整。', details: parsed.error.issues } });
+    if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: '项目不存在。', details: [] } });
+    try {
+      let plannerAssets: Array<{ id: string; storageKey: string; sourcePath: string; durationMs: number; originalName?: string; tags?: string[]; metadata?: Record<string, unknown> }>;
+      if (parsed.data.sourceRoot) {
+        if (!dependencies.localMedia) throw new Error('LOCAL_MEDIA_ROOT_UNAUTHORIZED');
+        const scan = await dependencies.localMedia.scan({ sourceRoot: parsed.data.sourceRoot, recursive: parsed.data.recursive });
+        plannerAssets = scan.files.filter((file) => file.available).map((file) => ({ id: `${scan.sourceRootId}:${file.relativePath}`, storageKey: `${scan.sourceRootId}:${file.relativePath}`, sourcePath: file.sourcePath, durationMs: file.durationMs, originalName: file.fileName, metadata: { width: file.width, height: file.height, format: file.format } }));
+      } else {
+        const selected = await assets.listReadySourceAssets(projectId, parsed.data.videoAssetIds, 'VIDEO');
+        if (selected.length !== new Set(parsed.data.videoAssetIds).size) throw new Error('VIDEO_SOURCE_ASSET_INVALID');
+        plannerAssets = selected.map((asset) => ({ id: asset.id, storageKey: asset.storageKey, sourcePath: storage.objectPath(asset.storageKey), durationMs: Number(asset.metadata.durationMs || 0), ...(typeof asset.metadata.originalName === 'string' ? { originalName: asset.metadata.originalName } : asset.storageKey.split('/').at(-1) ? { originalName: asset.storageKey.split('/').at(-1)! } : {}), tags: Array.isArray(asset.metadata.tags) ? asset.metadata.tags.filter((tag): tag is string => typeof tag === 'string') : [], metadata: asset.metadata }));
+      }
+      const sentences = (parsed.data.sentences || []).map((sentence, index) => ({ index, text: sentence.text, normalizedText: sentence.normalizedText || sentence.text.normalize('NFKC').toLowerCase(), ...(sentence.voiceStartMs !== undefined ? { voiceStartMs: sentence.voiceStartMs } : {}), ...(sentence.voiceEndMs !== undefined ? { voiceEndMs: sentence.voiceEndMs } : {}), ...(sentence.durationMs !== undefined ? { durationMs: sentence.durationMs } : {}) })) as TimedScriptSentence[];
+      const effectiveSentences = sentences.length > 0 ? sentences : segmentScriptSentences(parsed.data.script || '');
+      const result = parsed.data.mode === 'SCRIPT' ? buildScriptMontageManifest({ projectId, ...(parsed.data.script ? { script: parsed.data.script } : {}), sentences: effectiveSentences, assets: plannerAssets, seed: parsed.data.seed, minClipDurationMs: parsed.data.minClipDurationMs, maxClipDurationMs: parsed.data.maxClipDurationMs, ...(parsed.data.voiceAssetId ? { voiceAssetId: parsed.data.voiceAssetId } : {}) }) : buildRandomSentenceMontageManifest({ projectId, sentences: effectiveSentences, assets: plannerAssets, seed: parsed.data.seed, minClipDurationMs: parsed.data.minClipDurationMs, maxClipDurationMs: parsed.data.maxClipDurationMs, ...(parsed.data.voiceAssetId ? { voiceAssetId: parsed.data.voiceAssetId } : {}) });
+      const record = await quickEdit.createPlannedManifest({ projectId, manifest: result.manifest, createdBy: 'operator' });
+      return reply.code(201).send({ ...safeManifestRecord(record) as Record<string, unknown>, decisions: result.decisions, sentences: result.sentences });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '剪辑方案生成失败。'; const code = message.includes('UNAUTHORIZED') ? 403 : message.includes('NOT_FOUND') ? 404 : 422;
+      return reply.code(code).send({ error: { code: message, message: message === 'VIDEO_SOURCE_ASSET_INVALID' ? '所选视频素材不可用。' : message === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? '该本地文件夹未被授权。' : '剪辑方案生成失败，请检查素材和脚本文案。', details: [] } });
+    }
+  });
 
   app.post('/api/v1/video/quick-edits', async (request, reply) => {
     const parsed = standaloneCreateInput.safeParse(request.body || {});
