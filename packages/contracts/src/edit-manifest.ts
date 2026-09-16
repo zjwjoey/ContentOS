@@ -42,6 +42,8 @@ export interface EditManifestV0 {
     scriptRevisionId?: string;
     storyboardRevisionId?: string;
     editMode?: EditModeV1;
+    localMediaSourceRootId?: string;
+    localMediaScanId?: string;
     sentences?: ScriptSentenceV1[];
   };
   output: { format: 'mp4'; videoCodec: 'mpeg4' | 'h264'; audioCodec: 'aac' };

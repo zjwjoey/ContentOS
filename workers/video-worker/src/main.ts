@@ -2,13 +2,13 @@ import { basename } from 'node:path';
 import { WorkerRuntime } from '../../../packages/shared/src/worker-runtime.js';
 import { JobRunner } from '../../../packages/modules/job/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
-import { AssetCatalogService, AssetService } from '../../../packages/modules/asset/src/index.js';
+import { AssetCatalogService, AssetService, LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import { VideoService } from '../../../packages/modules/video/src/index.js';
 import { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import { probeMedia } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 import { createDatabase } from '../../../packages/database/src/index.js';
 import { loadConfig } from '../../../packages/config/src/index.js';
-import { createVideoJobHandler, createVideoLeaseCancellationHandler, type VideoHandlerDeps } from './video-handler.js';
+import { createLocalMediaScanJobHandler, createVideoJobHandler, createVideoLeaseCancellationHandler, type VideoHandlerDeps } from './video-handler.js';
 
 export interface VideoWorkerOptions extends VideoHandlerDeps { workerId?: string; reconcileIntervalMs?: number; pollIntervalMs?: number; concurrency?: number; }
 
@@ -66,16 +66,30 @@ export function createVideoWorker(options?: VideoWorkerOptions): WorkerRuntime {
   if (reconcileIntervalMs <= 0 || pollIntervalMs <= 0 || concurrency <= 0) throw new Error('Video worker intervals and concurrency must be positive');
   const runner = new JobRunner(options.jobs, options.workerId || 'video-worker');
   const handler = createVideoJobHandler(options);
-  const recoverCancellation = createVideoLeaseCancellationHandler(options.video, options.storage);
+  const localMediaHandler = createLocalMediaScanJobHandler(options);
+  const videoCancellation = createVideoLeaseCancellationHandler(options.video, options.storage);
+  const recoverCancellation = async (job: Parameters<typeof videoCancellation>[0], scope: Parameters<typeof videoCancellation>[1]): Promise<boolean> => {
+    if (job.type === 'LOCAL_MEDIA_SCAN') {
+      const payload = job.payload as { scanId?: string };
+      if (options.localMedia && payload.scanId) await options.localMedia.failScan(payload.scanId, { code: 'LOCAL_MEDIA_SCAN_CANCELLED', message: 'Scan cancelled after lease expiry' }, 'CANCELLED');
+      return true;
+    }
+    return videoCancellation(job, scope);
+  };
   const consume = async (): Promise<void> => {
-    const runnable = await options.jobs.listRunnable(['VIDEO_RENDER'], concurrency);
-    await Promise.all(runnable.map((job) => runner.run(job.id, handler)));
+    const runnable = await options.jobs.listRunnable(['VIDEO_RENDER', 'LOCAL_MEDIA_SCAN'], concurrency);
+    await Promise.all(runnable.map((job) => runner.run(job.id, job.type === 'LOCAL_MEDIA_SCAN' ? localMediaHandler : handler)));
   };
   const runtime = new VideoWorkerRuntime(options.workerId || 'video-worker', () => options.jobs.reconcileExpiredLeases(new Date(), recoverCancellation), consume, reconcileIntervalMs, pollIntervalMs);
   runtime.register('video.render', async (payload) => {
     const jobId = payload && typeof payload === 'object' ? (payload as { jobId?: unknown }).jobId : undefined;
     if (typeof jobId !== 'string' || !jobId) throw new Error('Video delivery requires jobId');
     return runner.run(jobId, handler);
+  });
+  runtime.register('local_media.scan', async (payload) => {
+    const jobId = payload && typeof payload === 'object' ? (payload as { jobId?: unknown }).jobId : undefined;
+    if (typeof jobId !== 'string' || !jobId) throw new Error('Local media scan delivery requires jobId');
+    return runner.run(jobId, localMediaHandler);
   });
   return runtime;
 }
@@ -87,7 +101,7 @@ if (basename(process.argv[1] ?? '') === 'main.ts') {
   const jobs = new JobService(db);
   const assets = new AssetService(db, storage, (path) => probeMedia(path, config.ffprobePath));
   const video = new VideoService(db, storage, jobs, new AssetCatalogService(db));
-  const worker = createVideoWorker({ db, storage, jobs, assets, video, ffmpegPath: config.ffmpegPath, ffprobePath: config.ffprobePath, fontFile: config.ffmpegFontFile, concurrency: config.videoWorkerConcurrency });
+  const worker = createVideoWorker({ db, storage, jobs, assets, video, localMedia: new LocalMediaSourceService({ db }), ffmpegPath: config.ffmpegPath, ffprobePath: config.ffprobePath, fontFile: config.ffmpegFontFile, concurrency: config.videoWorkerConcurrency });
   const stop = async (signal: string): Promise<void> => { await worker.shutdown(signal); await db.end(); };
   process.once('SIGINT', () => void stop('SIGINT'));
   process.once('SIGTERM', () => void stop('SIGTERM'));

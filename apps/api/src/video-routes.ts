@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { extname } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
@@ -28,8 +31,9 @@ const standaloneAdjustmentInput = z.object({ operations: z.array(z.record(z.stri
 const standaloneVoiceInput = z.object({ assetId: z.string().trim().min(1) });
 const standaloneSettingsInput = z.object({ seed: z.number().int().optional(), targetDurationMs: z.number().int().positive().nullable().optional(), minClipDurationMs: z.number().int().positive().optional(), maxClipDurationMs: z.number().int().positive().optional() });
 const sentencePreviewInput = z.object({ script: z.string().max(100_000), splitSemicolon: z.boolean().optional() });
-const localMediaScanInput = z.object({ sourceRoot: z.string().trim().min(1), recursive: z.boolean().default(true) });
-const montagePlanInput = z.object({ mode: z.enum(['SCRIPT', 'RANDOM']), script: z.string().max(100_000).optional(), sentences: z.array(z.object({ index: z.number().int().nonnegative().optional(), text: z.string().trim().min(1), normalizedText: z.string().optional(), voiceStartMs: z.number().nonnegative().optional(), voiceEndMs: z.number().nonnegative().optional(), durationMs: z.number().positive().optional() })).optional(), videoAssetIds: z.array(z.string().trim().min(1)).max(256).default([]), sourceRoot: z.string().trim().min(1).optional(), recursive: z.boolean().default(true), seed: z.number().int().default(1), minClipDurationMs: z.number().int().positive().default(2_000), maxClipDurationMs: z.number().int().positive().default(5_000), voiceAssetId: z.string().trim().min(1).optional() }).superRefine((value, context) => { if (!value.script?.trim() && !value.sentences?.length) context.addIssue({ code: z.ZodIssueCode.custom, path: ['script'], message: 'script or sentences is required' }); if (!value.sourceRoot && value.videoAssetIds.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ['videoAssetIds'], message: 'videoAssetIds or sourceRoot is required' }); });
+const localMediaScanInput = z.object({ projectId: z.string().trim().min(1).optional(), sourceRoot: z.string().trim().min(1), recursive: z.boolean().default(true), idempotencyKey: z.string().trim().min(1).max(200).optional() });
+const localMediaContentInput = z.object({ projectId: z.string().trim().min(1).optional(), sourceRootId: z.string().trim().min(1), fileId: z.string().trim().min(1) });
+const montagePlanInput = z.object({ mode: z.enum(['SCRIPT', 'RANDOM']), script: z.string().max(100_000).optional(), sentences: z.array(z.object({ index: z.number().int().nonnegative().optional(), text: z.string().trim().min(1), normalizedText: z.string().optional(), voiceStartMs: z.number().nonnegative().optional(), voiceEndMs: z.number().nonnegative().optional(), durationMs: z.number().positive().optional() })).optional(), videoAssetIds: z.array(z.string().trim().min(1)).max(256).default([]), sourceRoot: z.string().trim().min(1).optional(), scanId: z.string().trim().min(1).optional(), recursive: z.boolean().default(true), seed: z.number().int().default(1), minClipDurationMs: z.number().int().positive().default(2_000), maxClipDurationMs: z.number().int().positive().default(5_000), voiceAssetId: z.string().trim().min(1).optional() }).superRefine((value, context) => { if (!value.script?.trim() && !value.sentences?.length) context.addIssue({ code: z.ZodIssueCode.custom, path: ['script'], message: 'script or sentences is required' }); if (!value.sourceRoot && !value.scanId && value.videoAssetIds.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ['videoAssetIds'], message: 'videoAssetIds or sourceRoot/scanId is required' }); });
 
 export interface VideoRouteDependencies {
   projects: ProjectService;
@@ -100,12 +104,48 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: '请输入脚本文案。', details: parsed.error.issues } });
     return { items: segmentScriptSentences(parsed.data.script, parsed.data.splitSemicolon === undefined ? {} : { splitSemicolon: parsed.data.splitSemicolon }) };
   });
+  app.get('/api/v1/projects/:projectId/video/current-script', async (request, reply) => {
+    const projectId = projectIdOf(request); const pair = await director.getCurrentPair(projectId); const script = pair.script;
+    if (!script || script.status !== 'ACCEPTED') return reply.code(404).send({ error: { code: 'DIRECTOR_SCRIPT_NOT_AVAILABLE', message: '当前项目暂无可用脚本，请先到脚本与分镜完成脚本。', details: [] } });
+    const body = [script.hook, script.body, script.cta].filter((value): value is string => Boolean(value?.trim())).join('\n\n');
+    return { projectId, scriptRevisionId: script.id, revision: script.revision, title: script.title, body, status: script.status };
+  });
   app.post('/api/v1/video/local-media/scan', async (request, reply) => {
     const parsed = localMediaScanInput.safeParse(request.body || {});
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: '请输入素材文件夹路径。', details: parsed.error.issues } });
     if (!dependencies.localMedia) return reply.code(403).send({ error: { code: 'LOCAL_MEDIA_ROOT_UNAUTHORIZED', message: '服务端尚未配置本地素材授权根目录。', details: [] } });
-    try { const result = await dependencies.localMedia.scan(parsed.data); return { sourceRootId: result.sourceRootId, totalCount: result.totalCount, availableCount: result.availableCount, unavailableCount: result.unavailableCount, files: result.files.map(LocalMediaSourceService.toPublicFile) }; }
-    catch (error) { const message = error instanceof Error ? error.message : '本地素材扫描失败。'; return reply.code(message.includes('UNAUTHORIZED') ? 403 : message.includes('NOT_FOUND') ? 404 : 422).send({ error: { code: message, message: message === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? '该本地文件夹未被授权。' : '本地素材扫描失败，请检查路径和权限。', details: [] } }); }
+    try {
+      if (parsed.data.projectId && !(await projects.get(parsed.data.projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: '项目不存在。', details: [] } });
+      const authorized = dependencies.localMedia.authorizeRoot(parsed.data.sourceRoot);
+      const key = parsed.data.idempotencyKey || `local-media-scan:${parsed.data.projectId || 'workspace'}:${authorized.sourceRootId}:${parsed.data.recursive}`;
+      const existing = await jobs.getByIdempotencyKey(key);
+      if (existing) return reply.code(202).send({ scanId: (existing.payload as { scanId?: string }).scanId, jobId: existing.id, state: existing.state, sourceRootId: authorized.sourceRootId, progress: existing.progress });
+      const scanId = `scan-${randomUUID()}`;
+      if (!parsed.data.projectId) return reply.code(422).send({ error: { code: 'LOCAL_MEDIA_SCAN_PROJECT_REQUIRED', message: '素材扫描需要绑定项目。', details: [] } });
+      await dependencies.localMedia.createScan({ id: scanId, projectId: parsed.data.projectId, sourceRoot: authorized.root, recursive: parsed.data.recursive, sourceRootId: authorized.sourceRootId });
+      const job = await jobs.createIdempotent({ id: `job-${randomUUID()}`, type: 'LOCAL_MEDIA_SCAN', projectId: parsed.data.projectId, workspaceId: `workspace-project-${parsed.data.projectId}`, payload: { schemaVersion: 'LOCAL_MEDIA_SCAN_V1', projectId: parsed.data.projectId, scanId, sourceRoot: authorized.root, sourceRootId: authorized.sourceRootId, recursive: parsed.data.recursive }, idempotencyKey: key, maxAttempts: 3 });
+      return reply.code(202).send({ scanId, jobId: job.id, state: job.state, sourceRootId: authorized.sourceRootId, progress: job.progress });
+    } catch (error) { const message = error instanceof Error ? error.message : '本地素材扫描失败。'; return reply.code(message.includes('UNAUTHORIZED') ? 403 : message.includes('NOT_FOUND') ? 404 : 422).send({ error: { code: message, message: message === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? '该本地文件夹未被授权。' : '本地素材扫描失败，请检查路径和权限。', details: [] } }); }
+  });
+  app.get('/api/v1/video/local-media/scans/:scanId', async (request, reply) => {
+    if (!dependencies.localMedia) return reply.code(403).send({ error: { code: 'LOCAL_MEDIA_ROOT_UNAUTHORIZED', message: '服务端尚未配置本地素材授权根目录。', details: [] } });
+    const query = request.query as { projectId?: string }; const scan = await dependencies.localMedia.getScan((request.params as { scanId: string }).scanId, query.projectId);
+    if (!scan) return reply.code(404).send({ error: { code: 'LOCAL_MEDIA_SCAN_NOT_FOUND', message: '素材扫描任务不存在。', details: [] } });
+    return { id: scan.id, projectId: scan.projectId, sourceRootId: scan.sourceRootId, recursive: scan.recursive, status: scan.status, progress: scan.progress, error: scan.error, files: scan.files.map(LocalMediaSourceService.toPublicFile) };
+  });
+  app.get('/api/v1/video/local-media/content', async (request, reply) => {
+    const parsed = localMediaContentInput.safeParse(request.query || {});
+    if (!parsed.success || !dependencies.localMedia) return reply.code(404).send({ error: { code: 'LOCAL_MEDIA_FILE_NOT_FOUND', message: '本地视频不存在。', details: [] } });
+    const file = await dependencies.localMedia.getFile(parsed.data.sourceRootId, parsed.data.fileId, parsed.data.projectId);
+    if (!file || !file.available) return reply.code(404).send({ error: { code: 'LOCAL_MEDIA_FILE_NOT_FOUND', message: '当前视频素材已不存在，请重新扫描素材文件夹。', details: [] } });
+    const info = await stat(file.sourcePath).catch(() => null); if (!info?.isFile()) return reply.code(404).send({ error: { code: 'LOCAL_MEDIA_FILE_NOT_FOUND', message: '当前视频素材已不存在，请重新扫描素材文件夹。', details: [] } });
+    const range = request.headers.range; const mime = ({ mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', avi: 'video/x-msvideo' } as Record<string, string>)[extname(file.fileName).slice(1).toLowerCase()] || 'video/mp4';
+    reply.header('accept-ranges', 'bytes').header('content-type', mime);
+    if (!range) { reply.header('content-length', info.size); return reply.send(createReadStream(file.sourcePath)); }
+    const match = /^bytes=(\d*)-(\d*)$/u.exec(range); if (!match) return reply.code(416).send();
+    const start = match[1] ? Number(match[1]) : Math.max(0, info.size - Number(match[2] || 0)); const end = match[2] ? Number(match[2]) : info.size - 1;
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end >= info.size) return reply.code(416).header('content-range', `bytes */${info.size}`).send();
+    reply.code(206).header('content-length', end - start + 1).header('content-range', `bytes ${start}-${end}/${info.size}`); return reply.send(createReadStream(file.sourcePath, { start, end }));
   });
 
   app.post('/api/v1/projects/:projectId/video/montage-plans', async (request, reply) => {
@@ -114,10 +154,13 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     if (!(await projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: '项目不存在。', details: [] } });
     try {
       let plannerAssets: Array<{ id: string; storageKey: string; sourcePath: string; durationMs: number; originalName?: string; tags?: string[]; metadata?: Record<string, unknown> }>;
-      if (parsed.data.sourceRoot) {
+      let localPoolMeta: { sourceRootId: string; scanId: string } | null = null;
+      if (parsed.data.sourceRoot || parsed.data.scanId) {
         if (!dependencies.localMedia) throw new Error('LOCAL_MEDIA_ROOT_UNAUTHORIZED');
-        const scan = await dependencies.localMedia.scan({ sourceRoot: parsed.data.sourceRoot, recursive: parsed.data.recursive });
-        plannerAssets = scan.files.filter((file) => file.available).map((file) => ({ id: `${scan.sourceRootId}:${file.relativePath}`, storageKey: `${scan.sourceRootId}:${file.relativePath}`, sourcePath: file.sourcePath, durationMs: file.durationMs, originalName: file.fileName, metadata: { width: file.width, height: file.height, format: file.format } }));
+        const scan = parsed.data.scanId ? await dependencies.localMedia.getScan(parsed.data.scanId, projectId) : await dependencies.localMedia.getLatestScan(projectId, dependencies.localMedia.authorizeRoot(parsed.data.sourceRoot!).sourceRootId);
+        if (!scan || scan.status !== 'SUCCEEDED') throw new Error('LOCAL_MEDIA_SCAN_NOT_READY');
+        plannerAssets = scan.files.filter((file) => file.available).map((file) => ({ id: `${scan.sourceRootId}:${file.relativePath}`, storageKey: `${scan.sourceRootId}:${file.relativePath}`, sourcePath: file.sourcePath, durationMs: file.durationMs, originalName: file.fileName, metadata: { width: file.width, height: file.height, format: file.format, relativePath: file.relativePath } }));
+        localPoolMeta = { sourceRootId: scan.sourceRootId, scanId: scan.id };
       } else {
         const selected = await assets.listReadySourceAssets(projectId, parsed.data.videoAssetIds, 'VIDEO');
         if (selected.length !== new Set(parsed.data.videoAssetIds).size) throw new Error('VIDEO_SOURCE_ASSET_INVALID');
@@ -126,6 +169,7 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
       const sentences = (parsed.data.sentences || []).map((sentence, index) => ({ index, text: sentence.text, normalizedText: sentence.normalizedText || sentence.text.normalize('NFKC').toLowerCase(), ...(sentence.voiceStartMs !== undefined ? { voiceStartMs: sentence.voiceStartMs } : {}), ...(sentence.voiceEndMs !== undefined ? { voiceEndMs: sentence.voiceEndMs } : {}), ...(sentence.durationMs !== undefined ? { durationMs: sentence.durationMs } : {}) })) as TimedScriptSentence[];
       const effectiveSentences = sentences.length > 0 ? sentences : segmentScriptSentences(parsed.data.script || '');
       const result = parsed.data.mode === 'SCRIPT' ? buildScriptMontageManifest({ projectId, ...(parsed.data.script ? { script: parsed.data.script } : {}), sentences: effectiveSentences, assets: plannerAssets, seed: parsed.data.seed, minClipDurationMs: parsed.data.minClipDurationMs, maxClipDurationMs: parsed.data.maxClipDurationMs, ...(parsed.data.voiceAssetId ? { voiceAssetId: parsed.data.voiceAssetId } : {}) }) : buildRandomSentenceMontageManifest({ projectId, sentences: effectiveSentences, assets: plannerAssets, seed: parsed.data.seed, minClipDurationMs: parsed.data.minClipDurationMs, maxClipDurationMs: parsed.data.maxClipDurationMs, ...(parsed.data.voiceAssetId ? { voiceAssetId: parsed.data.voiceAssetId } : {}) });
+      if (localPoolMeta) result.manifest.metadata = { ...(result.manifest.metadata || {}), ...localPoolMeta };
       const record = await quickEdit.createPlannedManifest({ projectId, manifest: result.manifest, createdBy: 'operator' });
       return reply.code(201).send({ ...safeManifestRecord(record) as Record<string, unknown>, decisions: result.decisions, sentences: result.sentences });
     } catch (error) {

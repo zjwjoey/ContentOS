@@ -6,9 +6,10 @@ export type QuickEditOperation =
   | { type: 'REMOVE'; clipIndex: number }
   | { type: 'REORDER'; clipIndexes: number[] }
   | { type: 'REPLACE'; clipIndex: number; assetId: string; sourceInMs?: number }
-  | { type: 'REROLL'; clipIndex: number; seed?: number };
+  | { type: 'REROLL'; clipIndex: number; seed?: number }
+  | { type: 'REMATCH'; clipIndex: number; seed?: number };
 
-export interface AdjustmentAsset { id: string; durationMs: number; sourcePath?: string; }
+export interface AdjustmentAsset { id: string; durationMs: number; sourcePath?: string; originalName?: string; tags?: string[]; metadata?: Record<string, unknown>; }
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -59,7 +60,31 @@ function parseOperation(value: unknown): QuickEditOperation {
     const seed = value.seed === undefined ? undefined : requireInteger(value.seed, 'seed');
     return { type: 'REROLL', clipIndex: requireInteger(value.clipIndex, 'clipIndex'), ...(seed === undefined ? {} : { seed }) };
   }
+  if (value.type === 'REMATCH') {
+    const seed = value.seed === undefined ? undefined : requireInteger(value.seed, 'seed');
+    return { type: 'REMATCH', clipIndex: requireInteger(value.clipIndex, 'clipIndex'), ...(seed === undefined ? {} : { seed }) };
+  }
   throw new Error(`Unknown Quick Edit operation: ${value.type}`);
+}
+
+function matchingTokens(value: string): string[] {
+  const terms = value.normalize('NFKC').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  for (const term of [...terms]) {
+    if (!/^[\u3400-\u9fff]+$/u.test(term) || term.length < 2) continue;
+    for (let size = 2; size <= Math.min(4, term.length); size += 1) for (let start = 0; start + size <= term.length; start += 1) terms.push(term.slice(start, start + size));
+  }
+  return [...new Set(terms)];
+}
+
+export interface RankedAdjustmentAsset { asset: AdjustmentAsset; matchedKeywords: string[]; matchScore: number; }
+export function rankAdjustmentAssets(sentenceText: string, assets: AdjustmentAsset[]): RankedAdjustmentAsset[] {
+  const required = matchingTokens(sentenceText);
+  return assets.map((asset) => {
+    const metadata = Object.values(asset.metadata || {}).flatMap((value) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : typeof value === 'string' ? [value] : []);
+    const haystack = new Set(matchingTokens([asset.originalName || '', ...(asset.tags || []), ...metadata].join(' ')));
+    const matchedKeywords = required.filter((token) => haystack.has(token));
+    return { asset, matchedKeywords, matchScore: required.length ? Math.round((matchedKeywords.length / required.length) * 100) : 0 };
+  }).sort((a, b) => b.matchScore - a.matchScore || a.asset.id.localeCompare(b.asset.id));
 }
 
 export function parseQuickEditOperations(value: unknown): QuickEditOperation[] {
@@ -108,7 +133,7 @@ export function applyQuickEditOperations(parent: EditManifestV0, operations: Qui
       const sourceInMs = operation.sourceInMs ?? clip.sourceInMs;
       if (replacement && (sourceInMs < 0 || sourceInMs + clip.durationMs > replacement.durationMs)) throw new Error(`Quick Edit REPLACE asset ${operation.assetId} is too short`);
       next.timeline[operation.clipIndex] = { ...clip, assetId: operation.assetId, sourceInMs, ...(replacement?.sourcePath ? { sourcePath: replacement.sourcePath } : {}) };
-    } else {
+    } else if (operation.type === 'REROLL') {
       assertClipIndex(operation.clipIndex, next.timeline.length);
       if (assets.length === 0) throw new Error('Quick Edit REROLL requires available READY video assets');
       const random = seededRandom(operation.seed ?? next.seed + operation.clipIndex);
@@ -122,6 +147,22 @@ export function applyQuickEditOperations(parent: EditManifestV0, operations: Qui
       const maxIn = Math.max(0, replacement.durationMs - current.durationMs);
       const sourceInMs = maxIn === 0 ? 0 : Math.floor(random() * (maxIn + 1));
       next.timeline[operation.clipIndex] = { ...current, assetId: replacement.id, sourceInMs, ...(replacement.sourcePath ? { sourcePath: replacement.sourcePath } : {}) };
+    } else {
+      assertClipIndex(operation.clipIndex, next.timeline.length);
+      if (assets.length === 0) throw new Error('Quick Edit REMATCH requires available video assets');
+      const current = next.timeline[operation.clipIndex]!;
+      const ranked = rankAdjustmentAssets(current.sentenceText || '', assets);
+      const previous = next.timeline[operation.clipIndex - 1]?.assetId;
+      const following = next.timeline[operation.clipIndex + 1]?.assetId;
+      const eligible = ranked.filter((item) => item.asset.id !== current.assetId && item.asset.id !== previous && item.asset.id !== following && item.asset.durationMs >= current.durationMs);
+      const relaxed = ranked.filter((item) => item.asset.id !== current.assetId && item.asset.durationMs >= current.durationMs);
+      const selected = eligible[0] || relaxed[0];
+      if (!selected) throw new Error('Quick Edit REMATCH has no replacement asset with sufficient duration');
+      const maxIn = Math.max(0, selected.asset.durationMs - current.durationMs);
+      const random = seededRandom(operation.seed ?? next.seed + operation.clipIndex);
+      const sourceInMs = maxIn === 0 ? 0 : Math.floor(random() * (maxIn + 1));
+      const fallback = selected.matchScore === 0;
+      next.timeline[operation.clipIndex] = { ...current, assetId: selected.asset.id, sourceInMs, ...(selected.asset.sourcePath ? { sourcePath: selected.asset.sourcePath } : {}), matching: { matchedKeywords: selected.matchedKeywords, matchScore: selected.matchScore, fallback, matchingReason: fallback ? '重新匹配未命中关键词，已使用规则兜底素材' : `重新匹配命中关键词：${selected.matchedKeywords.join('、')}` } };
     }
   }
   validateEditManifest(next);

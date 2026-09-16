@@ -59,9 +59,10 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const jobs = new JobService(db);
   const benchmark = new BenchmarkService(db, jobs);
   const assets = new AssetCatalogService(db);
+  const localMedia = new LocalMediaSourceService({ db });
   const video = new VideoService(db, storage, jobs, assets);
   const videoFromDirector = new DirectorVideoService(directorV1, video, director);
-  const quickEdit = new VideoAdjustmentService(db, assets);
+  const quickEdit = new VideoAdjustmentService(db, assets, localMedia);
   const standaloneQuickEdit = new StandaloneQuickEditService(db, assets, quickEdit, video);
   registerAssetRoutes(app, { projects, imports: new AssetImportService(db), assets, jobs, storage, maxUploadBytes: uploadMaxBytes });
   const publisher = new PublisherService(db);
@@ -72,7 +73,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerProjectCenterRoutes(app, { center: projectCenter });
   registerDashboardRoutes(app, { projects, center: projectCenter });
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
-  registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes, localMedia: new LocalMediaSourceService() });
+  registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes, localMedia });
   registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs, allowFakePublisherControls: runtime.allowFakePublisherControls === true, ...(runtime.allowFakePublisherControls ? { fakeSimulations: new FakePublisherSimulationService(db) } : {}) });
   registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher, director: directorV1 });
   app.get('/health', async () => ({ status: 'ok' }));

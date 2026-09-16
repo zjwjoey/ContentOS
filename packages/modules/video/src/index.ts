@@ -12,7 +12,7 @@ export type { StoryboardPlannerAsset, StoryboardPlannerDecision, StoryboardPlann
 export type { ScriptSentence, SegmentScriptOptions } from './sentence-segmenter.js';
 export type { RandomSentenceMontageInput, ScriptMontageInput, SentenceMontageAsset, SentenceMontageBaseInput, SentenceMontageDecision, SentenceMontageResult, TimedScriptSentence } from './planner.js';
 export type { EditManifestV0, ManifestClip } from '../../../contracts/src/index.js';
-export { applyQuickEditOperations, digestEditManifest, parseQuickEditOperations } from './quick-edit.js';
+export { applyQuickEditOperations, digestEditManifest, parseQuickEditOperations, rankAdjustmentAssets } from './quick-edit.js';
 export type { QuickEditOperation } from './quick-edit.js';
 export { VideoAdjustmentService, VideoQuickEditService } from './quick-edit-service.js';
 export type { CreateQuickEditVersionInput, QuickEditManifestRecord } from './quick-edit-service.js';

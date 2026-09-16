@@ -91,3 +91,17 @@ test('rejects reroll when every replacement source is shorter than the selected 
     /no replacement asset/i,
   );
 });
+
+test('rematch chooses the next eligible semantic match and records the reason', () => {
+  const parent = fixture();
+  parent.timeline[0]!.sentenceText = '欧洲门店扩张';
+  const operations = parseQuickEditOperations([{ type: 'REMATCH', clipIndex: 0, seed: 1 }]);
+  const next = applyQuickEditOperations(parent, operations, [
+    { id: 'asset-a', durationMs: 2_000, originalName: '欧洲门店.mp4', tags: ['欧洲', '门店'] },
+    { id: 'asset-b', durationMs: 2_000, originalName: '销售数据.mp4', tags: ['数据'] },
+    { id: 'asset-c', durationMs: 2_000, originalName: '欧洲货架.mp4', tags: ['欧洲', '货架'] },
+  ]);
+  assert.equal(next.timeline[0]?.assetId, 'asset-c');
+  assert.equal(next.timeline[0]?.matching?.fallback, false);
+  assert.match(next.timeline[0]?.matching?.matchingReason || '', /匹配/);
+});

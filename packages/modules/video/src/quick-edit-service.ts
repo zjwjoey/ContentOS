@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { AssetCatalogService } from '../../asset/src/index.js';
+import type { LocalMediaSourceService } from '../../asset/src/index.js';
 import { applyQuickEditOperations, digestEditManifest, parseQuickEditOperations, type QuickEditOperation } from './quick-edit.js';
 import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
 
@@ -56,7 +57,7 @@ function sourceDuration(asset: { metadata: Record<string, unknown> }, assetId: s
 }
 
 export class VideoAdjustmentService {
-  constructor(private readonly db: Pool, private readonly assets: AssetCatalogService) {}
+  constructor(private readonly db: Pool, private readonly assets: AssetCatalogService, private readonly localMedia?: LocalMediaSourceService) {}
 
   async listManifests(projectId: string, workspaceId?: string): Promise<QuickEditManifestRecord[]> {
     const result = workspaceId
@@ -122,8 +123,11 @@ export class VideoAdjustmentService {
       const sourceIds = [...new Set(parentValue.timeline.map((clip) => clip.assetId))];
       const localOnly = !input.workspaceId && sourceIds.every((id) => id.startsWith('local-'));
       if (localOnly) {
-        const localSources = parentValue.timeline.reduce((map, clip) => map.set(clip.assetId, { id: clip.assetId, durationMs: Math.max(clip.sourceInMs + clip.durationMs, clip.durationMs), sourcePath: clip.sourcePath }), new Map<string, { id: string; durationMs: number; sourcePath: string }>());
-        const next = applyQuickEditOperations(parentValue, operations, [...localSources.values()]);
+        const sourceRootId = parentValue.metadata?.localMediaSourceRootId;
+        const persistedPool = sourceRootId && this.localMedia ? await this.localMedia.getLatestScan(input.projectId!, sourceRootId) : null;
+        const pool = persistedPool?.files.filter((file) => file.available).map((file) => ({ id: `${persistedPool.sourceRootId}:${file.relativePath}`, durationMs: file.durationMs, sourcePath: file.sourcePath, originalName: file.fileName, metadata: { width: file.width, height: file.height, format: file.format } })) || parentValue.timeline.map((clip) => ({ id: clip.assetId, durationMs: Math.max(clip.sourceInMs + clip.durationMs, clip.durationMs), sourcePath: clip.sourcePath }));
+        const localSources = new Map(pool.map((asset) => [asset.id, asset]));
+        const next = applyQuickEditOperations(parentValue, operations, pool);
         next.timeline = next.timeline.map((clip) => { const source = localSources.get(clip.assetId); if (!source) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`); if (clip.sourceInMs + clip.durationMs > source.durationMs) throw new Error(`VIDEO_MANIFEST_CLIP_OUT_OF_BOUNDS: ${clip.assetId}`); return { ...clip, sourcePath: source.sourcePath }; });
         validateEditManifest(next);
         const revisionResult = await client.query<{ revision: number }>(`select coalesce(max(revision), 0) + 1 as revision from edit_manifests where ${ownerColumn} = $1`, [ownerId]);
@@ -137,7 +141,7 @@ export class VideoAdjustmentService {
       if (!input.workspaceId && sourceRows.length !== sourceIds.length) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
       const allSources = sourceRows.length > 0 && input.workspaceId ? sourceRows : await this.assets.listReadyVideoAssets(input.projectId!);
       const sourceById = new Map(allSources.map((asset) => [asset.id, asset]));
-      const next = applyQuickEditOperations(parentValue, operations, allSources.map((asset) => ({ id: asset.id, durationMs: sourceDuration(asset, asset.id), sourcePath: asset.storageKey })));
+      const next = applyQuickEditOperations(parentValue, operations, allSources.map((asset) => ({ id: asset.id, durationMs: sourceDuration(asset, asset.id), sourcePath: asset.storageKey, originalName: typeof asset.metadata.originalName === 'string' ? asset.metadata.originalName : asset.storageKey, tags: Array.isArray(asset.metadata.tags) ? asset.metadata.tags.filter((tag): tag is string => typeof tag === 'string') : [], metadata: asset.metadata })));
       next.timeline = next.timeline.map((clip) => {
         const source = sourceById.get(clip.assetId);
         if (!source) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`);

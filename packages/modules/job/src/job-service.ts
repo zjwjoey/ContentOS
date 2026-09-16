@@ -186,6 +186,11 @@ export class JobService {
     return cancellation.rowCount ? 'CANCEL_REQUESTED' : 'STALE';
   }
 
+  async updateProgress(id: string, attemptId: string, progress: unknown): Promise<boolean> {
+    const result = await this.db.query("update jobs set progress = $3, updated_at = now() where id = $1 and state = 'RUNNING' and attempt_count = (select attempt_number from job_attempts where id = $2 and job_id = $1 and status = 'RUNNING')", [id, attemptId, progress]);
+    return Boolean(result.rowCount);
+  }
+
   async renewLease(id: string, attemptId: string, leaseMs: number): Promise<boolean> {
     return (await this.heartbeat(id, attemptId, leaseMs)) === 'ACTIVE';
   }

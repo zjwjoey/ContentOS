@@ -1,13 +1,13 @@
 import { join } from 'node:path';
 import { readdir, rm } from 'node:fs/promises';
 import type { Pool } from 'pg';
-import type { AssetService } from '../../../packages/modules/asset/src/index.js';
+import type { AssetService, LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { JobLeaseCancellationHandler, JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
 import type { VideoService } from '../../../packages/modules/video/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import { renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 
-export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; }
+export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; localMedia?: LocalMediaSourceService; }
 
 export function createVideoLeaseCancellationHandler(video: VideoService, storage: LocalStorageProvider): JobLeaseCancellationHandler {
   return async (job, scope) => {
@@ -54,5 +54,23 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
       await deps.jobs.fail(job.id, attemptId, diagnostics, true, async (scope) => { await deps.video.failRender(planned.renderId, scope, diagnostics); });
       throw error;
     } finally { await rm(outputPath, { force: true }); }
+  };
+}
+
+export function createLocalMediaScanJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
+  return async (job, attemptId, signal) => {
+    if (job.type !== 'LOCAL_MEDIA_SCAN' || !deps.localMedia) throw new Error('Local media scan service is unavailable');
+    const payload = job.payload as { scanId?: string; sourceRoot?: string; recursive?: boolean };
+    if (!payload.scanId || !payload.sourceRoot) throw new Error('LOCAL_MEDIA_SCAN_PAYLOAD_INVALID');
+    await deps.localMedia.markScanRunning(payload.scanId);
+    try {
+      const result = await deps.localMedia.scan({ sourceRoot: payload.sourceRoot, recursive: payload.recursive !== false, signal, onProgress: async (progress) => { await deps.jobs.updateProgress(job.id, attemptId, progress); await deps.localMedia!.updateScanProgress(payload.scanId!, progress); } });
+      await deps.localMedia.completeScan(payload.scanId, result);
+      return { scanId: payload.scanId, sourceRootId: result.sourceRootId, totalCount: result.totalCount, availableCount: result.availableCount, unavailableCount: result.unavailableCount };
+    } catch (error) {
+      const cancelled = signal.aborted || (error instanceof Error && error.message === 'LOCAL_MEDIA_SCAN_CANCELLED');
+      await deps.localMedia.failScan(payload.scanId, { code: cancelled ? 'LOCAL_MEDIA_SCAN_CANCELLED' : 'LOCAL_MEDIA_SCAN_FAILED', message: error instanceof Error ? error.message : 'scan failed' }, cancelled ? 'CANCELLED' : 'FAILED');
+      throw error;
+    }
   };
 }
