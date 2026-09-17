@@ -122,15 +122,22 @@ export class VideoAdjustmentService {
       validateEditManifest(parentValue);
       const sourceIds = [...new Set(parentValue.timeline.map((clip) => clip.assetId))];
       if (!input.workspaceId) {
-        const sourceRootId = parentValue.metadata?.localMediaSourceRootId;
-        const persistedPool = sourceRootId && this.localMedia ? await this.localMedia.getLatestScan(input.projectId!, sourceRootId) : null;
-        const indexedPool = this.localMedia ? await this.localMedia.listIndex(input.projectId!, {}) : [];
-        const indexedAssets = indexedPool.filter((file) => file.available).map((file) => ({ id: `${persistedPool?.sourceRootId || sourceIds[0]?.split(':', 1)[0] || 'local'}:${file.relativePath}`, durationMs: file.durationMs, sourcePath: file.sourcePath, originalName: file.fileName, tags: file.tags, metadata: { width: file.width, height: file.height, format: file.format, category: file.category, usageCount: file.usageCount, recentUsageCount: file.recentUsageCount, lastUsedAt: file.lastUsedAt }, usageCount: file.usageCount, recentUsageCount: file.recentUsageCount, lastUsedAt: file.lastUsedAt }));
         const projectPool = await this.assets.listReadyVideoAssets(input.projectId!);
         const projectAssets = projectPool.map((asset) => ({ id: asset.id, durationMs: sourceDuration(asset, asset.id), sourcePath: asset.storageKey, originalName: typeof asset.metadata.originalName === 'string' ? asset.metadata.originalName : asset.storageKey, tags: Array.isArray(asset.metadata.tags) ? asset.metadata.tags.filter((tag): tag is string => typeof tag === 'string') : [], metadata: asset.metadata }));
-        const localFallback = parentValue.timeline.filter((clip) => clip.assetId.startsWith('local-')).map((clip) => ({ id: clip.assetId, durationMs: Math.max(clip.sourceInMs + clip.durationMs, clip.durationMs), sourcePath: clip.sourcePath }));
-        const localAssets = indexedAssets.length > 0 ? indexedAssets : localFallback;
         const projectById = new Map(projectAssets.map((asset) => [asset.id, asset]));
+        const contentClips = parentValue.timeline.filter((clip) => !clip.role || clip.role === 'CONTENT');
+        const localContentIds = contentClips.map((clip) => clip.assetId).filter((id) => id.startsWith('local-'));
+        const hasLocalContent = localContentIds.length > 0;
+        const localRootFromAssetId = (assetId: string): string | undefined => {
+          const separator = assetId.indexOf(':');
+          return separator > 0 ? assetId.slice(0, separator) : undefined;
+        };
+        const sourceRootId = hasLocalContent ? parentValue.metadata?.localMediaSourceRootId || localRootFromAssetId(localContentIds[0]!) : undefined;
+        if (hasLocalContent && !sourceRootId) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
+        const persistedPool = sourceRootId && this.localMedia ? await this.localMedia.getLatestScan(input.projectId!, sourceRootId) : null;
+        const localAssets = hasLocalContent
+          ? (persistedPool?.files.filter((file) => file.available).map((file) => ({ id: `${sourceRootId}:${file.relativePath}`, durationMs: file.durationMs, sourcePath: file.sourcePath, originalName: file.fileName, tags: file.tags, metadata: { width: file.width, height: file.height, format: file.format, category: file.category, usageCount: file.usageCount, recentUsageCount: file.recentUsageCount, lastUsedAt: file.lastUsedAt }, usageCount: file.usageCount, recentUsageCount: file.recentUsageCount, lastUsedAt: file.lastUsedAt })) || contentClips.filter((clip) => clip.assetId.startsWith('local-')).map((clip) => ({ id: clip.assetId, durationMs: Math.max(clip.sourceInMs + clip.durationMs, clip.durationMs), sourcePath: clip.sourcePath })))
+          : [];
         const operationAssetIds = operations.filter((operation): operation is Extract<QuickEditOperation, { type: 'REPLACE' }> => operation.type === 'REPLACE').map((operation) => operation.assetId);
         const globalIds = [...new Set([...sourceIds, ...operationAssetIds])].filter((id) => !id.startsWith('local-') && !projectById.has(id));
         const globalPool = await this.assets.listReadyGlobalVideoAssets(globalIds);

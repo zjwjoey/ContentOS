@@ -86,6 +86,23 @@ test('global branding sources stay out of REMATCH candidates', () => {
   assert.equal(next.timeline[0]?.assetId, 'global-intro');
 });
 
+test('project-only quick edit candidates ignore historical local media', () => {
+  const project = [{ ...longAsset, id: 'project-a', originalName: '项目甲.mp4' }, { ...longAsset, id: 'project-b', originalName: '项目乙.mp4' }, { ...longAsset, id: 'project-c', originalName: '项目丙.mp4' }];
+  const historicalLocal = [{ ...longAsset, id: 'local-history:l1.mp4', originalName: '历史本地.mp4' }, { ...longAsset, id: 'local-history:l2.mp4', originalName: '历史本地2.mp4' }];
+  const intro = { id: 'global-intro', storageKey: 'global-intro', sourcePath: 'global-intro', durationMs: 1_000, role: 'INTRO' as const };
+  const outro = { id: 'global-outro', storageKey: 'global-outro', sourcePath: 'global-outro', durationMs: 1_000, role: 'OUTRO' as const };
+  const parent = assembleBrandedTimeline(buildRandomSentenceMontageManifest({ projectId: 'project-v15', seed: 1, sentences: [{ index: 0, text: '项目内容', normalizedText: '项目内容' }], assets: project, minClipDurationMs: 1_000, maxClipDurationMs: 1_000 }).manifest, { intro, outro });
+  const sourcePool = [...project, ...historicalLocal, intro, outro];
+  const rematched = applyQuickEditOperations(parent, [{ type: 'REMATCH', clipIndex: 1, seed: 4 }], sourcePool, project);
+  const rematchedId = rematched.timeline[1]!.assetId;
+  assert.ok(project.some((asset) => asset.id === rematchedId));
+  assert.equal(rematchedId.startsWith('local-'), false);
+  assert.notEqual(rematchedId, intro.id);
+  assert.notEqual(rematchedId, outro.id);
+  const rerolled = applyQuickEditOperations(parent, [{ type: 'REROLL', clipIndex: 1, seed: 4 }], sourcePool, project);
+  assert.ok(project.some((asset) => asset.id === rerolled.timeline[1]!.assetId));
+});
+
 test('V1.5 real FFmpeg render delays voice after an intro and preserves output duration', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-v15-render-')); const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg'; const ffprobePath = process.env.FFPROBE_PATH || 'ffprobe';
   try {
