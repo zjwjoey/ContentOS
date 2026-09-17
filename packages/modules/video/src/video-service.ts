@@ -149,8 +149,11 @@ export class VideoService {
     const projectIds = ids.filter((id) => !id.startsWith('local-'));
     const manifest = structuredClone(persisted);
     const projectSources = projectIds.length > 0 ? await this.assets.listReadySourceAssets(job.projectId!, projectIds, 'VIDEO') : [];
-    if (projectSources.length !== projectIds.length) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
-    const projectById = new Map(projectSources.map((source) => [source.id, source]));
+    const projectIdsResolved = new Set(projectSources.map((source) => source.id));
+    const unresolvedProjectIds = projectIds.filter((id) => !projectIdsResolved.has(id));
+    const globalSources = unresolvedProjectIds.length > 0 ? await this.assets.listReadyGlobalVideoAssets(unresolvedProjectIds) : [];
+    const projectById = new Map([...projectSources, ...globalSources].map((source) => [source.id, source]));
+    if (projectById.size !== projectIds.length) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
     const localById = new Map<string, { sourcePath: string; durationMs: number }>();
     const configuredRoots = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((root) => root.trim()).filter(Boolean);
     for (const localId of localIds) {

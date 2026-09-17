@@ -96,6 +96,14 @@ export class AssetCatalogService {
     return result.rows.map((row) => mapSourceAsset(row as Record<string, unknown>));
   }
 
+  async listReadyGlobalVideoAssets(assetIds: string[] = []): Promise<ReadySourceAsset[]> {
+    const values: unknown[] = ['VIDEO', 'READY'];
+    const filter = assetIds.length > 0 ? ` and a.id = any($3::text[])` : '';
+    if (assetIds.length > 0) values.push(assetIds);
+    const result = await this.db.query(`select a.id, a.project_id, a.kind, a.storage_key, a.metadata from assets a where a.project_id is null and a.kind = $1 and a.lifecycle = $2${filter} order by a.created_at, a.id`, values);
+    return result.rows.map((row) => mapSourceAsset(row as Record<string, unknown>));
+  }
+
   async listReadyWorkspaceAssets(workspaceId: string, kind: SourceAssetKind, role: 'SOURCE' | 'VOICE' = 'SOURCE'): Promise<ReadySourceAsset[]> {
     const result = await this.db.query('select a.id, a.project_id, a.kind, a.storage_key, a.metadata from assets a join video_workspace_assets wa on wa.asset_id = a.id and wa.workspace_id = $1 and wa.role = $2 where a.kind = $3 and a.lifecycle = $4 order by a.created_at, a.id', [workspaceId, role, kind, 'READY']);
     return result.rows.map((row) => mapSourceAsset(row as Record<string, unknown>));

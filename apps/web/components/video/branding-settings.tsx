@@ -1,4 +1,0 @@
-type BrandingAsset = { id: string; originalName: string };
-export function BrandingSettings({ assets, introAssetId, outroAssetId, onIntroChange, onOutroChange }: { assets: BrandingAsset[]; introAssetId: string; outroAssetId: string; onIntroChange: (value: string) => void; onOutroChange: (value: string) => void }) {
-  return <div className="branding-settings"><span>品牌包装（可选）</span><label>固定片头<select value={introAssetId} onChange={(event) => onIntroChange(event.target.value)}><option value="">未设置</option>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.originalName}</option>)}</select></label><label>固定片尾<select value={outroAssetId} onChange={(event) => onOutroChange(event.target.value)}><option value="">未设置</option>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.originalName}</option>)}</select></label></div>;
-}

@@ -1,148 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  EditModeSelector,
-  type EditMode,
-} from "../../../../components/video/edit-mode-selector";
-import { MediaBrowser } from "../../../../components/video/media-browser";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { EditMode } from "../../../../components/video/edit-mode-selector";
+import { GenerateStep } from "../../../../components/video/generate-step";
+import { MediaStep } from "../../../../components/video/media-step";
+import { mergeNewMediaSelections } from "../../../../components/video/media-selection";
 import { OutputStep } from "../../../../components/video/output-step";
+import { describePreset } from "../../../../components/video/preset-description";
 import { ReviewStep } from "../../../../components/video/review-step";
+import { ScriptStep } from "../../../../components/video/script-step";
+import type { Asset, Clip, Manifest, MediaItem, Preset, ReviewFilter, Scan, ScriptInfo, Snapshot } from "../../../../components/video/video-workflow-types";
 
 // 兼容旧版测试与历史入口：生成视频调整版本、创建精确渲染 Job、Manifest v、时间线、TRIM、REMOVE、REORDER、REPLACE、REROLL。
 
-type Asset = {
-  id: string;
-  kind: string;
-  lifecycle: string;
-  byteSize: number;
-  originalName: string;
-  metadata: {
-    durationMs?: number;
-    width?: number;
-    height?: number;
-    tags?: string[];
-  };
-};
-type MediaItem = {
-  id: string;
-  originalName: string;
-  durationMs: number;
-  width?: number;
-  height?: number;
-  orientation?: string;
-  tags?: string[];
-  category?: string;
-  usageCount?: number;
-  lastUsedAt?: string;
-  thumbnailStatus?: string;
-  thumbnailUrl?: string;
-};
-type Clip = {
-  assetId: string;
-  sourceInMs: number;
-  durationMs: number;
-  transition?: "cut" | "fade";
-  sentenceIndex?: number;
-  sentenceText?: string;
-  sceneId?: string;
-  role?: "INTRO" | "CONTENT" | "OUTRO";
-  reviewStatus?: "GOOD" | "REVIEW" | "MANUAL";
-  voiceStartMs?: number;
-  voiceEndMs?: number;
-  timelineStartMs?: number;
-  timelineEndMs?: number;
-  matching?: {
-    matchedKeywords: string[];
-    matchScore: number;
-    fallback: boolean;
-    matchingReason: string;
-  };
-};
-type Manifest = {
-  id: string;
-  revision: number;
-  status: "PERSISTED" | "SUPERSEDED";
-  manifest: {
-    timeline: Clip[];
-    seed: number;
-    metadata?: {
-      editMode?: "SCRIPT" | "RANDOM";
-      localMediaSourceRootId?: string;
-      localMediaScanId?: string;
-      audioOffsetMs?: number;
-    };
-  };
-};
-type Snapshot = {
-  sourceAssets: Asset[];
-  currentRender: {
-    renderId: string;
-    outputAssetId: string;
-    manifestId: string;
-    status: string;
-  } | null;
-  renderHistory: Array<{
-    renderId: string;
-    outputAssetId?: string;
-    status: string;
-  }>;
-  job: {
-    id: string;
-    state: string;
-    attemptCount: number;
-    maxAttempts: number;
-  } | null;
-  approval: { status: string } | null;
-};
-type ScriptInfo = {
-  scriptRevisionId: string;
-  revision: number;
-  title: string;
-  body: string;
-  status: string;
-};
-type Scan = {
-  id: string;
-  sourceRootId: string;
-  status: string;
-  progress: {
-    discovered?: number;
-    analyzed?: number;
-    available?: number;
-    unavailable?: number;
-  };
-  files: Array<{
-    fileName: string;
-    relativePath: string;
-    durationMs: number;
-    width: number;
-    height: number;
-    available: boolean;
-    orientation?: string;
-    tags?: string[];
-    category?: string;
-    usageCount?: number;
-    lastUsedAt?: string;
-    thumbnailStatus?: string;
-  }>;
-};
-type Preset = {
-  id: string;
-  name: string;
-  description: string;
-  editModeDefault: EditMode;
-  minClipDurationMs: number;
-  maxClipDurationMs: number;
-  preferUnusedMedia: boolean;
-  introAssetId: string | null;
-  outroAssetId: string | null;
-  canvas?: { width: number; height: number; aspectRatio: "9:16" };
-  fps?: number;
-};
 type ApiError = { error?: { message?: string } };
-type ReviewFilter = "ALL" | "REVIEW" | "MANUAL";
 const activeJobs = new Set([
   "QUEUED",
   "RUNNING",
@@ -187,6 +59,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   const [mediaPage, setMediaPage] = useState(1);
   const [mediaHasNext, setMediaHasNext] = useState(false);
   const [selectedAssets, setSelectedAssets] = useState<string[]>([]);
+  const projectSelectionInitializedRef = useRef(false);
   const [query, setQuery] = useState("");
   const [orientation, setOrientation] = useState("ALL");
   const [category, setCategory] = useState("");
@@ -396,6 +269,8 @@ export default function VideoPage({ params }: { params: { id: string } }) {
     scan?.status === "SUCCEEDED" ? [...projectMedia, ...indexedMedia] : projectMedia;
   useEffect(() => {
     if (projectMedia.length === 0) return;
+    if (projectSelectionInitializedRef.current) return;
+    projectSelectionInitializedRef.current = true;
     setSelectedAssets((current) => current.length > 0 ? current : projectMedia.map((asset) => asset.id));
   }, [projectMedia]);
   const currentClip =
@@ -487,7 +362,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
             if (next.status === "SUCCEEDED") {
               const localSelection = next.files.filter((file) => file.available).map((file) => ({ id: `${next.sourceRootId}:${file.relativePath}`, originalName: file.fileName, durationMs: file.durationMs, width: file.width, height: file.height, orientation: file.orientation, tags: file.tags, category: file.category, usageCount: file.usageCount, lastUsedAt: file.lastUsedAt, thumbnailStatus: file.thumbnailStatus || "PENDING", thumbnailUrl: `/api/v1/video/local-media/thumbnails/${encodeURIComponent(`${next.sourceRootId}:${file.relativePath}`)}?projectId=${encodeURIComponent(projectId)}` }));
               setIndexedMedia(localSelection);
-              setSelectedAssets((current) => [...new Set([...current, ...projectMedia.map((asset) => asset.id), ...localSelection.map((asset) => asset.id)])]);
+              setSelectedAssets((current) => mergeNewMediaSelections(current, localSelection.map((asset) => asset.id), indexedMedia.map((asset) => asset.id)));
               setIndexTotal(next.files.filter((file) => file.available).length);
               setStep(2);
           await loadIndex();
@@ -688,322 +563,12 @@ export default function VideoPage({ params }: { params: { id: string } }) {
           <Link href={`/projects/${projectId}/approvals`}>审批</Link>
         </nav>
       </header>
-      {step === 1 && (
-        <section className="workflow-panel">
-          <div className="section-title">
-            <h2>① 准备文案</h2>
-            <span>
-              {scriptCount ? `共 ${scriptCount} 句话` : "每句话对应一个镜头"}
-            </span>
-          </div>
-          <label>
-            剪辑模板
-            <select
-              aria-label="剪辑模板"
-              value={preset?.id || ""}
-              onChange={async (event) => {
-                const selected = presets.find(
-                  (item) => item.id === event.target.value,
-                );
-                if (!selected) return;
-                const previous = preset;
-                const response = await fetch(`/api/v1/projects/${projectId}/video/preset`, {
-                  method: "PUT",
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify({ presetId: selected.id }),
-                });
-                if (!response.ok) {
-                  applyPresetToUi(previous);
-                  setMessage("模板应用失败，请重试。");
-                  return;
-                }
-                applyPresetToUi(selected);
-              }}
-            >
-              <option value="">选择模板</option>
-              {presets.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {preset && (
-            <p className="muted">
-              已自动应用镜头长度、品牌片头片尾和素材策略。
-            </p>
-          )}
-          <h3>剪辑方式</h3>
-          <EditModeSelector mode={mode} onSelect={chooseMode} />
-          <fieldset>
-            <legend>文案来源</legend>
-            <label className="inline-check">
-              <input
-                type="radio"
-                checked={scriptSource === "PROJECT"}
-                onChange={() => {
-                  setScriptSource("PROJECT");
-                  void loadScript();
-                }}
-              />
-              使用当前项目脚本
-            </label>
-            <label className="inline-check">
-              <input
-                type="radio"
-                checked={scriptSource === "CUSTOM"}
-                onChange={() => {
-                  setScriptSource("CUSTOM");
-                  setScript("");
-                }}
-              />
-              粘贴其他文案
-            </label>
-          </fieldset>
-          {scriptSource === "PROJECT" && scriptInfo ? (
-            <p className="status">
-              已加载当前项目脚本 · 版本 {scriptInfo.revision} · 已载入{" "}
-              {scriptCount} 句话
-            </p>
-          ) : scriptSource === "PROJECT" ? (
-            <p className="muted">当前项目暂无可用脚本。</p>
-          ) : (
-            <textarea
-              aria-label="脚本文案"
-              value={script}
-              onChange={(event) => setScript(event.target.value)}
-              placeholder="粘贴文案，每句话会自动匹配一个画面。"
-            />
-          )}
-          {scriptSource === "PROJECT" && scriptInfo && (
-            <textarea
-              aria-label="脚本文案"
-              value={script}
-              onChange={(event) => setScript(event.target.value)}
-            />
-          )}
-          <button
-            type="button"
-            className="primary-action"
-            onClick={() => setStep(2)}
-            disabled={!mode || !script.trim()}
-          >
-            下一步：选择素材
-          </button>
-        </section>
-      )}
-      {step === 2 && (
-        <section className="workflow-panel">
-          <div className="section-title">
-            <h2>② 选择素材</h2>
-            <span>{indexTotal || mediaAssets.length} 条可用素材 · 已选择 {selectedAssets.length} 条</span>
-          </div>
-          <p className="muted">项目素材库和本地素材可以混合选择；取消勾选的素材不会参与本次剪辑。</p>
-          <div className="media-source-row">
-            <label>
-              素材文件夹
-              <input
-                aria-label="素材文件夹"
-                value={sourceRoot}
-                onChange={(event) => setSourceRoot(event.target.value)}
-                placeholder="例如：F:\\素材\\欧洲零售"
-              />
-            </label>
-            <button
-              type="button"
-              onClick={() => void scanFolder()}
-              disabled={busy}
-            >
-              扫描文件夹
-            </button>
-          </div>
-          {scan && (
-            <p className="scan-summary">
-              {scan.status === "RUNNING" || scan.status === "QUEUED"
-                ? `正在扫描素材……已处理 ${scan.progress.analyzed || 0} / ${scan.progress.discovered || 0}`
-                : `扫描完成：共 ${scan.progress.discovered || scan.files.length} 条视频，可用 ${scan.progress.available || scan.files.filter((file) => file.available).length} 条，无法读取 ${scan.progress.unavailable || 0} 条`}
-            </p>
-          )}
-          <div className="media-toolbar">
-            <input
-              aria-label="搜索素材"
-              placeholder="搜索素材"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-            <select
-              aria-label="方向筛选"
-              value={orientation}
-              onChange={(event) => setOrientation(event.target.value)}
-            >
-              <option value="ALL">全部方向</option>
-              <option value="VERTICAL">竖屏</option>
-              <option value="HORIZONTAL">横屏</option>
-              <option value="SQUARE">方形</option>
-            </select>
-            <select
-              aria-label="分类筛选"
-              value={category}
-              onChange={(event) => setCategory(event.target.value)}
-            >
-              <option value="">全部分类</option>
-              <option value="门店">门店</option>
-              <option value="商品">商品</option>
-              <option value="人物">人物</option>
-              <option value="货架">货架</option>
-              <option value="数据图表">数据图表</option>
-              <option value="其他">其他</option>
-            </select>
-            <select
-              aria-label="使用情况"
-              value={usage}
-              onChange={(event) => setUsage(event.target.value)}
-            >
-              <option value="ALL">全部使用情况</option>
-              <option value="UNUSED">从未使用</option>
-              <option value="RECENT">最近少用</option>
-              <option value="FREQUENT">高频使用</option>
-            </select>
-            <select
-              aria-label="排序"
-              value={sort}
-              onChange={(event) => setSort(event.target.value)}
-            >
-              <option value="RECOMMENDED">推荐</option>
-              <option value="NEWEST">最近新增</option>
-              <option value="LEAST_USED">最少使用</option>
-              <option value="MOST_RECENT">最近使用</option>
-              <option value="DURATION">时长</option>
-            </select>
-          </div>
-          <MediaBrowser
-            assets={mediaAssets}
-            selected={selectedAssets}
-            onToggle={toggleAsset}
-            onEdit={selectDetails}
-          />
-          <div className="media-pagination" aria-label="素材分页">
-            <button
-              type="button"
-              onClick={() => setMediaPage((page) => Math.max(1, page - 1))}
-              disabled={mediaPage <= 1}
-            >
-              上一页
-            </button>
-            <span>第 {mediaPage} 页 · 共 {indexTotal} 条</span>
-            <button
-              type="button"
-              onClick={() => setMediaPage((page) => page + 1)}
-              disabled={!mediaHasNext}
-            >
-              下一页
-            </button>
-          </div>
-          <details>
-            <summary>高级设置：品牌包装</summary>
-            <p className="muted">片头和片尾会使用同一个素材浏览器选择，默认来自当前模板。</p>
-            <p>片头</p>
-            <MediaBrowser assets={mediaAssets} selected={introAssetId ? [introAssetId] : []} onToggle={(id) => setIntroAssetId((current) => current === id ? "" : id)} />
-            <p>片尾</p>
-            <MediaBrowser assets={mediaAssets} selected={outroAssetId ? [outroAssetId] : []} onToggle={(id) => setOutroAssetId((current) => current === id ? "" : id)} />
-          </details>
-          <label className="inline-check">
-            <input
-              type="checkbox"
-              checked={preferUnused}
-              onChange={(event) => setPreferUnused(event.target.checked)}
-            />
-            优先使用近期没出现过的素材
-          </label>
-          <p className="muted">系统会尽量避开最近视频中已经使用过的素材。</p>
-          <button
-            type="button"
-            className="primary-action"
-            onClick={() => setStep(3)}
-            disabled={selectedAssets.length === 0}
-          >
-            下一步：自动剪辑
-          </button>
-        </section>
-      )}
-      {step === 3 && (
-        <section className="workflow-panel">
-          <div className="section-title">
-            <h2>③ 自动剪辑</h2>
-            <span>准备开始自动剪辑</span>
-          </div>
-          <p className="workflow-summary">
-            {scriptCount || 0} 句话 · {indexTotal || mediaAssets.length}{" "}
-            条可用素材 · 模板：{preset?.name || "默认短视频"}
-          </p>
-          <label className="inline-check">
-            <input
-              type="checkbox"
-              checked={preferUnused}
-              onChange={(event) => setPreferUnused(event.target.checked)}
-            />
-            优先使用近期未出现过的素材
-          </label>
-          {busy ? (
-            <p className="status">正在生成剪辑方案……</p>
-          ) : (
-            <button
-              type="button"
-              className="primary-action"
-              onClick={() => void createPlan()}
-              disabled={!mode || !script.trim() || selectedAssets.length === 0}
-            >
-              开始自动剪辑
-            </button>
-          )}
-        </section>
-      )}
+      {step === 1 && <ScriptStep preset={preset} presets={presets} mode={mode} scriptSource={scriptSource} script={script} scriptInfo={scriptInfo} scriptCount={scriptCount} describePreset={describePreset} onPresetChange={async (selected) => { const previous = preset; const response = await fetch(`/api/v1/projects/${projectId}/video/preset`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ presetId: selected.id }) }); if (!response.ok) { applyPresetToUi(previous); setMessage("模板应用失败，请重试。"); return; } applyPresetToUi(selected); }} onModeChange={chooseMode} onScriptSourceChange={(source) => { setScriptSource(source); if (source === "PROJECT") void loadScript(); else setScript(""); }} onScriptChange={setScript} onNext={() => setStep(2)} />}
+      {step === 2 && <MediaStep assets={mediaAssets} selectedAssets={selectedAssets} sourceRoot={sourceRoot} scan={scan} busy={busy} query={query} orientation={orientation} category={category} usage={usage} sort={sort} mediaPage={mediaPage} indexTotal={indexTotal} mediaHasNext={mediaHasNext} introAssetId={introAssetId} outroAssetId={outroAssetId} preferUnused={preferUnused} detailsAsset={detailsAsset} tagDraft={tagDraft} tagInput={tagInput} categoryDraft={categoryDraft} onToggleAsset={toggleAsset} onSourceRootChange={setSourceRoot} onScan={() => void scanFolder()} onQueryChange={setQuery} onOrientationChange={setOrientation} onCategoryChange={setCategory} onUsageChange={setUsage} onSortChange={setSort} onPreviousPage={() => setMediaPage((page) => Math.max(1, page - 1))} onNextPage={() => setMediaPage((page) => page + 1)} onToggleIntro={(id) => setIntroAssetId((current) => current === id ? "" : id)} onToggleOutro={(id) => setOutroAssetId((current) => current === id ? "" : id)} onPreferUnusedChange={setPreferUnused} onNext={() => setStep(3)} onSelectDetails={selectDetails} onTagDraftChange={setTagDraft} onTagInputChange={setTagInput} onCategoryDraftChange={setCategoryDraft} onSaveDetails={() => void saveMediaDetails()} onCloseDetails={() => setDetailsAsset(null)} />}
+      {step === 3 && <GenerateStep scriptCount={scriptCount} mediaCount={indexTotal || mediaAssets.length} selectedCount={selectedAssets.length} presetName={preset?.name || "默认短视频"} presetDescription={describePreset(preset)} preferUnused={preferUnused} onPreferUnusedChange={setPreferUnused} busy={busy} mode={mode} script={script} onGenerate={() => void createPlan()} />}
       {step === 4 && <ReviewStep manifest={manifest} visibleClipIndexes={visibleClipIndexes} reviewCount={reviewCount} manualCount={manualCount} reviewFilter={reviewFilter} setReviewFilter={setReviewFilter} selectedClips={selectedClips} setSelectedClips={setSelectedClips} currentClip={currentClip} selectedClip={selectedClip} setSelectedClip={setSelectedClip} clipSource={clipSource} mediaAssets={mediaAssets} busy={busy} mode={manifest?.manifest.metadata?.editMode || mode || "RANDOM"} operations={operations} setOperations={setOperations} onBulk={(type) => void bulkAdjust(type)} onSave={() => void createVersion()} onNext={() => setStep(5)} history={manifestHistory} onRegenerate={() => void createPlan()} thumbnailFor={clipThumbnail} onModeChange={chooseMode} />}
       {step === 5 && <OutputStep projectId={projectId} manifest={manifest ? { id: manifest.id, manifest: manifest.manifest } : null} snapshot={snapshot ? { currentRender: snapshot.currentRender, job: snapshot.job } : null} introName={mediaAssets.find((asset) => asset.id === introAssetId)?.originalName || ""} outroName={mediaAssets.find((asset) => asset.id === outroAssetId)?.originalName || ""} busy={busy} jobRunning={jobRunning || Boolean(renderingManifestId)} onRender={() => void renderManifest(manifest?.id)} onBack={() => setStep(4)} onApproval={() => void sendToApproval()} />}
       {message && <p className="status">{message}</p>}
-      {detailsAsset && (
-        <aside className="media-details" aria-label="素材信息">
-          <h3>素材信息</h3>
-          <p>{detailsAsset.originalName}</p>
-          <label>
-            分类
-            <select
-              value={categoryDraft}
-              onChange={(event) => setCategoryDraft(event.target.value)}
-            >
-              <option value="">未分类</option>
-              <option value="门店">门店</option>
-              <option value="商品">商品</option>
-              <option value="人物">人物</option>
-              <option value="货架">货架</option>
-              <option value="数据图表">数据图表</option>
-              <option value="其他">其他</option>
-            </select>
-          </label>
-          <label>
-            标签
-            <span className="tag-chip-list">
-              {tagDraft.split(/[、,，\n]/u).map((tag) => tag.trim()).filter(Boolean).map((tag) => (
-                <button type="button" className="tag-chip" key={tag} onClick={() => setTagDraft((current) => current.split(/[、,，\n]/u).map((item) => item.trim()).filter((item) => item && item !== tag).join("、"))}>{tag} ×</button>
-              ))}
-            </span>
-            <input
-              aria-label="添加标签"
-              value={tagInput}
-              onChange={(event) => setTagInput(event.target.value)}
-              onKeyDown={(event) => { if (event.key === "Enter" && tagInput.trim()) { event.preventDefault(); setTagDraft((current) => [...current.split(/[、,，\n]/u).map((item) => item.trim()).filter(Boolean), tagInput.trim()].filter((item, index, all) => all.indexOf(item) === index).join("、")); setTagInput(""); } }}
-              placeholder="输入标签后按 Enter"
-            />
-          </label>
-          <p className="muted">使用次数：{detailsAsset.usageCount || 0} 次</p>
-          <button type="button" onClick={() => void saveMediaDetails()}>
-            保存
-          </button>
-          <button type="button" onClick={() => setDetailsAsset(null)}>
-            取消
-          </button>
-        </aside>
-      )}
     </main>
   );
 }

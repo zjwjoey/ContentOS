@@ -163,6 +163,9 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     if (!dependencies.presets) return reply.code(503).send({ error: { code: 'PRESET_UNAVAILABLE', message: '模板服务暂不可用。', details: [] } });
     return { items: await dependencies.presets.list() };
   });
+  app.get('/api/v1/video/preset-assets', async (_request, reply) => {
+    return { items: (await assets.listReadyGlobalVideoAssets()).map((asset) => ({ id: asset.id, originalName: typeof asset.metadata.originalName === 'string' ? asset.metadata.originalName : asset.storageKey.split('/').at(-1) || asset.id, durationMs: Number(asset.metadata.durationMs || 0), tags: Array.isArray(asset.metadata.tags) ? asset.metadata.tags.filter((tag): tag is string => typeof tag === 'string') : [], category: typeof asset.metadata.category === 'string' ? asset.metadata.category : undefined, thumbnailStatus: 'NONE' })) };
+  });
   app.post('/api/v1/video/presets', async (request, reply) => {
     const parsed = presetInput.safeParse(request.body || {});
     if (!parsed.success || !dependencies.presets) return reply.code(422).send({ error: { code: 'PRESET_INVALID', message: '模板参数不正确。', details: parsed.success ? [] : parsed.error.issues } });
@@ -249,8 +252,10 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
       if (parsed.data.introAssetId || parsed.data.outroAssetId) {
         const brandingIds = [parsed.data.introAssetId, parsed.data.outroAssetId].filter((id): id is string => Boolean(id));
         const projectBrandingIds = brandingIds.filter((id) => !id.startsWith('local-'));
-        const brandingAssets = projectBrandingIds.length ? await assets.listReadySourceAssets(projectId, projectBrandingIds, 'VIDEO') : [];
-        const byId = new Map(brandingAssets.map((asset) => [asset.id, asset]));
+        const projectBrandingAssets = projectBrandingIds.length ? await assets.listReadySourceAssets(projectId, projectBrandingIds, 'VIDEO') : [];
+        const resolvedProjectIds = new Set(projectBrandingAssets.map((asset) => asset.id));
+        const globalBrandingAssets = await assets.listReadyGlobalVideoAssets(projectBrandingIds.filter((id) => !resolvedProjectIds.has(id)));
+        const byId = new Map([...projectBrandingAssets, ...globalBrandingAssets].map((asset) => [asset.id, asset]));
         const toBranding = (id: string, durationMs: number | undefined) => {
           const asset = byId.get(id);
           if (asset) { const sourcePath = storage.objectPath(asset.storageKey); return { id: asset.id, storageKey: asset.storageKey, sourcePath, durationMs: durationMs || Number(asset.metadata.durationMs || 0), role: id === parsed.data.introAssetId ? 'INTRO' as const : 'OUTRO' as const }; }

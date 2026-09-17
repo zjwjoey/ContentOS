@@ -1,0 +1,5 @@
+import type { EditMode } from './edit-mode-selector';
+
+export function GenerateStep({ scriptCount, mediaCount, presetName, presetDescription, preferUnused, onPreferUnusedChange, busy, mode, script, selectedCount, onGenerate }: { scriptCount: number; mediaCount: number; presetName: string; presetDescription: string; preferUnused: boolean; onPreferUnusedChange: (value: boolean) => void; busy: boolean; mode: EditMode; script: string; selectedCount: number; onGenerate: () => void }) {
+  return <section className="workflow-panel"><div className="section-title"><h2>③ 自动剪辑</h2><span>准备开始自动剪辑</span></div><p className="workflow-summary">{scriptCount || 0} 句话 · {mediaCount} 条可用素材 · 已选择 {selectedCount} 条 · 模板：{presetName || '默认短视频'}</p><p className="muted">{presetDescription}</p><label className="inline-check"><input type="checkbox" checked={preferUnused} onChange={(event) => onPreferUnusedChange(event.target.checked)} />优先使用近期未出现过的素材</label>{busy ? <p className="status">正在生成剪辑方案……</p> : <button type="button" className="primary-action" onClick={onGenerate} disabled={!mode || !script.trim() || selectedCount === 0}>开始自动剪辑</button>}</section>;
+}

@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { buildScriptMontageManifest, buildRandomSentenceMontageManifest, assembleBrandedTimeline } from '../../packages/modules/video/src/index.js';
 import { applyQuickEditOperations, rankAdjustmentAssets } from '../../packages/modules/video/src/quick-edit.js';
 import { generateFixtureAudio, generateFixtureVideo, probeMedia, renderEditManifest } from '../../packages/infrastructure/ffmpeg/src/index.js';
+import { describePreset } from '../../apps/web/components/video/preset-description.js';
+import { mergeNewMediaSelections } from '../../apps/web/components/video/media-selection.js';
 
 type TestAsset = { id: string; storageKey: string; sourcePath: string; durationMs: number; originalName: string; tags: string[]; usageCount: number; recentUsageCount: number };
 const assets: TestAsset[] = [
@@ -13,6 +15,16 @@ const assets: TestAsset[] = [
   { id: 'long-store', storageKey: 'long-store.mp4', sourcePath: 'long-store.mp4', durationMs: 8_000, originalName: '门店长.mp4', tags: ['门店'], usageCount: 1, recentUsageCount: 0 },
 ];
 const longAsset = assets[1]!;
+
+test('preset description only names enabled user-facing options', () => {
+  assert.equal(describePreset({ editModeDefault: 'SCRIPT', minClipDurationMs: 2_000, maxClipDurationMs: 5_000, preferUnusedMedia: true, introAssetId: null, outroAssetId: null }), '按脚本剪辑 · 2–5秒 · 优先少重复');
+  assert.equal(describePreset({ editModeDefault: 'RANDOM', minClipDurationMs: 2_000, maxClipDurationMs: 5_000, preferUnusedMedia: false, introAssetId: 'global-intro', outroAssetId: 'global-outro' }), '随机混剪 · 2–5秒 · 固定片头 · 固定片尾');
+});
+
+test('media selection keeps explicit deselections while adding only newly discovered files', () => {
+  assert.deepEqual(mergeNewMediaSelections(['project-a', 'project-c'], ['local-1', 'local-2'], []), ['project-a', 'project-c', 'local-1', 'local-2']);
+  assert.deepEqual(mergeNewMediaSelections(['local-1'], ['local-1', 'local-2', 'local-3'], ['local-1', 'local-2']), ['local-1', 'local-3']);
+});
 
 test('V1.5 planner never truncates voice timing and prefers long eligible media', () => {
   const result = buildScriptMontageManifest({ projectId: 'project-v15', seed: 7, sentences: [{ index: 0, text: '门店口播', normalizedText: '门店口播', voiceStartMs: 0, voiceEndMs: 4_000 }], assets, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 });
