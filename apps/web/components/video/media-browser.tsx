@@ -1,4 +1,4 @@
-type MediaItem = { id: string; originalName: string; durationMs: number; tags?: string[]; category?: string; usageCount?: number; lastUsedAt?: string; thumbnailStatus?: string; thumbnailUrl?: string };
+type MediaItem = { id: string; originalName: string; durationMs: number; tags?: string[] | undefined; category?: string | undefined; usageCount?: number | undefined; lastUsedAt?: string | undefined; thumbnailStatus?: string | undefined; thumbnailUrl?: string | undefined };
 
 function seconds(value: number): string { return `${(value / 1000).toFixed(1)} 秒`; }
 function usageText(value: number): string { return value > 0 ? `使用 ${value} 次` : '从未使用'; }

@@ -27,7 +27,9 @@ export class AssetService {
     if (!(await this.storage.exists(prepared.storageKey))) throw new Error('Prepared Asset blob is unavailable');
     if ((input.projectId === undefined) === (input.workspaceId === undefined)) throw new Error('Asset import requires exactly one projectId or workspaceId');
     const db = transaction || this.db;
-    const existing = await db.query('select * from assets where checksum = $1 limit 1', [prepared.checksum]);
+    // Render outputs are project-scoped even when two projects happen to produce
+    // byte-identical files; deduplication is reserved for source/import assets.
+    const existing = await db.query('select * from assets where checksum = $1 and kind <> $2 limit 1', [prepared.checksum, 'VIDEO_RENDER']);
     if (existing.rows[0]) {
       const row = existing.rows[0] as Record<string, unknown>;
       if (input.projectId) await db.query('insert into project_assets (project_id, asset_id, role) values ($1, $2, $3) on conflict do nothing', [input.projectId, String(row.id), input.role || 'SOURCE']);

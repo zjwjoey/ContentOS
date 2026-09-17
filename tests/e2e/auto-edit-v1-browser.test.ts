@@ -31,11 +31,18 @@ test('Auto Edit V1 browser flow completes Script and Random local editing', asyn
     await page.goto(`${baseUrl}/projects/${projectId}/video`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: /按脚本剪辑/ }).first().click();
     await page.getByText(/当前项目脚本 · 版本 1 · 已载入 5 句话/).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByRole('button', { name: /下一步：选择素材/ }).click();
     await page.getByLabel('素材文件夹').fill(fixtureDir);
     await page.getByRole('button', { name: '扫描文件夹' }).click();
     try { await page.getByText(/扫描完成：可用 5 个视频/).waitFor({ state: 'visible', timeout: 45_000 }); }
     catch (error) { throw new Error(`素材扫描未完成：${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
-    await page.getByRole('button', { name: '生成剪辑方案' }).click();
+    await page.locator('.media-browser .media-card').nth(0).waitFor({ state: 'visible', timeout: 20_000 });
+    await page.getByRole('button', { name: '编辑素材信息' }).first().click();
+    await page.getByLabel('添加标签').fill('浏览器验收');
+    await page.getByLabel('添加标签').press('Enter');
+    await page.getByRole('button', { name: '保存' }).click();
+    await page.getByRole('button', { name: '下一步：自动剪辑' }).click();
+    await page.getByRole('button', { name: '开始自动剪辑' }).click();
     const sentenceClips = page.locator('.sentence-list button');
     await sentenceClips.nth(4).waitFor({ state: 'visible', timeout: 20_000 });
     assert.equal(await sentenceClips.count(), 5);
@@ -59,11 +66,10 @@ test('Auto Edit V1 browser flow completes Script and Random local editing', asyn
     assert.ok(clipSource);
     const range = await page.request.get(new URL(clipSource, baseUrl).toString(), { headers: { Range: 'bytes=0-15' } });
     assert.equal(range.status(), 206, `${range.status()} ${clipSource} ${await range.text()}`);
-    await page.getByRole('button', { name: '重新匹配' }).click();
-    await page.getByText('待提交调整：1 项').waitFor({ state: 'visible' });
-    await page.getByRole('button', { name: '生成剪辑版本' }).click();
+    for (const index of [0, 2, 4]) await page.locator('.review-row input[type="checkbox"]').nth(index).check();
+    await page.getByRole('button', { name: '重新匹配' }).first().click();
     await page.getByText('新的剪辑版本已创建。').waitFor({ state: 'visible', timeout: 15_000 });
-    await page.getByText(/剪辑版本 v2/).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByText('查看历史版本').waitFor({ state: 'visible', timeout: 15_000 });
 
     await page.locator('.mode-card').nth(1).click();
     await page.getByRole('button', { name: '生成剪辑方案' }).click();

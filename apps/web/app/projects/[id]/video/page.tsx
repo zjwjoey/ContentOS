@@ -172,6 +172,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   const [scriptCount, setScriptCount] = useState(0);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [manifest, setManifest] = useState<Manifest | null>(null);
+  const [manifestHistory, setManifestHistory] = useState<Manifest[]>([]);
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
   const [selectedClips, setSelectedClips] = useState<number[]>([]);
   const [operations, setOperations] = useState<Array<Record<string, unknown>>>(
@@ -182,6 +183,8 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   const [scan, setScan] = useState<Scan | null>(null);
   const [indexedMedia, setIndexedMedia] = useState<MediaItem[]>([]);
   const [indexTotal, setIndexTotal] = useState(0);
+  const [mediaPage, setMediaPage] = useState(1);
+  const [mediaHasNext, setMediaHasNext] = useState(false);
   const [selectedAssets, setSelectedAssets] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [orientation, setOrientation] = useState("ALL");
@@ -190,9 +193,12 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   const [sort, setSort] = useState("RECOMMENDED");
   const [detailsAsset, setDetailsAsset] = useState<MediaItem | null>(null);
   const [tagDraft, setTagDraft] = useState("");
+  const [tagInput, setTagInput] = useState("");
   const [categoryDraft, setCategoryDraft] = useState("");
   const [presets, setPresets] = useState<Preset[]>([]);
   const [preset, setPreset] = useState<Preset | null>(null);
+  const [introAssetId, setIntroAssetId] = useState("");
+  const [outroAssetId, setOutroAssetId] = useState("");
   const [preferUnused, setPreferUnused] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -224,6 +230,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
     );
     if (manifestsResponse.ok) {
       const data = (await manifestsResponse.json()) as { items: Manifest[] };
+      setManifestHistory(data.items);
       setManifest(
         (current) =>
           current ||
@@ -246,6 +253,8 @@ export default function VideoPage({ params }: { params: { id: string } }) {
       if (data.preset) {
         setMode(data.preset.editModeDefault);
         setPreferUnused(data.preset.preferUnusedMedia);
+        setIntroAssetId(data.preset.introAssetId || "");
+        setOutroAssetId(data.preset.outroAssetId || "");
       }
     }
   }, [projectId]);
@@ -253,7 +262,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
     if (!scan?.sourceRootId) return;
     const params = new URLSearchParams({
       projectId,
-      page: "1",
+      page: String(mediaPage),
       pageSize: "50",
       sort,
       ...(query ? { query } : {}),
@@ -266,6 +275,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
     const data = (await response.json()) as {
       items: Array<Record<string, unknown>>;
       total: number;
+      hasNext?: boolean;
     };
     const items = data.items.map((file) => {
       const relativePath = String(file.relativePath || "");
@@ -289,12 +299,14 @@ export default function VideoPage({ params }: { params: { id: string } }) {
     });
     setIndexedMedia(items);
     setIndexTotal(data.total);
+    setMediaHasNext(Boolean(data.hasNext));
   }, [
     category,
     orientation,
     projectId,
     query,
     scan?.sourceRootId,
+    mediaPage,
     sort,
     usage,
   ]);
@@ -461,7 +473,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   const saveMediaDetails = async () => {
     if (!detailsAsset) return;
     const fileId = encodeURIComponent(detailsAsset.id);
-    const tags = tagDraft
+    const tags = `${tagDraft},${tagInput}`
       .split(/[,，\n]/u)
       .map((tag) => tag.trim())
       .filter(Boolean);
@@ -504,11 +516,11 @@ export default function VideoPage({ params }: { params: { id: string } }) {
           ...(scan?.status === "SUCCEEDED"
             ? { scanId: scan.id }
             : { videoAssetIds: selectedAssets }),
-          ...(selectedPreset?.introAssetId
-            ? { introAssetId: selectedPreset.introAssetId }
+          ...(introAssetId || selectedPreset?.introAssetId
+            ? { introAssetId: introAssetId || selectedPreset.introAssetId }
             : {}),
-          ...(selectedPreset?.outroAssetId
-            ? { outroAssetId: selectedPreset.outroAssetId }
+          ...(outroAssetId || selectedPreset?.outroAssetId
+            ? { outroAssetId: outroAssetId || selectedPreset.outroAssetId }
             : {}),
         }),
       },
@@ -613,6 +625,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   const selectDetails = (asset: MediaItem) => {
     setDetailsAsset(asset);
     setTagDraft((asset.tags || []).join("、"));
+    setTagInput("");
     setCategoryDraft(asset.category || "");
   };
   const steps = ["文案", "素材", "自动剪辑", "检查镜头", "生成成片"];
@@ -620,7 +633,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   return (
     <main className="shell video-workflow">
       <header>
-        <p className="eyebrow">项目 / {projectId}</p>
+        <p className="eyebrow">项目</p>
         <h1>视频剪辑</h1>
         <nav className="workflow-steps" aria-label="视频剪辑流程">
           {steps.map((label, index) => (
@@ -733,38 +746,6 @@ export default function VideoPage({ params }: { params: { id: string } }) {
               onChange={(event) => setScript(event.target.value)}
             />
           )}
-          {mode && (
-            <div className="compat-source-panel">
-              <label>
-                素材文件夹
-                <input
-                  aria-label="素材文件夹"
-                  value={sourceRoot}
-                  onChange={(event) => {
-                    setSourceRoot(event.target.value);
-                    setScan(null);
-                  }}
-                  placeholder="输入已授权的本地文件夹路径"
-                />
-              </label>
-              <button
-                type="button"
-                onClick={() => void scanFolder()}
-                disabled={busy}
-              >
-                扫描文件夹
-              </button>
-              {scan?.status === "SUCCEEDED" && (
-                <button
-                  type="button"
-                  onClick={() => void createPlan()}
-                  disabled={busy || !script.trim()}
-                >
-                  生成剪辑方案
-                </button>
-              )}
-            </div>
-          )}
           <button
             type="button"
             className="primary-action"
@@ -821,11 +802,6 @@ export default function VideoPage({ params }: { params: { id: string } }) {
                 ? `正在扫描素材……已处理 ${scan.progress.analyzed || 0} / ${scan.progress.discovered || 0}`
                 : `扫描完成：共 ${scan.progress.discovered || scan.files.length} 条视频，可用 ${scan.progress.available || scan.files.filter((file) => file.available).length} 条，无法读取 ${scan.progress.unavailable || 0} 条`}
             </p>
-          )}
-          {scan?.status === "SUCCEEDED" && (
-            <button type="button" onClick={() => void createPlan()} disabled={busy || !script.trim()}>
-              生成剪辑方案
-            </button>
           )}
           <div className="media-toolbar">
             <input
@@ -885,6 +861,31 @@ export default function VideoPage({ params }: { params: { id: string } }) {
             onToggle={toggleAsset}
             onEdit={selectDetails}
           />
+          <div className="media-pagination" aria-label="素材分页">
+            <button
+              type="button"
+              onClick={() => setMediaPage((page) => Math.max(1, page - 1))}
+              disabled={mediaPage <= 1}
+            >
+              上一页
+            </button>
+            <span>第 {mediaPage} 页 · 共 {indexTotal} 条</span>
+            <button
+              type="button"
+              onClick={() => setMediaPage((page) => page + 1)}
+              disabled={!mediaHasNext}
+            >
+              下一页
+            </button>
+          </div>
+          <details>
+            <summary>高级设置：品牌包装</summary>
+            <p className="muted">片头和片尾会使用同一个素材浏览器选择，默认来自当前模板。</p>
+            <p>片头</p>
+            <MediaBrowser assets={mediaAssets} selected={introAssetId ? [introAssetId] : []} onToggle={(id) => setIntroAssetId((current) => current === id ? "" : id)} />
+            <p>片尾</p>
+            <MediaBrowser assets={mediaAssets} selected={outroAssetId ? [outroAssetId] : []} onToggle={(id) => setOutroAssetId((current) => current === id ? "" : id)} />
+          </details>
           <label className="inline-check">
             <input
               type="checkbox"
@@ -1054,7 +1055,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
               />
               <p className="muted">
                 文案：{currentClip.sentenceText || "品牌包装"} · 素材：
-                {currentClip.assetId}
+                {mediaAssets.find((asset) => asset.id === currentClip.assetId)?.originalName || "当前素材"}
               </p>
               <ClipInspector
                 clip={currentClip}
@@ -1097,7 +1098,11 @@ export default function VideoPage({ params }: { params: { id: string } }) {
               下一步：生成成片
             </button>
           </div>
-          <p className="muted">当前剪辑版本 v{manifest?.revision || 1}</p>
+          <details>
+            <summary>查看历史版本</summary>
+            <p className="muted">已保存 {manifestHistory.length} 个剪辑版本。</p>
+            {manifestHistory.filter((item) => item.id !== manifest?.id).map((item) => <p key={item.id}>剪辑版本 {item.revision} · {item.status === "PERSISTED" ? "当前可用" : "历史记录"}</p>)}
+          </details>
           <details open>
             <summary>切换剪辑方式</summary>
             <EditModeSelector mode={mode} onSelect={chooseMode} />
@@ -1139,6 +1144,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
               ),
             )}
           </p>
+          <p className="muted">片头：{mediaAssets.find((asset) => asset.id === introAssetId)?.originalName || "未设置"} · 片尾：{mediaAssets.find((asset) => asset.id === outroAssetId)?.originalName || "未设置"}</p>
           {snapshot?.currentRender ? (
             <>
               <video
@@ -1192,11 +1198,18 @@ export default function VideoPage({ params }: { params: { id: string } }) {
             </select>
           </label>
           <label>
-            标签（用逗号或换行分隔）
+            标签
+            <span className="tag-chip-list">
+              {tagDraft.split(/[、,，\n]/u).map((tag) => tag.trim()).filter(Boolean).map((tag) => (
+                <button type="button" className="tag-chip" key={tag} onClick={() => setTagDraft((current) => current.split(/[、,，\n]/u).map((item) => item.trim()).filter((item) => item && item !== tag).join("、"))}>{tag} ×</button>
+              ))}
+            </span>
             <input
-              value={tagDraft}
-              onChange={(event) => setTagDraft(event.target.value)}
-              placeholder="Action，门店，外景"
+              aria-label="添加标签"
+              value={tagInput}
+              onChange={(event) => setTagInput(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter" && tagInput.trim()) { event.preventDefault(); setTagDraft((current) => [...current.split(/[、,，\n]/u).map((item) => item.trim()).filter(Boolean), tagInput.trim()].filter((item, index, all) => all.indexOf(item) === index).join("、")); setTagInput(""); } }}
+              placeholder="输入标签后按 Enter"
             />
           </label>
           <p className="muted">使用次数：{detailsAsset.usageCount || 0} 次</p>
