@@ -145,28 +145,30 @@ export class VideoService {
     const persisted = row.manifest;
     validateEditManifest(persisted);
     const ids = [...new Set(persisted.timeline.map((clip) => clip.assetId))];
-    const localManifest = ids.length > 0 && ids.every((id) => id.startsWith('local-'));
+    const localIds = ids.filter((id) => id.startsWith('local-'));
+    const projectIds = ids.filter((id) => !id.startsWith('local-'));
     const manifest = structuredClone(persisted);
-    if (localManifest) {
-      for (const clip of manifest.timeline) {
-        // The API already authorizes the root when the manifest is created. A
-        // worker may run with a reduced environment, so enforce the root check
-        // when roots are configured and always require the file to exist.
-        const configuredRoots = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((root) => root.trim()).filter(Boolean);
-        if (!clip.sourcePath || (configuredRoots.length > 0 && !authorizedLocalSource(clip.sourcePath))) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
-        try { await access(clip.sourcePath); } catch { throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`); }
-      }
-    } else {
-    const sources = await this.assets.listReadySourceAssets(job.projectId!, ids, 'VIDEO');
-    if (sources.length !== ids.length) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
-    const byId = new Map(sources.map((source) => [source.id, source]));
+    const projectSources = projectIds.length > 0 ? await this.assets.listReadySourceAssets(job.projectId!, projectIds, 'VIDEO') : [];
+    if (projectSources.length !== projectIds.length) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
+    const projectById = new Map(projectSources.map((source) => [source.id, source]));
+    const localById = new Map<string, { sourcePath: string; durationMs: number }>();
+    const configuredRoots = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((root) => root.trim()).filter(Boolean);
+    for (const localId of localIds) {
+      const rootId = localId.split(':', 1)[0] || '';
+      const result = await this.db.query<{ source_path: string; duration_ms: number; available: boolean }>("select f.source_path, f.duration_ms, f.available from local_media_scan_files f join local_media_scans s on s.id = f.scan_id where s.project_id = $1 and s.source_root_id = $2 and f.file_id = $3 and s.status = 'SUCCEEDED' order by s.scanned_at desc nulls last limit 1", [job.projectId, rootId, localId]);
+      const row = result.rows[0];
+      if (!row?.available || !row.source_path || (configuredRoots.length > 0 && !authorizedLocalSource(row.source_path))) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${localId}`);
+      try { await access(row.source_path); } catch { throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${localId}`); }
+      localById.set(localId, { sourcePath: row.source_path, durationMs: Number(row.duration_ms) });
+    }
     manifest.timeline = manifest.timeline.map((clip) => {
-      const source = byId.get(clip.assetId);
-      if (!source) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`);
-      const duration = Number(source.metadata.durationMs);
+      const local = localById.get(clip.assetId);
+      const source = local ? null : projectById.get(clip.assetId);
+      const duration = local?.durationMs ?? (source ? Number(source.metadata.durationMs) : Number.NaN);
+      if (!local && !source) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`);
       if (!Number.isFinite(duration) || clip.sourceInMs + clip.durationMs > duration) throw new Error(`VIDEO_MANIFEST_CLIP_OUT_OF_BOUNDS: ${clip.assetId}`);
-      return { ...clip, sourcePath: this.storage!.objectPath(source.storageKey) };
-    }); }
+      return { ...clip, sourcePath: local ? local.sourcePath : this.storage!.objectPath(source!.storageKey) };
+    });
     if (manifest.audio.voiceAssetId) {
       const voice = await this.assets.getReadySourceAsset(job.projectId!, manifest.audio.voiceAssetId, 'AUDIO');
       if (!voice) throw new Error('VIDEO_MANIFEST_VOICE_UNAVAILABLE');

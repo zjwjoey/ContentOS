@@ -71,6 +71,7 @@ test('Auto Edit V1 browser flow completes Script and Random local editing', asyn
     await page.getByText('新的剪辑版本已创建。').waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByText('查看历史版本').waitFor({ state: 'visible', timeout: 15_000 });
 
+    await page.getByText('重新生成剪辑').click();
     await page.locator('.mode-card').nth(1).click();
     await page.getByRole('button', { name: '生成剪辑方案' }).click();
     await page.locator('.sentence-list button').nth(4).waitFor({ state: 'visible', timeout: 20_000 });
@@ -78,11 +79,16 @@ test('Auto Edit V1 browser flow completes Script and Random local editing', asyn
     await page.locator('.sentence-list button').nth(2).click();
     await page.getByRole('button', { name: '随机换一个' }).click();
     await page.getByText('待提交调整：1 项').waitFor({ state: 'visible' });
-    await page.getByRole('button', { name: '生成剪辑版本' }).click();
+    await page.getByRole('button', { name: '保存镜头调整' }).click();
     await page.getByText('新的剪辑版本已创建。').waitFor({ state: 'visible', timeout: 15_000 });
-    await page.getByRole('button', { name: '生成成片' }).click();
+    await page.getByRole('button', { name: '下一步：生成成片', exact: true }).click();
+    const renderButton = page.getByRole('button', { name: '生成成片', exact: true });
+    assert.equal(await renderButton.count(), 1);
+    assert.equal(await renderButton.isEnabled(), true, await page.locator('body').innerText());
+    await renderButton.click();
     const outputVideo = page.locator('.card').filter({ hasText: '成片预览' }).locator('video');
-    await outputVideo.waitFor({ state: 'visible', timeout: 60_000 });
+    try { await outputVideo.waitFor({ state: 'visible', timeout: 60_000 }); }
+    catch (error) { throw new Error(`成片未生成：${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     assert.ok(await outputVideo.getAttribute('src'));
 
     const body = await page.locator('body').innerText();

@@ -153,6 +153,7 @@ export interface SentenceMontageBaseInput {
   minClipDurationMs?: number;
   maxClipDurationMs?: number;
   splitSemicolon?: boolean;
+  preferUnusedMedia?: boolean;
 }
 export interface SentenceMontageDecision {
   sentenceIndex: number;
@@ -237,7 +238,7 @@ function sentenceManifest(input: SentenceMontageBaseInput, sentences: TimedScrip
     schemaVersion: 'EDIT_MANIFEST_V0', ...owner, seed: input.seed,
     canvas: { width: 1080, height: 1920, aspectRatio: '9:16', fps: 30 }, timeline,
     audio: { ...(input.voiceAssetId ? { voiceAssetId: input.voiceAssetId } : {}), ...(input.voicePath ? { voicePath: input.voicePath } : {}), volume: 1 },
-    metadata: { editMode: mode, audioOffsetMs: 0, sentences: sentences.map(({ index, text, normalizedText, voiceStartMs, voiceEndMs, durationMs }) => ({ index, text, normalizedText, ...(voiceStartMs !== undefined ? { voiceStartMs } : {}), ...(voiceEndMs !== undefined ? { voiceEndMs } : {}), ...(durationMs !== undefined ? { durationMs } : {}) })) },
+    metadata: { editMode: mode, preferUnusedMedia: input.preferUnusedMedia !== false, audioOffsetMs: 0, sentences: sentences.map(({ index, text, normalizedText, voiceStartMs, voiceEndMs, durationMs }) => ({ index, text, normalizedText, ...(voiceStartMs !== undefined ? { voiceStartMs } : {}), ...(voiceEndMs !== undefined ? { voiceEndMs } : {}), ...(durationMs !== undefined ? { durationMs } : {}) })) },
     output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' },
   };
   // A one-asset library is a valid fallback case for sentence montage. V0's
@@ -258,7 +259,7 @@ export function buildScriptMontageManifest(input: ScriptMontageInput): SentenceM
     const sentence = sentences[sentenceIndex]!;
     const required = sentenceTokens(sentence.text); const previous = timeline.at(-1)?.assetId;
     const requestedDuration = sentenceDurationMs(sentence, minMs, maxMs);
-    const ranked = assets.map((asset) => { const available = sentenceTokens(assetText(asset)); const matchedKeywords = required.filter((token) => available.includes(token)); const matchScore = required.length ? Math.round((matchedKeywords.length / required.length) * 100) : 0; const historyPenalty = usagePenalty(asset); return { asset, matchedKeywords, matchScore, historyPenalty }; }).sort((a, b) => { const scoreDelta = b.matchScore - a.matchScore; if (Math.abs(scoreDelta) > 5) return scoreDelta; return (a.matchScore - a.historyPenalty) - (b.matchScore - b.historyPenalty) || a.asset.id.localeCompare(b.asset.id); });
+    const ranked = assets.map((asset) => { const available = sentenceTokens(assetText(asset)); const matchedKeywords = required.filter((token) => available.includes(token)); const matchScore = required.length ? Math.round((matchedKeywords.length / required.length) * 100) : 0; const historyPenalty = input.preferUnusedMedia === false ? 0 : usagePenalty(asset); return { asset, matchedKeywords, matchScore, historyPenalty }; }).sort((a, b) => { const scoreDelta = b.matchScore - a.matchScore; if (Math.abs(scoreDelta) > 5) return scoreDelta; return (b.matchScore - b.historyPenalty) - (a.matchScore - a.historyPenalty) || a.asset.id.localeCompare(b.asset.id); });
     const eligible = ranked.filter((item) => item.asset.id !== previous && item.asset.durationMs >= requestedDuration);
     const selected = (eligible[0] || ranked.find((item) => item.asset.durationMs >= requestedDuration) || ranked[0]);
     if (!selected || selected.asset.durationMs < requestedDuration) throw new Error(`第${sentence.index + 1}句话需要${(requestedDuration / 1000).toFixed(1)}秒画面，但当前素材都不足${(requestedDuration / 1000).toFixed(1)}秒。`);
@@ -284,7 +285,7 @@ export function buildRandomSentenceMontageManifest(input: RandomSentenceMontageI
   for (let sentenceIndex = 0; sentenceIndex < sentences.length; sentenceIndex += 1) {
     const sentence = sentences[sentenceIndex]!; const previous = timeline.at(-1)?.assetId; const requestedDuration = sentenceDurationMs(sentence, minMs, maxMs);
     const eligible = assets.filter((asset) => asset.durationMs >= requestedDuration); if (eligible.length === 0) throw new Error(`第${sentence.index + 1}句话需要${(requestedDuration / 1000).toFixed(1)}秒画面，但当前素材都不足${(requestedDuration / 1000).toFixed(1)}秒。`);
-    const ranked = eligible.map((asset) => ({ asset, score: usage.get(asset.id)! * 8 + usagePenalty(asset) })).sort((a, b) => a.score - b.score || a.asset.id.localeCompare(b.asset.id)); const lowest = ranked[0]!.score; const pool = ranked.filter((item) => item.score <= lowest + 1 && (eligible.length === 1 || item.asset.id !== previous)); const selected = (pool[Math.floor(random() * pool.length)]?.asset || ranked.find((item) => item.asset.id !== previous)?.asset || ranked[0]!.asset); const timing = boundedAssetClip(selected, requestedDuration, random)!; const sceneId = `scene-${String(sentence.index + 1).padStart(3, '0')}`; const fallback = eligible.length === 1 && previous === selected.id; const matching: ClipMatchingV1 = { matchedKeywords: [], matchScore: 0, fallback, matchingReason: fallback ? '素材不足，允许重复使用同一素材' : '优先选择近期较少使用的素材' };
+    const ranked = eligible.map((asset) => ({ asset, score: usage.get(asset.id)! * 8 + (input.preferUnusedMedia === false ? 0 : usagePenalty(asset)) })).sort((a, b) => a.score - b.score || a.asset.id.localeCompare(b.asset.id)); const lowest = ranked[0]!.score; const pool = ranked.filter((item) => item.score <= lowest + 1 && (eligible.length === 1 || item.asset.id !== previous)); const selected = (pool[Math.floor(random() * pool.length)]?.asset || ranked.find((item) => item.asset.id !== previous)?.asset || ranked[0]!.asset); const timing = boundedAssetClip(selected, requestedDuration, random)!; const sceneId = `scene-${String(sentence.index + 1).padStart(3, '0')}`; const fallback = eligible.length === 1 && previous === selected.id; const matching: ClipMatchingV1 = { matchedKeywords: [], matchScore: 0, fallback, matchingReason: fallback ? '素材不足，允许重复使用同一素材' : '优先选择近期较少使用的素材' };
     const placement = visualTiming(sentences, sentence, sentenceIndex, visualCursor); visualCursor = placement.endMs;
     usage.set(selected.id, (usage.get(selected.id) || 0) + 1); timeline.push({ assetId: selected.id, sourcePath: selected.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, timelineStartMs: placement.startMs, timelineEndMs: placement.endMs, transition: 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching, role: 'CONTENT', reviewStatus: fallback ? 'REVIEW' : 'GOOD', ...(validVoiceTiming(sentence) ? { voiceStartMs: sentence.voiceStartMs, voiceEndMs: sentence.voiceEndMs } : {}) }); decisions.push({ sentenceIndex: sentence.index, sceneId, assetId: selected.id, durationMs: timing.durationMs, ...matching });
   }
@@ -310,5 +311,5 @@ export function assembleBrandedTimeline(manifest: EditManifestV0, branding: Bran
   ];
   const offset = intro?.durationMs || 0;
   const shiftedTimeline = timeline.map((clip, index) => ({ ...clip, ...(clip.timelineStartMs !== undefined ? { timelineStartMs: clip.timelineStartMs + offset, timelineEndMs: (clip.timelineEndMs || clip.timelineStartMs + clip.durationMs) + offset } : index > 0 && timeline[index - 1]?.timelineEndMs !== undefined ? { timelineStartMs: (timeline[index - 1]!.timelineEndMs || 0) + offset, timelineEndMs: (timeline[index - 1]!.timelineEndMs || 0) + offset + clip.durationMs } : {}) }));
-  return validateAndReturn({ ...manifest, timeline: shiftedTimeline, metadata: { ...(manifest.metadata || {}), audioOffsetMs: offset }, ...(manifest.subtitles ? { subtitles: manifest.subtitles.map((subtitle) => ({ ...subtitle, startMs: subtitle.startMs + offset, endMs: subtitle.endMs + offset })) } : {}) });
+  return validateAndReturn({ ...manifest, timeline: shiftedTimeline, metadata: { ...(manifest.metadata || {}), preferUnusedMedia: manifest.metadata?.preferUnusedMedia !== false, audioOffsetMs: offset }, ...(manifest.subtitles ? { subtitles: manifest.subtitles.map((subtitle) => ({ ...subtitle, startMs: subtitle.startMs + offset, endMs: subtitle.endMs + offset })) } : {}) });
 }

@@ -31,7 +31,7 @@ test('Video project read service returns the newest successful Render target', a
     await db.query('insert into edit_manifests (id, project_id, revision, schema_version, manifest, status) values ($1, $2, $3, $4, $5, $6)', [currentManifestId, project.id, 2, 'EDIT_MANIFEST_V0', {}, 'PERSISTED']);
     await db.query('insert into renders (id, project_id, manifest_id, status, output_asset_id, finished_at) values ($1, $2, $3, $4, $5, $6)', [currentRenderId, project.id, currentManifestId, 'SUCCEEDED', currentAssetId, '2026-08-22T00:01:00Z']);
     const current = await new VideoProjectReadService(db).getCurrentRender(project.id);
-    assert.deepEqual(current, { renderId: currentRenderId, outputAssetId: currentAssetId });
+    assert.deepEqual(current, { renderId: currentRenderId, outputAssetId: currentAssetId, manifestId: currentManifestId });
   } finally {
     await db.query('delete from renders where project_id = $1', [project.id]);
     await db.query('delete from edit_manifests where project_id = $1', [project.id]);

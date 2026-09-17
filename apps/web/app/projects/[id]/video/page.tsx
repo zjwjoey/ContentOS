@@ -2,13 +2,13 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ClipInspector } from "../../../../components/video/clip-inspector";
-import { ClipPreview } from "../../../../components/video/clip-preview";
 import {
   EditModeSelector,
   type EditMode,
 } from "../../../../components/video/edit-mode-selector";
 import { MediaBrowser } from "../../../../components/video/media-browser";
+import { OutputStep } from "../../../../components/video/output-step";
+import { ReviewStep } from "../../../../components/video/review-step";
 
 // 兼容旧版测试与历史入口：生成视频调整版本、创建精确渲染 Job、Manifest v、时间线、TRIM、REMOVE、REORDER、REPLACE、REROLL。
 
@@ -80,6 +80,7 @@ type Snapshot = {
   currentRender: {
     renderId: string;
     outputAssetId: string;
+    manifestId: string;
     status: string;
   } | null;
   renderHistory: Array<{
@@ -137,8 +138,11 @@ type Preset = {
   preferUnusedMedia: boolean;
   introAssetId: string | null;
   outroAssetId: string | null;
+  canvas?: { width: number; height: number; aspectRatio: "9:16" };
+  fps?: number;
 };
 type ApiError = { error?: { message?: string } };
+type ReviewFilter = "ALL" | "REVIEW" | "MANUAL";
 const activeJobs = new Set([
   "QUEUED",
   "RUNNING",
@@ -155,11 +159,6 @@ async function responseMessage(
     return fallback;
   }
 }
-function clock(value: number): string {
-  const total = Math.max(0, value) / 1000;
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${(total % 60).toFixed(1).padStart(4, "0")}`;
-}
-
 export default function VideoPage({ params }: { params: { id: string } }) {
   const projectId = params.id;
   const [step, setStep] = useState(1);
@@ -171,10 +170,12 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   );
   const [scriptCount, setScriptCount] = useState(0);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [renderingManifestId, setRenderingManifestId] = useState<string | null>(null);
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [manifestHistory, setManifestHistory] = useState<Manifest[]>([]);
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
   const [selectedClips, setSelectedClips] = useState<number[]>([]);
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("ALL");
   const [operations, setOperations] = useState<Array<Record<string, unknown>>>(
     [],
   );
@@ -204,6 +205,15 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   const [message, setMessage] = useState("");
   const [seed, setSeed] = useState(1);
   const [editIdempotencyKey, setEditIdempotencyKey] = useState("");
+
+  const applyPresetToUi = (next: Preset | null) => {
+    setPreset(next);
+    if (!next) return;
+    setMode(next.editModeDefault);
+    setPreferUnused(next.preferUnusedMedia);
+    setIntroAssetId(next.introAssetId || "");
+    setOutroAssetId(next.outroAssetId || "");
+  };
 
   const loadScript = useCallback(async () => {
     const response = await fetch(
@@ -249,13 +259,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
     const current = await fetch(`/api/v1/projects/${projectId}/video/preset`);
     if (current.ok) {
       const data = (await current.json()) as { preset: Preset | null };
-      setPreset(data.preset);
-      if (data.preset) {
-        setMode(data.preset.editModeDefault);
-        setPreferUnused(data.preset.preferUnusedMedia);
-        setIntroAssetId(data.preset.introAssetId || "");
-        setOutroAssetId(data.preset.outroAssetId || "");
-      }
+      applyPresetToUi(data.preset);
     }
   }, [projectId]);
   const loadIndex = useCallback(async () => {
@@ -324,6 +328,15 @@ export default function VideoPage({ params }: { params: { id: string } }) {
     return () => window.clearInterval(timer);
   }, [refresh, snapshot?.job?.id, snapshot?.job?.state]);
   useEffect(() => {
+    if (!renderingManifestId) return;
+    if (snapshot?.currentRender?.manifestId === renderingManifestId || (snapshot?.job && !activeJobs.has(snapshot.job.state))) {
+      setRenderingManifestId(null);
+      return;
+    }
+    const timer = window.setInterval(() => void refresh(), 1000);
+    return () => window.clearInterval(timer);
+  }, [refresh, renderingManifestId, snapshot?.currentRender?.manifestId, snapshot?.job?.state]);
+  useEffect(() => {
     if (!scan?.sourceRootId || !indexedMedia.some((item) => item.thumbnailStatus === "PENDING")) return;
     const timer = window.setInterval(() => void loadIndex(), 1500);
     return () => window.clearInterval(timer);
@@ -375,12 +388,16 @@ export default function VideoPage({ params }: { params: { id: string } }) {
           height: asset.metadata.height,
           tags: asset.metadata.tags,
           usageCount: 0,
-          thumbnailStatus: "PENDING",
+          thumbnailStatus: "NONE",
         })),
     [snapshot],
   );
   const mediaAssets =
-    scan?.status === "SUCCEEDED" ? indexedMedia : projectMedia;
+    scan?.status === "SUCCEEDED" ? [...projectMedia, ...indexedMedia] : projectMedia;
+  useEffect(() => {
+    if (projectMedia.length === 0) return;
+    setSelectedAssets((current) => current.length > 0 ? current : projectMedia.map((asset) => asset.id));
+  }, [projectMedia]);
   const currentClip =
     manifest && selectedClip !== null
       ? manifest.manifest.timeline[selectedClip]
@@ -399,6 +416,13 @@ export default function VideoPage({ params }: { params: { id: string } }) {
     manifest?.manifest.timeline.filter(
       (clip) => clip.reviewStatus === "REVIEW" || clip.matching?.fallback,
     ).length || 0;
+  const manualCount = manifest?.manifest.timeline.filter((clip) => clip.reviewStatus === "MANUAL").length || 0;
+  const visibleClipIndexes = useMemo(() => (manifest?.manifest.timeline || []).map((clip, index) => ({ clip, index })).filter(({ clip }) => reviewFilter === "ALL" ? true : reviewFilter === "MANUAL" ? clip.reviewStatus === "MANUAL" : clip.reviewStatus === "REVIEW" || clip.matching?.fallback).map(({ index }) => index), [manifest, reviewFilter]);
+  const clipThumbnail = (clip: Clip): string | undefined => {
+    if (!clip.assetId.startsWith("local-")) return undefined;
+    const rootId = clip.assetId.split(":", 1)[0] || "";
+    return `/api/v1/video/local-media/thumbnails/${encodeURIComponent(clip.assetId)}?projectId=${encodeURIComponent(projectId)}&sourceRootId=${encodeURIComponent(rootId)}`;
+  };
 
   const chooseMode = (next: EditMode) => {
     setMode(next);
@@ -461,7 +485,9 @@ export default function VideoPage({ params }: { params: { id: string } }) {
             : "素材扫描未完成，请重试。",
         );
             if (next.status === "SUCCEEDED") {
-              setIndexedMedia(next.files.filter((file) => file.available).map((file) => ({ id: `${next.sourceRootId}:${file.relativePath}`, originalName: file.fileName, durationMs: file.durationMs, width: file.width, height: file.height, orientation: file.orientation, tags: file.tags, category: file.category, usageCount: file.usageCount, lastUsedAt: file.lastUsedAt, thumbnailStatus: file.thumbnailStatus || "PENDING", thumbnailUrl: `/api/v1/video/local-media/thumbnails/${encodeURIComponent(`${next.sourceRootId}:${file.relativePath}`)}?projectId=${encodeURIComponent(projectId)}` })));
+              const localSelection = next.files.filter((file) => file.available).map((file) => ({ id: `${next.sourceRootId}:${file.relativePath}`, originalName: file.fileName, durationMs: file.durationMs, width: file.width, height: file.height, orientation: file.orientation, tags: file.tags, category: file.category, usageCount: file.usageCount, lastUsedAt: file.lastUsedAt, thumbnailStatus: file.thumbnailStatus || "PENDING", thumbnailUrl: `/api/v1/video/local-media/thumbnails/${encodeURIComponent(`${next.sourceRootId}:${file.relativePath}`)}?projectId=${encodeURIComponent(projectId)}` }));
+              setIndexedMedia(localSelection);
+              setSelectedAssets((current) => [...new Set([...current, ...projectMedia.map((asset) => asset.id), ...localSelection.map((asset) => asset.id)])]);
               setIndexTotal(next.files.filter((file) => file.available).length);
               setStep(2);
           await loadIndex();
@@ -513,9 +539,10 @@ export default function VideoPage({ params }: { params: { id: string } }) {
           seed,
           minClipDurationMs: selectedPreset?.minClipDurationMs || 2000,
           maxClipDurationMs: selectedPreset?.maxClipDurationMs || 5000,
-          ...(scan?.status === "SUCCEEDED"
-            ? { scanId: scan.id }
-            : { videoAssetIds: selectedAssets }),
+          ...(scan?.status === "SUCCEEDED" ? { scanId: scan.id } : {}),
+          videoAssetIds: selectedAssets.filter((id) => !id.startsWith("local-")),
+          selectedLocalMediaIds: selectedAssets.filter((id) => id.startsWith("local-")),
+          preferUnusedMedia: preferUnused,
           ...(introAssetId || selectedPreset?.introAssetId
             ? { introAssetId: introAssetId || selectedPreset.introAssetId }
             : {}),
@@ -584,11 +611,15 @@ export default function VideoPage({ params }: { params: { id: string } }) {
       .map((clipIndex) => ({ type, clipIndex }));
     await submitOperations(next);
   };
-  const renderManifest = async () => {
-    if (!manifest) return;
+  const renderManifest = async (manifestIdOverride?: string) => {
+    const manifestId = manifestIdOverride || manifest?.id;
+    if (!manifestId) {
+      setMessage("当前没有可渲染的剪辑版本，请返回上一步重试。");
+      return;
+    }
     setBusy(true);
     const response = await fetch(
-      `/api/v1/projects/${projectId}/video/manifests/${manifest.id}/render`,
+      `/api/v1/projects/${projectId}/video/manifests/${manifestId}/render`,
       { method: "POST" },
     );
     setBusy(false);
@@ -597,6 +628,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
         ? "正在生成视频……"
         : await responseMessage(response, "生成成片失败。"),
     );
+    setRenderingManifestId(response.ok ? manifestId : null);
     setStep(5);
     await refresh();
   };
@@ -674,14 +706,18 @@ export default function VideoPage({ params }: { params: { id: string } }) {
                   (item) => item.id === event.target.value,
                 );
                 if (!selected) return;
-                setPreset(selected);
-                setMode(selected.editModeDefault);
-                setPreferUnused(selected.preferUnusedMedia);
-                await fetch(`/api/v1/projects/${projectId}/video/preset`, {
+                const previous = preset;
+                const response = await fetch(`/api/v1/projects/${projectId}/video/preset`, {
                   method: "PUT",
                   headers: { "content-type": "application/json" },
                   body: JSON.stringify({ presetId: selected.id }),
                 });
+                if (!response.ok) {
+                  applyPresetToUi(previous);
+                  setMessage("模板应用失败，请重试。");
+                  return;
+                }
+                applyPresetToUi(selected);
               }}
             >
               <option value="">选择模板</option>
@@ -760,24 +796,9 @@ export default function VideoPage({ params }: { params: { id: string } }) {
         <section className="workflow-panel">
           <div className="section-title">
             <h2>② 选择素材</h2>
-            <span>{indexTotal || mediaAssets.length} 条可用素材</span>
+            <span>{indexTotal || mediaAssets.length} 条可用素材 · 已选择 {selectedAssets.length} 条</span>
           </div>
-          <div className="source-choice">
-            <button
-              type="button"
-              className={!scan ? "selected" : ""}
-              onClick={() => setScan(null)}
-            >
-              项目素材库
-            </button>
-            <button
-              type="button"
-              className={scan ? "selected" : ""}
-              onClick={() => setSourceRoot(sourceRoot)}
-            >
-              本地素材文件夹
-            </button>
-          </div>
+          <p className="muted">项目素材库和本地素材可以混合选择；取消勾选的素材不会参与本次剪辑。</p>
           <div className="media-source-row">
             <label>
               素材文件夹
@@ -899,7 +920,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
             type="button"
             className="primary-action"
             onClick={() => setStep(3)}
-            disabled={mediaAssets.length === 0}
+            disabled={selectedAssets.length === 0}
           >
             下一步：自动剪辑
           </button>
@@ -930,253 +951,15 @@ export default function VideoPage({ params }: { params: { id: string } }) {
               type="button"
               className="primary-action"
               onClick={() => void createPlan()}
-              disabled={!mode || !script.trim() || mediaAssets.length === 0}
+              disabled={!mode || !script.trim() || selectedAssets.length === 0}
             >
               开始自动剪辑
             </button>
           )}
         </section>
       )}
-      {step === 4 && (
-        <section className="workflow-panel review-panel">
-          <div className="section-title">
-            <h2>④ 检查镜头</h2>
-            <span>
-              {manifest?.manifest.timeline.length || 0} 个镜头 · {reviewCount}{" "}
-              个建议检查
-            </span>
-          </div>
-          <div className="review-toolbar">
-            <button
-              type="button"
-              onClick={() =>
-                setSelectedClips(
-                  manifest?.manifest.timeline.map((_, index) => index) || [],
-                )
-              }
-            >
-              全部
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                setSelectedClips(
-                  manifest?.manifest.timeline
-                    .map((clip, index) =>
-                      clip.reviewStatus === "REVIEW" || clip.matching?.fallback
-                        ? index
-                        : -1,
-                    )
-                    .filter((index) => index >= 0),
-                )
-              }
-            >
-              只看建议检查
-            </button>
-            <button type="button" onClick={() => setSelectedClips([])}>
-              取消选择
-            </button>
-            {selectedClips.length > 0 && (
-              <>
-                <span>已选择 {selectedClips.length} 个镜头</span>
-                <button
-                  type="button"
-                  onClick={() => void bulkAdjust("REMATCH")}
-                >
-                  重新匹配
-                </button>
-                <button type="button" onClick={() => void bulkAdjust("REROLL")}>
-                  随机换素材
-                </button>
-              </>
-            )}
-          </div>
-          {manifest && (
-            <div className="review-list sentence-list">
-              {manifest.manifest.timeline.map((clip, index) => (
-                <label
-                  className={`review-row${selectedClips.includes(index) ? " selected" : ""}`}
-                  key={`${clip.assetId}-${index}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedClips.includes(index)}
-                    onChange={() =>
-                      setSelectedClips((current) =>
-                        current.includes(index)
-                          ? current.filter((item) => item !== index)
-                          : [...current, index],
-                      )
-                    }
-                  />
-                  <span className="review-index">
-                    {String(index + 1).padStart(2, "0")}
-                  </span>
-                  <span className="review-thumb">
-                    {clip.role === "INTRO"
-                      ? "片头"
-                      : clip.role === "OUTRO"
-                        ? "片尾"
-                        : "镜头"}
-                  </span>
-                  <span>
-                    <strong>
-                      {clip.role === "INTRO"
-                        ? "片头"
-                        : clip.role === "OUTRO"
-                          ? "片尾"
-                          : clip.sentenceText || "正文镜头"}
-                    </strong>
-                    <small>
-                      {clip.reviewStatus === "MANUAL"
-                        ? "人工修改"
-                        : clip.reviewStatus === "REVIEW" ||
-                            clip.matching?.fallback
-                          ? "建议检查"
-                          : "良好"}{" "}
-                      · {clock(clip.durationMs)}
-                    </small>
-                  </span>
-                  <button type="button" className="review-row-button" onClick={() => setSelectedClip(index)}>
-                    选择镜头
-                  </button>
-                </label>
-              ))}
-            </div>
-          )}
-          {currentClip ? (
-            <div className="current-clip">
-              <h3>当前镜头预览</h3>
-              <ClipPreview
-                src={clipSource}
-                sourceInMs={currentClip.sourceInMs}
-                durationMs={currentClip.durationMs}
-                label={currentClip.assetId}
-              />
-              <p className="muted">
-                文案：{currentClip.sentenceText || "品牌包装"} · 素材：
-                {mediaAssets.find((asset) => asset.id === currentClip.assetId)?.originalName || "当前素材"}
-              </p>
-              <ClipInspector
-                clip={currentClip}
-                index={selectedClip}
-                clipCount={manifest?.manifest.timeline.length || 0}
-                replacementAssets={mediaAssets}
-                mode={manifest?.manifest.metadata?.editMode || mode || "RANDOM"}
-                editable={manifest?.status !== "SUPERSEDED"}
-                busy={busy}
-                onOperation={(operation) =>
-                  setOperations((current) => [...current, operation])
-                }
-              />
-            </div>
-          ) : (
-            <p className="muted">选择镜头查看预览。</p>
-          )}
-          {operations.length > 0 && (
-            <p className="status">待提交调整：{operations.length} 项</p>
-          )}
-          <div className="review-actions">
-            <button
-              type="button"
-              onClick={() => void createVersion()}
-              disabled={busy || operations.length === 0}
-            >
-              保存镜头调整
-            </button>
-            {operations.length > 0 && (
-              <button type="button" onClick={() => void createVersion()} disabled={busy}>
-                生成剪辑版本
-              </button>
-            )}
-            <button
-              type="button"
-              className="primary-action"
-              onClick={() => setStep(5)}
-              disabled={!manifest || operations.length > 0}
-            >
-              下一步：生成成片
-            </button>
-          </div>
-          <details>
-            <summary>查看历史版本</summary>
-            <p className="muted">已保存 {manifestHistory.length} 个剪辑版本。</p>
-            {manifestHistory.filter((item) => item.id !== manifest?.id).map((item) => <p key={item.id}>剪辑版本 {item.revision} · {item.status === "PERSISTED" ? "当前可用" : "历史记录"}</p>)}
-          </details>
-          <details open>
-            <summary>切换剪辑方式</summary>
-            <EditModeSelector mode={mode} onSelect={chooseMode} />
-            <button
-              type="button"
-              onClick={() => void createPlan()}
-              disabled={!mode || !script.trim() || mediaAssets.length === 0}
-            >
-              生成剪辑方案
-            </button>
-          </details>
-        </section>
-      )}
-      {step === 5 && (
-        <section className="workflow-panel output-panel card">
-          <div className="section-title">
-            <h2>⑤ 生成成片</h2>
-            <span>
-              {snapshot?.currentRender ? "视频生成完成" : "剪辑已准备好"}
-            </span>
-          </div>
-          <h3>成片预览</h3>
-          <p>
-            {manifest?.manifest.timeline.filter(
-              (clip) => clip.role === "CONTENT" || !clip.role,
-            ).length || 0}{" "}
-            个正文镜头 · 预计时长{" "}
-            {clock(
-              (manifest?.manifest.timeline || []).reduce(
-                (total, clip) =>
-                  total +
-                  (clip.timelineEndMs && clip.timelineStartMs !== undefined
-                    ? Math.max(
-                        clip.durationMs,
-                        clip.timelineEndMs - clip.timelineStartMs,
-                      )
-                    : clip.durationMs),
-                0,
-              ),
-            )}
-          </p>
-          <p className="muted">片头：{mediaAssets.find((asset) => asset.id === introAssetId)?.originalName || "未设置"} · 片尾：{mediaAssets.find((asset) => asset.id === outroAssetId)?.originalName || "未设置"}</p>
-          {snapshot?.currentRender ? (
-            <>
-              <video
-                controls
-                preload="metadata"
-                src={`/api/v1/projects/${projectId}/assets/${snapshot.currentRender.outputAssetId}/content`}
-              />
-              <div className="output-actions">
-                <button type="button" onClick={() => setStep(4)}>
-                  返回调整镜头
-                </button>
-                <button type="button" onClick={() => void sendToApproval()}>
-                  送往审批
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <video controls preload="metadata" src={clipSource} />
-              <button
-                type="button"
-                className="primary-action"
-                onClick={() => void renderManifest()}
-                disabled={busy || !manifest || jobRunning}
-              >
-                生成成片
-              </button>
-              {jobRunning && <p className="status">正在生成视频……</p>}
-            </>
-          )}
-        </section>
-      )}
+      {step === 4 && <ReviewStep manifest={manifest} visibleClipIndexes={visibleClipIndexes} reviewCount={reviewCount} manualCount={manualCount} reviewFilter={reviewFilter} setReviewFilter={setReviewFilter} selectedClips={selectedClips} setSelectedClips={setSelectedClips} currentClip={currentClip} selectedClip={selectedClip} setSelectedClip={setSelectedClip} clipSource={clipSource} mediaAssets={mediaAssets} busy={busy} mode={manifest?.manifest.metadata?.editMode || mode || "RANDOM"} operations={operations} setOperations={setOperations} onBulk={(type) => void bulkAdjust(type)} onSave={() => void createVersion()} onNext={() => setStep(5)} history={manifestHistory} onRegenerate={() => void createPlan()} thumbnailFor={clipThumbnail} onModeChange={chooseMode} />}
+      {step === 5 && <OutputStep projectId={projectId} manifest={manifest ? { id: manifest.id, manifest: manifest.manifest } : null} snapshot={snapshot ? { currentRender: snapshot.currentRender, job: snapshot.job } : null} introName={mediaAssets.find((asset) => asset.id === introAssetId)?.originalName || ""} outroName={mediaAssets.find((asset) => asset.id === outroAssetId)?.originalName || ""} busy={busy} jobRunning={jobRunning || Boolean(renderingManifestId)} onRender={() => void renderManifest(manifest?.id)} onBack={() => setStep(4)} onApproval={() => void sendToApproval()} />}
       {message && <p className="status">{message}</p>}
       {detailsAsset && (
         <aside className="media-details" aria-label="素材信息">

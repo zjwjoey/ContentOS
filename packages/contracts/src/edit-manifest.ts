@@ -54,6 +54,7 @@ export interface EditManifestV0 {
     scriptRevisionId?: string;
     storyboardRevisionId?: string;
     editMode?: EditModeV1;
+    preferUnusedMedia?: boolean;
     localMediaSourceRootId?: string;
     localMediaScanId?: string;
     sentences?: ScriptSentenceV1[];

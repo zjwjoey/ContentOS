@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildScriptMontageManifest, buildRandomSentenceMontageManifest, assembleBrandedTimeline } from '../../packages/modules/video/src/index.js';
-import { applyQuickEditOperations } from '../../packages/modules/video/src/quick-edit.js';
+import { applyQuickEditOperations, rankAdjustmentAssets } from '../../packages/modules/video/src/quick-edit.js';
 import { generateFixtureAudio, generateFixtureVideo, probeMedia, renderEditManifest } from '../../packages/infrastructure/ffmpeg/src/index.js';
 
 type TestAsset = { id: string; storageKey: string; sourcePath: string; durationMs: number; originalName: string; tags: string[]; usageCount: number; recentUsageCount: number };
@@ -19,6 +19,29 @@ test('V1.5 planner never truncates voice timing and prefers long eligible media'
   assert.equal(result.manifest.timeline[0]?.assetId, 'long-store');
   assert.equal(result.manifest.timeline[0]?.durationMs, 4_000);
   assert.equal(result.manifest.metadata?.sentences?.[0]?.voiceEndMs, 4_000);
+});
+
+test('SCRIPT usage ranking prefers low usage when matches tie, but not over a strong match', () => {
+  const tied = buildScriptMontageManifest({ projectId: 'project-v15', seed: 1, sentences: [{ index: 0, text: '门店', normalizedText: '门店' }], assets: [{ ...longAsset, id: 'high-usage', usageCount: 20 }, { ...longAsset, id: 'low-usage', usageCount: 0 }], minClipDurationMs: 1_000, maxClipDurationMs: 1_000 });
+  assert.equal(tied.manifest.timeline[0]?.assetId, 'low-usage');
+  const strongMatch = buildScriptMontageManifest({ projectId: 'project-v15', seed: 1, sentences: [{ index: 0, text: '门店', normalizedText: '门店' }], assets: [{ ...longAsset, id: 'strong-match', originalName: '门店素材', tags: ['门店'], usageCount: 20 }, { ...longAsset, id: 'weak-match', originalName: '风景素材', tags: ['风景'], usageCount: 0 }], minClipDurationMs: 1_000, maxClipDurationMs: 1_000 });
+  assert.equal(strongMatch.manifest.timeline[0]?.assetId, 'strong-match');
+});
+
+test('preferUnusedMedia false disables historical penalty while keeping deterministic matching', () => {
+  const assetsForPreference = [{ ...longAsset, id: 'a-used', usageCount: 50 }, { ...longAsset, id: 'z-fresh', usageCount: 0 }];
+  const enabled = buildScriptMontageManifest({ projectId: 'project-v15', seed: 1, sentences: [{ index: 0, text: '门店', normalizedText: '门店' }], assets: assetsForPreference, preferUnusedMedia: true, minClipDurationMs: 1_000, maxClipDurationMs: 1_000 });
+  const disabled = buildScriptMontageManifest({ projectId: 'project-v15', seed: 1, sentences: [{ index: 0, text: '门店', normalizedText: '门店' }], assets: assetsForPreference, preferUnusedMedia: false, minClipDurationMs: 1_000, maxClipDurationMs: 1_000 });
+  assert.equal(enabled.manifest.timeline[0]?.assetId, 'z-fresh');
+  assert.equal(disabled.manifest.timeline[0]?.assetId, 'a-used');
+  assert.equal(enabled.manifest.metadata?.preferUnusedMedia, true);
+  assert.equal(disabled.manifest.metadata?.preferUnusedMedia, false);
+});
+
+test('REMATCH ranking uses the same match-first, usage-second rule', () => {
+  const ranked = rankAdjustmentAssets('门店', [{ ...longAsset, id: 'used-strong', originalName: '门店素材', tags: ['门店'], usageCount: 20 }, { ...longAsset, id: 'fresh-strong', originalName: '门店素材2', tags: ['门店'], usageCount: 0 }, { ...longAsset, id: 'fresh-weak', originalName: '风景素材', tags: ['风景'], usageCount: 0 }]);
+  assert.equal(ranked[0]?.asset.id, 'fresh-strong');
+  assert.equal(ranked.at(-1)?.asset.id, 'fresh-weak');
 });
 
 test('V1.5 visual timeline covers a voice gap without changing sentence voice metadata', () => {
