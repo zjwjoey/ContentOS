@@ -9,7 +9,7 @@ import type { AssetCatalogService } from '../../../packages/modules/asset/src/in
 import type { ApprovalService } from '../../../packages/modules/approval/src/index.js';
 import type { DirectorV1Service } from '../../../packages/modules/director/src/index.js';
 import { assembleBrandedTimeline, buildRandomSentenceMontageManifest, buildScriptMontageManifest, segmentScriptSentences } from '../../../packages/modules/video/src/index.js';
-import type { DirectorVideoService, VideoProjectReadService, VideoAdjustmentService, StandaloneQuickEditService, VideoService, QuickEditOperation, TimedScriptSentence } from '../../../packages/modules/video/src/index.js';
+import type { DirectorVideoService, VideoProjectReadService, VideoAdjustmentService, StandaloneQuickEditService, VideoService, QuickEditOperation, TimedScriptSentence, VideoEditPresetService } from '../../../packages/modules/video/src/index.js';
 import type { JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
 import type { AssetImportKind, AssetSummaryV0 } from '../../../packages/contracts/src/index.js';
@@ -33,8 +33,9 @@ const standaloneSettingsInput = z.object({ seed: z.number().int().optional(), ta
 const sentencePreviewInput = z.object({ script: z.string().max(100_000), splitSemicolon: z.boolean().optional() });
 const localMediaScanInput = z.object({ projectId: z.string().trim().min(1).optional(), sourceRoot: z.string().trim().min(1), recursive: z.boolean().default(true), idempotencyKey: z.string().trim().min(1).max(200).optional() });
 const localMediaContentInput = z.object({ projectId: z.string().trim().min(1).optional(), sourceRootId: z.string().trim().min(1), fileId: z.string().trim().min(1) });
-const localMediaIndexQuery = z.object({ projectId: z.string().trim().min(1), query: z.string().max(200).optional(), orientation: z.enum(['ALL', 'VERTICAL', 'HORIZONTAL', 'SQUARE', 'UNKNOWN']).optional(), category: z.string().max(100).optional(), usage: z.enum(['ALL', 'UNUSED', 'RECENT', 'FREQUENT']).optional(), sort: z.enum(['NAME', 'UPDATED', 'DURATION', 'USAGE', 'RECENT']).optional() });
+const localMediaIndexQuery = z.object({ projectId: z.string().trim().min(1), query: z.string().max(200).optional(), orientation: z.enum(['ALL', 'VERTICAL', 'HORIZONTAL', 'SQUARE', 'UNKNOWN']).optional(), category: z.string().max(100).optional(), usage: z.enum(['ALL', 'UNUSED', 'RECENT', 'FREQUENT']).optional(), sort: z.enum(['NAME', 'UPDATED', 'DURATION', 'USAGE', 'RECENT', 'RECOMMENDED', 'NEWEST', 'LEAST_USED', 'MOST_RECENT']).optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) });
 const localMediaMetaInput = z.object({ category: z.string().max(100).nullable().optional(), tags: z.array(z.string().max(80)).max(64).optional() });
+const presetInput = z.object({ name: z.string().trim().min(1).max(120), description: z.string().max(500).optional(), editModeDefault: z.enum(['SCRIPT', 'RANDOM']).optional(), minClipDurationMs: z.number().int().positive().optional(), maxClipDurationMs: z.number().int().positive().optional(), preferUnusedMedia: z.boolean().optional(), introAssetId: z.string().trim().nullable().optional(), outroAssetId: z.string().trim().nullable().optional(), fps: z.number().int().positive().max(120).optional() });
 const montagePlanInput = z.object({ mode: z.enum(['SCRIPT', 'RANDOM']), script: z.string().max(100_000).optional(), sentences: z.array(z.object({ index: z.number().int().nonnegative().optional(), text: z.string().trim().min(1), normalizedText: z.string().optional(), voiceStartMs: z.number().nonnegative().optional(), voiceEndMs: z.number().nonnegative().optional(), durationMs: z.number().positive().optional() })).optional(), videoAssetIds: z.array(z.string().trim().min(1)).max(256).default([]), sourceRoot: z.string().trim().min(1).optional(), scanId: z.string().trim().min(1).optional(), recursive: z.boolean().default(true), seed: z.number().int().default(1), minClipDurationMs: z.number().int().positive().default(2_000), maxClipDurationMs: z.number().int().positive().default(5_000), voiceAssetId: z.string().trim().min(1).optional(), introAssetId: z.string().trim().min(1).optional(), outroAssetId: z.string().trim().min(1).optional(), introDurationMs: z.number().int().positive().max(10_000).optional(), outroDurationMs: z.number().int().positive().max(10_000).optional() }).superRefine((value, context) => { if (!value.script?.trim() && !value.sentences?.length) context.addIssue({ code: z.ZodIssueCode.custom, path: ['script'], message: 'script or sentences is required' }); if (!value.sourceRoot && !value.scanId && value.videoAssetIds.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ['videoAssetIds'], message: 'videoAssetIds or sourceRoot/scanId is required' }); });
 
 export interface VideoRouteDependencies {
@@ -52,6 +53,7 @@ export interface VideoRouteDependencies {
   storage: LocalStorageProvider;
   maxUploadBytes: number;
   localMedia?: LocalMediaSourceService;
+  presets?: VideoEditPresetService;
 }
 
 function projectIdOf(request: { params: unknown }): string { return (request.params as { projectId: string }).projectId; }
@@ -139,8 +141,9 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
   app.get('/api/v1/video/local-media/index', async (request, reply) => {
     const parsed = localMediaIndexQuery.safeParse(request.query || {});
     if (!parsed.success || !dependencies.localMedia) return reply.code(422).send({ error: { code: 'LOCAL_MEDIA_INDEX_INVALID', message: '素材索引参数不完整。', details: parsed.success ? [] : parsed.error.issues } });
-    const assets = await dependencies.localMedia.listIndex(parsed.data.projectId, { ...(parsed.data.query !== undefined ? { query: parsed.data.query } : {}), ...(parsed.data.orientation !== undefined ? { orientation: parsed.data.orientation } : {}), ...(parsed.data.category !== undefined ? { category: parsed.data.category } : {}), ...(parsed.data.usage !== undefined ? { usage: parsed.data.usage } : {}), ...(parsed.data.sort !== undefined ? { sort: parsed.data.sort } : {}) });
-    return { items: assets.map(LocalMediaSourceService.toPublicFile), total: assets.length };
+    const filters = { page: parsed.data.page, pageSize: parsed.data.pageSize, ...(parsed.data.query !== undefined ? { query: parsed.data.query } : {}), ...(parsed.data.orientation !== undefined ? { orientation: parsed.data.orientation } : {}), ...(parsed.data.category !== undefined ? { category: parsed.data.category } : {}), ...(parsed.data.usage !== undefined ? { usage: parsed.data.usage } : {}), ...(parsed.data.sort !== undefined ? { sort: parsed.data.sort } : {}) };
+    const result = await dependencies.localMedia.listIndexPage(parsed.data.projectId, filters);
+    return { items: result.items.map(LocalMediaSourceService.toPublicFile), total: result.total, page: result.page, pageSize: result.pageSize, hasNext: result.page * result.pageSize < result.total };
   });
   app.patch('/api/v1/video/local-media/index/:fileId', async (request, reply) => {
     const parsed = localMediaMetaInput.safeParse(request.body || {});
@@ -149,6 +152,36 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     if (parsed.data.category !== undefined) await dependencies.localMedia.updateCategory(fileId, parsed.data.category);
     if (parsed.data.tags !== undefined) await dependencies.localMedia.updateTags(fileId, parsed.data.tags);
     return { ok: true };
+  });
+  app.get('/api/v1/video/presets', async (_request, reply) => {
+    if (!dependencies.presets) return reply.code(503).send({ error: { code: 'PRESET_UNAVAILABLE', message: '模板服务暂不可用。', details: [] } });
+    return { items: await dependencies.presets.list() };
+  });
+  app.post('/api/v1/video/presets', async (request, reply) => {
+    const parsed = presetInput.safeParse(request.body || {});
+    if (!parsed.success || !dependencies.presets) return reply.code(422).send({ error: { code: 'PRESET_INVALID', message: '模板参数不正确。', details: parsed.success ? [] : parsed.error.issues } });
+    try { return reply.code(201).send(await dependencies.presets.create(parsed.data)); } catch { return reply.code(409).send({ error: { code: 'PRESET_CONFLICT', message: '模板名称已存在。', details: [] } }); }
+  });
+  app.patch('/api/v1/video/presets/:presetId', async (request, reply) => {
+    const parsed = presetInput.partial().safeParse(request.body || {}); if (!parsed.success || !dependencies.presets) return reply.code(422).send({ error: { code: 'PRESET_INVALID', message: '模板参数不正确。', details: parsed.success ? [] : parsed.error.issues } });
+    const preset = await dependencies.presets.update((request.params as { presetId: string }).presetId, parsed.data); return preset ? preset : reply.code(404).send({ error: { code: 'PRESET_NOT_FOUND', message: '模板不存在。', details: [] } });
+  });
+  app.delete('/api/v1/video/presets/:presetId', async (request, reply) => {
+    if (!dependencies.presets) return reply.code(503).send({ error: { code: 'PRESET_UNAVAILABLE', message: '模板服务暂不可用。', details: [] } });
+    const removed = await dependencies.presets.remove((request.params as { presetId: string }).presetId); return removed ? { ok: true } : reply.code(409).send({ error: { code: 'PRESET_DELETE_REJECTED', message: '默认模板不能删除或模板不存在。', details: [] } });
+  });
+  app.post('/api/v1/video/presets/:presetId/default', async (request, reply) => {
+    if (!dependencies.presets) return reply.code(503).send({ error: { code: 'PRESET_UNAVAILABLE', message: '模板服务暂不可用。', details: [] } });
+    const preset = await dependencies.presets.setDefault((request.params as { presetId: string }).presetId); return preset ? preset : reply.code(404).send({ error: { code: 'PRESET_NOT_FOUND', message: '模板不存在。', details: [] } });
+  });
+  app.get('/api/v1/projects/:projectId/video/preset', async (request, reply) => {
+    if (!dependencies.presets || !(await projects.get(projectIdOf(request)))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: '项目不存在。', details: [] } });
+    return { preset: await dependencies.presets.getProjectPreset(projectIdOf(request)) };
+  });
+  app.put('/api/v1/projects/:projectId/video/preset', async (request, reply) => {
+    if (!dependencies.presets || !(await projects.get(projectIdOf(request)))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: '项目不存在。', details: [] } });
+    const body = z.object({ presetId: z.string().trim().min(1) }).safeParse(request.body || {}); if (!body.success) return reply.code(422).send({ error: { code: 'PRESET_INVALID', message: '请选择剪辑模板。', details: body.error.issues } });
+    const preset = await dependencies.presets.applyToProject(projectIdOf(request), body.data.presetId); return preset ? { preset } : reply.code(404).send({ error: { code: 'PRESET_NOT_FOUND', message: '模板不存在。', details: [] } });
   });
   app.get('/api/v1/video/local-media/thumbnails/:fileId', async (request, reply) => {
     if (!dependencies.localMedia) return reply.code(403).send({ error: { code: 'LOCAL_MEDIA_ROOT_UNAUTHORIZED', message: '服务端尚未配置本地素材授权根目录。', details: [] } });
@@ -185,7 +218,9 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
         if (!dependencies.localMedia) throw new Error('LOCAL_MEDIA_ROOT_UNAUTHORIZED');
         const scan = parsed.data.scanId ? await dependencies.localMedia.getScan(parsed.data.scanId, projectId) : await dependencies.localMedia.getLatestScan(projectId, dependencies.localMedia.authorizeRoot(parsed.data.sourceRoot!).sourceRootId);
         if (!scan || scan.status !== 'SUCCEEDED') throw new Error('LOCAL_MEDIA_SCAN_NOT_READY');
-        plannerAssets = scan.files.filter((file) => file.available).map((file) => ({ id: `${scan.sourceRootId}:${file.relativePath}`, storageKey: `${scan.sourceRootId}:${file.relativePath}`, sourcePath: file.sourcePath, durationMs: file.durationMs, originalName: file.fileName, metadata: { width: file.width, height: file.height, format: file.format, relativePath: file.relativePath } }));
+        const indexed = await dependencies.localMedia.listIndex(projectId, {});
+        const indexedById = new Map(indexed.map((file) => [`${scan.sourceRootId}:${file.relativePath}`, file]));
+        plannerAssets = scan.files.filter((file) => file.available).map((file) => { const id = `${scan.sourceRootId}:${file.relativePath}`; const index = indexedById.get(id); return { id, storageKey: id, sourcePath: file.sourcePath, durationMs: file.durationMs, originalName: file.fileName, tags: index?.tags || file.tags || [], usageCount: index?.usageCount || file.usageCount || 0, lastUsedAt: index?.lastUsedAt || file.lastUsedAt, metadata: { width: file.width, height: file.height, format: file.format, relativePath: file.relativePath, category: index?.category || file.category, usageCount: index?.usageCount || file.usageCount || 0, lastUsedAt: index?.lastUsedAt || file.lastUsedAt } }; });
         localPoolMeta = { localMediaSourceRootId: scan.sourceRootId, localMediaScanId: scan.id };
       } else {
         const selected = await assets.listReadySourceAssets(projectId, parsed.data.videoAssetIds, 'VIDEO');
@@ -215,7 +250,7 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
       return reply.code(201).send({ ...safeManifestRecord(record) as Record<string, unknown>, decisions: result.decisions, sentences: result.sentences });
     } catch (error) {
       const message = error instanceof Error ? error.message : '剪辑方案生成失败。'; const code = message.includes('UNAUTHORIZED') ? 403 : message.includes('NOT_FOUND') ? 404 : 422;
-      return reply.code(code).send({ error: { code: message, message: message === 'VIDEO_SOURCE_ASSET_INVALID' || message === 'VIDEO_BRANDING_ASSET_INVALID' ? '所选视频素材不可用。' : message === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? '该本地文件夹未被授权。' : '剪辑方案生成失败，请检查素材和脚本文案。', details: [] } });
+      return reply.code(code).send({ error: { code: message, message: message.startsWith('第') ? message : message === 'VIDEO_SOURCE_ASSET_INVALID' || message === 'VIDEO_BRANDING_ASSET_INVALID' ? '所选视频素材不可用。' : message === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? '该本地文件夹未被授权。' : '剪辑方案生成失败，请检查素材和脚本文案。', details: [] } });
     }
   });
 

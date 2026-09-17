@@ -68,13 +68,22 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   const filters: string[] = [];
   for (let i = 0; i < manifest.timeline.length; i += 1) {
     const clip = manifest.timeline[i]!;
+    const visualDurationMs = clip.timelineStartMs !== undefined && clip.timelineEndMs !== undefined ? Math.max(clip.durationMs, clip.timelineEndMs - clip.timelineStartMs) : clip.durationMs;
+    const padMs = Math.max(0, visualDurationMs - clip.durationMs);
     const subtitle = i === 0 && manifest.subtitles?.[0] && options.fontFile ? `,drawtext=fontfile='${escapeFilterText(options.fontFile)}':text='${escapeFilterText(manifest.subtitles[0].text)}':fontcolor=white:fontsize=48:x=(w-text_w)/2:y=h-180:box=1:boxcolor=black@0.45` : '';
-    filters.push(`[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,format=yuv420p${subtitle},setpts=PTS-STARTPTS[v${i}]`);
+    const pad = padMs > 0 ? `,tpad=stop_mode=clone:stop_duration=${padMs / 1000}` : '';
+    filters.push(`[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,format=yuv420p${subtitle}${pad},setpts=PTS-STARTPTS[v${i}]`);
   }
   if (manifest.timeline.length === 1) filters.push('[v0]null[vout]');
   else filters.push(`${manifest.timeline.map((_, i) => `[v${i}]`).join('')}concat=n=${manifest.timeline.length}:v=1:a=0[vout]`);
+  const videoDurationMs = manifest.timeline.reduce((total, clip) => { const visual = clip.timelineStartMs !== undefined && clip.timelineEndMs !== undefined ? Math.max(clip.durationMs, clip.timelineEndMs - clip.timelineStartMs) : clip.durationMs; return total + visual; }, 0);
+  if (voiceIndex >= 0) {
+    const offsetMs = Math.max(0, Number(manifest.metadata?.audioOffsetMs || 0));
+    filters.push(`[${voiceIndex}:a]adelay=${offsetMs}:all=1,apad[aout]`);
+  }
   args.push('-filter_complex', filters.join(';'), '-map', '[vout]');
-  if (voiceIndex >= 0) args.push('-map', `${voiceIndex}:a?`, '-c:a', 'aac', '-strict', '-2', '-shortest'); else args.push('-an');
+  if (voiceIndex >= 0) args.push('-map', '[aout]', '-c:a', 'aac', '-strict', '-2', '-t', String(videoDurationMs / 1000));
+  else args.push('-an');
   const videoEncoder = manifest.output.videoCodec === 'h264' ? 'libx264' : 'mpeg4';
   args.push('-c:v', videoEncoder, '-pix_fmt', 'yuv420p');
   if (videoEncoder === 'libx264') args.push('-crf', '23');

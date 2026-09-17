@@ -5,7 +5,7 @@ import type { Pool } from 'pg';
 import { ProjectService } from '../../../packages/modules/project/src/index.js';
 import { AssetCatalogService, AssetImportService, LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import { DirectorService, DirectorProjectReadService } from '../../../packages/modules/director/src/index.js';
-import { DirectorVideoService, VideoProjectReadService, VideoAdjustmentService, StandaloneQuickEditService, VideoService } from '../../../packages/modules/video/src/index.js';
+import { DirectorVideoService, VideoProjectReadService, VideoAdjustmentService, StandaloneQuickEditService, VideoService, VideoEditPresetService } from '../../../packages/modules/video/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
 import { ReviewAnalyticsService, ReviewService } from '../../../packages/modules/review/src/index.js';
 import type { DirectorPlanV0 } from '../../../packages/contracts/src/index.js';
@@ -64,6 +64,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const videoFromDirector = new DirectorVideoService(directorV1, video, director);
   const quickEdit = new VideoAdjustmentService(db, assets, localMedia);
   const standaloneQuickEdit = new StandaloneQuickEditService(db, assets, quickEdit, video);
+  const presets = new VideoEditPresetService(db);
   registerAssetRoutes(app, { projects, imports: new AssetImportService(db), assets, jobs, storage, maxUploadBytes: uploadMaxBytes });
   const publisher = new PublisherService(db);
   const reviewAnalytics = new ReviewAnalyticsService(db, jobs, publisher);
@@ -73,7 +74,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerProjectCenterRoutes(app, { center: projectCenter });
   registerDashboardRoutes(app, { projects, center: projectCenter });
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
-  registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes, localMedia });
+  registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes, localMedia, presets });
   registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs, allowFakePublisherControls: runtime.allowFakePublisherControls === true, ...(runtime.allowFakePublisherControls ? { fakeSimulations: new FakePublisherSimulationService(db) } : {}) });
   registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher, director: directorV1 });
   app.get('/health', async () => ({ status: 'ok' }));

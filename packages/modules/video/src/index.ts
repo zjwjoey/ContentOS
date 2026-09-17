@@ -19,3 +19,5 @@ export { VideoAdjustmentService, VideoQuickEditService } from './quick-edit-serv
 export type { CreateQuickEditVersionInput, QuickEditManifestRecord } from './quick-edit-service.js';
 export { StandaloneQuickEditService } from './standalone-quick-edit-service.js';
 export type { CreateStandaloneQuickEditInput, StandaloneQuickEditSession } from './standalone-quick-edit-service.js';
+export { VideoEditPresetService } from './preset-service.js';
+export type { VideoEditPreset, VideoEditPresetInput, PresetMode } from './preset-service.js';
