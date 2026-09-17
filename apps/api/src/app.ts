@@ -3,7 +3,7 @@ import { z } from 'zod';
 import multipart from '@fastify/multipart';
 import type { Pool } from 'pg';
 import { ProjectService } from '../../../packages/modules/project/src/index.js';
-import { AssetCatalogService, AssetImportService, LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
+import { AssetCatalogService, AssetImportService, AssetService, LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import { DirectorService, DirectorProjectReadService } from '../../../packages/modules/director/src/index.js';
 import { DirectorVideoService, VideoProjectReadService, VideoAdjustmentService, StandaloneQuickEditService, VideoService, VideoEditPresetService } from '../../../packages/modules/video/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
@@ -30,6 +30,7 @@ import { readAIProviderConfig } from '../../../packages/modules/ai/src/index.js'
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { access } from 'node:fs/promises';
+import { probeMedia } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -59,6 +60,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const jobs = new JobService(db);
   const benchmark = new BenchmarkService(db, jobs);
   const assets = new AssetCatalogService(db);
+  const assetService = new AssetService(db, storage, (path) => probeMedia(path, process.env.FFPROBE_PATH || 'ffprobe'));
   const localMedia = new LocalMediaSourceService({ db, thumbnailRoot: `${storage.root}/thumbnails` });
   const video = new VideoService(db, storage, jobs, assets);
   const videoFromDirector = new DirectorVideoService(directorV1, video, director);
@@ -74,7 +76,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerProjectCenterRoutes(app, { center: projectCenter });
   registerDashboardRoutes(app, { projects, center: projectCenter });
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
-  registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes, localMedia, presets });
+  registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, assetService, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes, localMedia, presets });
   registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs, allowFakePublisherControls: runtime.allowFakePublisherControls === true, ...(runtime.allowFakePublisherControls ? { fakeSimulations: new FakePublisherSimulationService(db) } : {}) });
   registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher, director: directorV1 });
   app.get('/health', async () => ({ status: 'ok' }));

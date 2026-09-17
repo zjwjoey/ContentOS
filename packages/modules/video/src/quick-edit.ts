@@ -112,7 +112,7 @@ function seededRandom(seed: number): () => number {
 function assetUsagePenalty(asset: AdjustmentAsset): number { return Math.log2((asset.usageCount ?? Number(asset.metadata?.usageCount || 0)) + 1) * 2 + Math.log2((asset.recentUsageCount ?? Number(asset.metadata?.recentUsageCount || 0)) + 1) * 3; }
 function sameSourceFamily(currentId: string, candidateId: string): boolean { return currentId.startsWith('local-') === candidateId.startsWith('local-'); }
 
-export function applyQuickEditOperations(parent: EditManifestV0, operations: QuickEditOperation[], assets: AdjustmentAsset[] = []): EditManifestV0 {
+export function applyQuickEditOperations(parent: EditManifestV0, operations: QuickEditOperation[], assets: AdjustmentAsset[] = [], candidateAssets: AdjustmentAsset[] = assets): EditManifestV0 {
   const next = structuredClone(parent);
   const assetById = new Map(assets.map((asset) => [asset.id, asset]));
   for (const operation of operations) {
@@ -141,15 +141,15 @@ export function applyQuickEditOperations(parent: EditManifestV0, operations: Qui
     } else if (operation.type === 'REROLL') {
       assertClipIndex(operation.clipIndex, next.timeline.length);
       if (next.timeline[operation.clipIndex]!.role && next.timeline[operation.clipIndex]!.role !== 'CONTENT') throw new Error('Branding clips cannot be rerolled');
-      if (assets.length === 0) throw new Error('Quick Edit REROLL requires available READY video assets');
+      if (candidateAssets.length === 0) throw new Error('Quick Edit REROLL requires available READY video assets');
       const random = seededRandom(operation.seed ?? next.seed + operation.clipIndex);
       const current = next.timeline[operation.clipIndex]!;
       const previous = next.timeline[operation.clipIndex - 1]?.assetId;
       const following = next.timeline[operation.clipIndex + 1]?.assetId;
-      const candidates = assets.filter((asset) => sameSourceFamily(current.assetId, asset.id) && asset.id !== current.assetId && asset.id !== previous && asset.id !== following && asset.durationMs >= current.durationMs);
+      const candidates = candidateAssets.filter((asset) => sameSourceFamily(current.assetId, asset.id) && asset.id !== current.assetId && asset.id !== previous && asset.id !== following && asset.durationMs >= current.durationMs);
       const usage = new Map<string, number>(); for (const item of next.timeline) usage.set(item.assetId, (usage.get(item.assetId) || 0) + 1);
       const leastUsed = (pool: AdjustmentAsset[]): AdjustmentAsset[] => { if (pool.length === 0) return pool; const minimum = Math.min(...pool.map((asset) => (usage.get(asset.id) || 0) * 8 + assetUsagePenalty(asset))); return pool.filter((asset) => (usage.get(asset.id) || 0) * 8 + assetUsagePenalty(asset) === minimum); };
-      const pool = leastUsed(candidates.length > 0 ? candidates : assets.filter((asset) => sameSourceFamily(current.assetId, asset.id) && asset.id !== current.assetId && asset.durationMs >= current.durationMs));
+      const pool = leastUsed(candidates.length > 0 ? candidates : candidateAssets.filter((asset) => sameSourceFamily(current.assetId, asset.id) && asset.id !== current.assetId && asset.durationMs >= current.durationMs));
       if (pool.length === 0) throw new Error('Quick Edit REROLL has no replacement asset with sufficient duration');
       const replacement = pool[Math.floor(random() * pool.length)]!;
       const maxIn = Math.max(0, replacement.durationMs - current.durationMs);
@@ -158,9 +158,9 @@ export function applyQuickEditOperations(parent: EditManifestV0, operations: Qui
     } else {
       assertClipIndex(operation.clipIndex, next.timeline.length);
       if (next.timeline[operation.clipIndex]!.role && next.timeline[operation.clipIndex]!.role !== 'CONTENT') throw new Error('Branding clips cannot be rematched');
-      if (assets.length === 0) throw new Error('Quick Edit REMATCH requires available video assets');
+      if (candidateAssets.length === 0) throw new Error('Quick Edit REMATCH requires available video assets');
       const current = next.timeline[operation.clipIndex]!;
-      const ranked = rankAdjustmentAssets(current.sentenceText || '', assets.filter((asset) => sameSourceFamily(current.assetId, asset.id)));
+      const ranked = rankAdjustmentAssets(current.sentenceText || '', candidateAssets.filter((asset) => sameSourceFamily(current.assetId, asset.id)));
       const previous = next.timeline[operation.clipIndex - 1]?.assetId;
       const following = next.timeline[operation.clipIndex + 1]?.assetId;
       const eligible = ranked.filter((item) => item.asset.id !== current.assetId && item.asset.id !== previous && item.asset.id !== following && item.asset.durationMs >= current.durationMs);

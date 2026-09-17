@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EditMode } from "../../../../components/video/edit-mode-selector";
 import { GenerateStep } from "../../../../components/video/generate-step";
 import { MediaStep } from "../../../../components/video/media-step";
-import { mergeNewMediaSelections } from "../../../../components/video/media-selection";
+import { reconcileMediaSelections } from "../../../../components/video/media-selection";
 import { OutputStep } from "../../../../components/video/output-step";
 import { describePreset } from "../../../../components/video/preset-description";
 import { ReviewStep } from "../../../../components/video/review-step";
@@ -60,6 +60,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   const [mediaHasNext, setMediaHasNext] = useState(false);
   const [selectedAssets, setSelectedAssets] = useState<string[]>([]);
   const projectSelectionInitializedRef = useRef(false);
+  const knownLocalMediaIdsRef = useRef<string[]>([]);
   const [query, setQuery] = useState("");
   const [orientation, setOrientation] = useState("ALL");
   const [category, setCategory] = useState("");
@@ -73,6 +74,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   const [preset, setPreset] = useState<Preset | null>(null);
   const [introAssetId, setIntroAssetId] = useState("");
   const [outroAssetId, setOutroAssetId] = useState("");
+  const [brandingAssets, setBrandingAssets] = useState<MediaItem[]>([]);
   const [preferUnused, setPreferUnused] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -128,6 +130,11 @@ export default function VideoPage({ params }: { params: { id: string } }) {
     if (response.ok) {
       const data = (await response.json()) as { items: Preset[] };
       setPresets(data.items);
+    }
+    const brandingResponse = await fetch("/api/v1/video/preset-assets");
+    if (brandingResponse.ok) {
+      const data = (await brandingResponse.json()) as { items: MediaItem[] };
+      setBrandingAssets(data.items);
     }
     const current = await fetch(`/api/v1/projects/${projectId}/video/preset`);
     if (current.ok) {
@@ -247,6 +254,11 @@ export default function VideoPage({ params }: { params: { id: string } }) {
         });
   }, [manifest, projectId, scan]);
 
+  useEffect(() => {
+    if (scan?.status !== "SUCCEEDED" || knownLocalMediaIdsRef.current.length > 0) return;
+    knownLocalMediaIdsRef.current = scan.files.filter((file) => file.available).map((file) => `${scan.sourceRootId}:${file.relativePath}`);
+  }, [scan]);
+
   const projectMedia = useMemo(
     () =>
       (snapshot?.sourceAssets || [])
@@ -267,6 +279,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   );
   const mediaAssets =
     scan?.status === "SUCCEEDED" ? [...projectMedia, ...indexedMedia] : projectMedia;
+  const reviewAssets = useMemo(() => [...mediaAssets, ...brandingAssets.filter((asset) => !mediaAssets.some((item) => item.id === asset.id))], [brandingAssets, mediaAssets]);
   useEffect(() => {
     if (projectMedia.length === 0) return;
     if (projectSelectionInitializedRef.current) return;
@@ -282,8 +295,9 @@ export default function VideoPage({ params }: { params: { id: string } }) {
     const rootId = manifest?.manifest.metadata?.localMediaSourceRootId;
     if (rootId && currentClip.assetId.startsWith(`${rootId}:`))
       return `/api/v1/video/local-media/content?projectId=${encodeURIComponent(projectId)}&sourceRootId=${encodeURIComponent(rootId)}&fileId=${encodeURIComponent(currentClip.assetId)}`;
+    if (brandingAssets.some((asset) => asset.id === currentClip.assetId)) return `/api/v1/video/preset-assets/${encodeURIComponent(currentClip.assetId)}/content`;
     return `/api/v1/projects/${projectId}/assets/${encodeURIComponent(currentClip.assetId)}/content`;
-  }, [currentClip, manifest, projectId]);
+  }, [brandingAssets, currentClip, manifest, projectId]);
   const jobRunning = Boolean(
     snapshot?.job && activeJobs.has(snapshot.job.state),
   );
@@ -361,8 +375,10 @@ export default function VideoPage({ params }: { params: { id: string } }) {
         );
             if (next.status === "SUCCEEDED") {
               const localSelection = next.files.filter((file) => file.available).map((file) => ({ id: `${next.sourceRootId}:${file.relativePath}`, originalName: file.fileName, durationMs: file.durationMs, width: file.width, height: file.height, orientation: file.orientation, tags: file.tags, category: file.category, usageCount: file.usageCount, lastUsedAt: file.lastUsedAt, thumbnailStatus: file.thumbnailStatus || "PENDING", thumbnailUrl: `/api/v1/video/local-media/thumbnails/${encodeURIComponent(`${next.sourceRootId}:${file.relativePath}`)}?projectId=${encodeURIComponent(projectId)}` }));
+              const reconciled = reconcileMediaSelections({ selectedIds: selectedAssets.filter((id) => id.startsWith("local-")), previousKnownIds: knownLocalMediaIdsRef.current, currentAvailableIds: localSelection.map((asset) => asset.id) });
+              knownLocalMediaIdsRef.current = reconciled.knownIds;
               setIndexedMedia(localSelection);
-              setSelectedAssets((current) => mergeNewMediaSelections(current, localSelection.map((asset) => asset.id), indexedMedia.map((asset) => asset.id)));
+              setSelectedAssets((current) => [...current.filter((id) => !id.startsWith("local-")), ...reconciled.selectedIds]);
               setIndexTotal(next.files.filter((file) => file.available).length);
               setStep(2);
           await loadIndex();
@@ -535,6 +551,11 @@ export default function VideoPage({ params }: { params: { id: string } }) {
     setTagInput("");
     setCategoryDraft(asset.category || "");
   };
+  const manifestBrandingName = (role: "INTRO" | "OUTRO"): string => {
+    const assetId = manifest?.manifest.timeline.find((clip) => clip.role === role)?.assetId;
+    if (!assetId) return "";
+    return brandingAssets.find((asset) => asset.id === assetId)?.originalName || mediaAssets.find((asset) => asset.id === assetId)?.originalName || "";
+  };
   const steps = ["文案", "素材", "自动剪辑", "检查镜头", "生成成片"];
 
   return (
@@ -564,10 +585,10 @@ export default function VideoPage({ params }: { params: { id: string } }) {
         </nav>
       </header>
       {step === 1 && <ScriptStep preset={preset} presets={presets} mode={mode} scriptSource={scriptSource} script={script} scriptInfo={scriptInfo} scriptCount={scriptCount} describePreset={describePreset} onPresetChange={async (selected) => { const previous = preset; const response = await fetch(`/api/v1/projects/${projectId}/video/preset`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ presetId: selected.id }) }); if (!response.ok) { applyPresetToUi(previous); setMessage("模板应用失败，请重试。"); return; } applyPresetToUi(selected); }} onModeChange={chooseMode} onScriptSourceChange={(source) => { setScriptSource(source); if (source === "PROJECT") void loadScript(); else setScript(""); }} onScriptChange={setScript} onNext={() => setStep(2)} />}
-      {step === 2 && <MediaStep assets={mediaAssets} selectedAssets={selectedAssets} sourceRoot={sourceRoot} scan={scan} busy={busy} query={query} orientation={orientation} category={category} usage={usage} sort={sort} mediaPage={mediaPage} indexTotal={indexTotal} mediaHasNext={mediaHasNext} introAssetId={introAssetId} outroAssetId={outroAssetId} preferUnused={preferUnused} detailsAsset={detailsAsset} tagDraft={tagDraft} tagInput={tagInput} categoryDraft={categoryDraft} onToggleAsset={toggleAsset} onSourceRootChange={setSourceRoot} onScan={() => void scanFolder()} onQueryChange={setQuery} onOrientationChange={setOrientation} onCategoryChange={setCategory} onUsageChange={setUsage} onSortChange={setSort} onPreviousPage={() => setMediaPage((page) => Math.max(1, page - 1))} onNextPage={() => setMediaPage((page) => page + 1)} onToggleIntro={(id) => setIntroAssetId((current) => current === id ? "" : id)} onToggleOutro={(id) => setOutroAssetId((current) => current === id ? "" : id)} onPreferUnusedChange={setPreferUnused} onNext={() => setStep(3)} onSelectDetails={selectDetails} onTagDraftChange={setTagDraft} onTagInputChange={setTagInput} onCategoryDraftChange={setCategoryDraft} onSaveDetails={() => void saveMediaDetails()} onCloseDetails={() => setDetailsAsset(null)} />}
+      {step === 2 && <MediaStep assets={mediaAssets} brandingAssets={brandingAssets} selectedAssets={selectedAssets} sourceRoot={sourceRoot} scan={scan} busy={busy} query={query} orientation={orientation} category={category} usage={usage} sort={sort} mediaPage={mediaPage} indexTotal={indexTotal} mediaHasNext={mediaHasNext} introAssetId={introAssetId} outroAssetId={outroAssetId} preferUnused={preferUnused} detailsAsset={detailsAsset} tagDraft={tagDraft} tagInput={tagInput} categoryDraft={categoryDraft} onToggleAsset={toggleAsset} onSourceRootChange={setSourceRoot} onScan={() => void scanFolder()} onQueryChange={setQuery} onOrientationChange={setOrientation} onCategoryChange={setCategory} onUsageChange={setUsage} onSortChange={setSort} onPreviousPage={() => setMediaPage((page) => Math.max(1, page - 1))} onNextPage={() => setMediaPage((page) => page + 1)} onToggleIntro={(id) => setIntroAssetId((current) => current === id ? "" : id)} onToggleOutro={(id) => setOutroAssetId((current) => current === id ? "" : id)} onPreferUnusedChange={setPreferUnused} onNext={() => setStep(3)} onSelectDetails={selectDetails} onTagDraftChange={setTagDraft} onTagInputChange={setTagInput} onCategoryDraftChange={setCategoryDraft} onSaveDetails={() => void saveMediaDetails()} onCloseDetails={() => setDetailsAsset(null)} />}
       {step === 3 && <GenerateStep scriptCount={scriptCount} mediaCount={indexTotal || mediaAssets.length} selectedCount={selectedAssets.length} presetName={preset?.name || "默认短视频"} presetDescription={describePreset(preset)} preferUnused={preferUnused} onPreferUnusedChange={setPreferUnused} busy={busy} mode={mode} script={script} onGenerate={() => void createPlan()} />}
-      {step === 4 && <ReviewStep manifest={manifest} visibleClipIndexes={visibleClipIndexes} reviewCount={reviewCount} manualCount={manualCount} reviewFilter={reviewFilter} setReviewFilter={setReviewFilter} selectedClips={selectedClips} setSelectedClips={setSelectedClips} currentClip={currentClip} selectedClip={selectedClip} setSelectedClip={setSelectedClip} clipSource={clipSource} mediaAssets={mediaAssets} busy={busy} mode={manifest?.manifest.metadata?.editMode || mode || "RANDOM"} operations={operations} setOperations={setOperations} onBulk={(type) => void bulkAdjust(type)} onSave={() => void createVersion()} onNext={() => setStep(5)} history={manifestHistory} onRegenerate={() => void createPlan()} thumbnailFor={clipThumbnail} onModeChange={chooseMode} />}
-      {step === 5 && <OutputStep projectId={projectId} manifest={manifest ? { id: manifest.id, manifest: manifest.manifest } : null} snapshot={snapshot ? { currentRender: snapshot.currentRender, job: snapshot.job } : null} introName={mediaAssets.find((asset) => asset.id === introAssetId)?.originalName || ""} outroName={mediaAssets.find((asset) => asset.id === outroAssetId)?.originalName || ""} busy={busy} jobRunning={jobRunning || Boolean(renderingManifestId)} onRender={() => void renderManifest(manifest?.id)} onBack={() => setStep(4)} onApproval={() => void sendToApproval()} />}
+      {step === 4 && <ReviewStep manifest={manifest} visibleClipIndexes={visibleClipIndexes} reviewCount={reviewCount} manualCount={manualCount} reviewFilter={reviewFilter} setReviewFilter={setReviewFilter} selectedClips={selectedClips} setSelectedClips={setSelectedClips} currentClip={currentClip} selectedClip={selectedClip} setSelectedClip={setSelectedClip} clipSource={clipSource} mediaAssets={reviewAssets} busy={busy} mode={manifest?.manifest.metadata?.editMode || mode || "RANDOM"} operations={operations} setOperations={setOperations} onBulk={(type) => void bulkAdjust(type)} onSave={() => void createVersion()} onNext={() => setStep(5)} history={manifestHistory} onRegenerate={() => void createPlan()} thumbnailFor={clipThumbnail} onModeChange={chooseMode} />}
+      {step === 5 && <OutputStep projectId={projectId} manifest={manifest ? { id: manifest.id, manifest: manifest.manifest } : null} snapshot={snapshot ? { currentRender: snapshot.currentRender, job: snapshot.job } : null} introName={manifestBrandingName("INTRO")} outroName={manifestBrandingName("OUTRO")} busy={busy} jobRunning={jobRunning || Boolean(renderingManifestId)} onRender={() => void renderManifest(manifest?.id)} onBack={() => setStep(4)} onApproval={() => void sendToApproval()} />}
       {message && <p className="status">{message}</p>}
     </main>
   );

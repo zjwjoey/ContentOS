@@ -7,7 +7,7 @@ import { buildScriptMontageManifest, buildRandomSentenceMontageManifest, assembl
 import { applyQuickEditOperations, rankAdjustmentAssets } from '../../packages/modules/video/src/quick-edit.js';
 import { generateFixtureAudio, generateFixtureVideo, probeMedia, renderEditManifest } from '../../packages/infrastructure/ffmpeg/src/index.js';
 import { describePreset } from '../../apps/web/components/video/preset-description.js';
-import { mergeNewMediaSelections } from '../../apps/web/components/video/media-selection.js';
+import { mergeNewMediaSelections, reconcileMediaSelections } from '../../apps/web/components/video/media-selection.js';
 
 type TestAsset = { id: string; storageKey: string; sourcePath: string; durationMs: number; originalName: string; tags: string[]; usageCount: number; recentUsageCount: number };
 const assets: TestAsset[] = [
@@ -24,6 +24,11 @@ test('preset description only names enabled user-facing options', () => {
 test('media selection keeps explicit deselections while adding only newly discovered files', () => {
   assert.deepEqual(mergeNewMediaSelections(['project-a', 'project-c'], ['local-1', 'local-2'], []), ['project-a', 'project-c', 'local-1', 'local-2']);
   assert.deepEqual(mergeNewMediaSelections(['local-1'], ['local-1', 'local-2', 'local-3'], ['local-1', 'local-2']), ['local-1', 'local-3']);
+});
+
+test('media selection reconciliation preserves deselections and removes deleted local files', () => {
+  assert.deepEqual(reconcileMediaSelections({ selectedIds: ['L1', 'L3'], previousKnownIds: ['L1', 'L2', 'L3', 'L4'], currentAvailableIds: ['L1', 'L2', 'L3', 'L4', 'L5'] }), { selectedIds: ['L1', 'L3', 'L5'], knownIds: ['L1', 'L2', 'L3', 'L4', 'L5'] });
+  assert.deepEqual(reconcileMediaSelections({ selectedIds: ['L1', 'L3'], previousKnownIds: ['L1', 'L2', 'L3', 'L4'], currentAvailableIds: ['L1', 'L2', 'L4', 'L5'] }), { selectedIds: ['L1', 'L5'], knownIds: ['L1', 'L2', 'L4', 'L5'] });
 });
 
 test('V1.5 planner never truncates voice timing and prefers long eligible media', () => {
@@ -71,6 +76,14 @@ test('V1.5 bulk operations create independent manual replacements', () => {
   assert.equal(next.timeline.filter((clip) => clip.reviewStatus === 'MANUAL').length, 3);
   assert.notEqual(next.timeline[0]?.assetId, next.timeline[1]?.assetId);
   assert.notEqual(next.timeline[1]?.assetId, next.timeline[2]?.assetId);
+});
+
+test('global branding sources stay out of REMATCH candidates', () => {
+  const local = [{ ...longAsset, id: 'local-root:a.mp4', originalName: '门店素材.mp4' }, { ...longAsset, id: 'local-root:b.mp4', originalName: '货架素材.mp4' }];
+  const parent = assembleBrandedTimeline(buildRandomSentenceMontageManifest({ projectId: 'project-v15', seed: 1, sentences: [{ index: 0, text: '门店', normalizedText: '门店' }], assets: local, minClipDurationMs: 1_000, maxClipDurationMs: 1_000 }).manifest, { intro: { id: 'global-intro', storageKey: 'global-intro', sourcePath: 'global-intro', durationMs: 1_000, role: 'INTRO' } });
+  const next = applyQuickEditOperations(parent, [{ type: 'REMATCH', clipIndex: 1, seed: 4 }], [...local, { ...longAsset, id: 'global-outro', originalName: '品牌片尾.mp4' }], local);
+  assert.notEqual(next.timeline[1]?.assetId, 'global-outro');
+  assert.equal(next.timeline[0]?.assetId, 'global-intro');
 });
 
 test('V1.5 real FFmpeg render delays voice after an intro and preserves output duration', async () => {

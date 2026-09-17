@@ -5,7 +5,7 @@ import { extname } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
-import type { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
+import type { AssetCatalogService, AssetService } from '../../../packages/modules/asset/src/index.js';
 import type { ApprovalService } from '../../../packages/modules/approval/src/index.js';
 import type { DirectorV1Service } from '../../../packages/modules/director/src/index.js';
 import { assembleBrandedTimeline, buildRandomSentenceMontageManifest, buildScriptMontageManifest, segmentScriptSentences } from '../../../packages/modules/video/src/index.js';
@@ -47,6 +47,7 @@ export interface VideoRouteDependencies {
   videoFromDirector: DirectorVideoService;
   videoRead: VideoProjectReadService;
   assets: AssetCatalogService;
+  assetService: AssetService;
   approvals: ApprovalService;
   jobs: JobService;
   video: VideoService;
@@ -104,7 +105,7 @@ function mediaContentType(asset: { kind: string; metadata: { format?: string }; 
 }
 
 export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRouteDependencies): void {
-  const { projects, director, videoFromDirector, videoRead, assets, approvals, jobs, video, quickEdit, standaloneQuickEdit, storage } = dependencies;
+  const { projects, director, videoFromDirector, videoRead, assets, assetService, approvals, jobs, video, quickEdit, standaloneQuickEdit, storage } = dependencies;
 
   app.post('/api/v1/video/sentence-preview', async (request, reply) => {
     const parsed = sentencePreviewInput.safeParse(request.body || {});
@@ -164,16 +165,43 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     return { items: await dependencies.presets.list() };
   });
   app.get('/api/v1/video/preset-assets', async (_request, reply) => {
-    return { items: (await assets.listReadyGlobalVideoAssets()).map((asset) => ({ id: asset.id, originalName: typeof asset.metadata.originalName === 'string' ? asset.metadata.originalName : asset.storageKey.split('/').at(-1) || asset.id, durationMs: Number(asset.metadata.durationMs || 0), tags: Array.isArray(asset.metadata.tags) ? asset.metadata.tags.filter((tag): tag is string => typeof tag === 'string') : [], category: typeof asset.metadata.category === 'string' ? asset.metadata.category : undefined, thumbnailStatus: 'NONE' })) };
+    return { items: (await assets.listReadyGlobalVideoAssets()).map((asset) => ({ id: asset.id, originalName: typeof asset.metadata.originalName === 'string' ? asset.metadata.originalName : asset.storageKey.split('/').at(-1) || asset.id, durationMs: Number(asset.metadata.durationMs || 0), tags: Array.isArray(asset.metadata.tags) ? asset.metadata.tags.filter((tag): tag is string => typeof tag === 'string') : [], category: typeof asset.metadata.category === 'string' ? asset.metadata.category : undefined, thumbnailStatus: 'NONE', contentUrl: `/api/v1/video/preset-assets/${encodeURIComponent(asset.id)}/content` })) };
+  });
+  app.post('/api/v1/video/preset-assets', async (request, reply) => {
+    const part = await request.file();
+    if (!part) return reply.code(422).send({ error: { code: 'UPLOAD_REQUIRED', message: '请先选择品牌视频。', details: [] } });
+    if (!part.mimetype.startsWith('video/')) { await part.file.resume(); return reply.code(422).send({ error: { code: 'UNSUPPORTED_MEDIA_TYPE', message: '当前视频格式暂不支持。', details: [] } }); }
+    let staged: Awaited<ReturnType<LocalStorageProvider['stageUpload']>> | undefined;
+    try {
+      staged = await storage.stageUpload(part.filename, part.file, dependencies.maxUploadBytes);
+      if ((part.file as typeof part.file & { truncated?: boolean }).truncated) throw new Error('UPLOAD_TOO_LARGE');
+      const asset = await assetService.importGlobalStaged({ stagedPath: staged.stagedPath, originalName: staged.originalName, byteSize: staged.byteSize });
+      return reply.code(201).send({ asset: { id: asset.id, originalName: staged.originalName, durationMs: 0, lifecycle: 'READY' } });
+    } catch (cause) {
+      const code = cause instanceof Error ? cause.message : 'ASSET_IMPORT_FAILED';
+      const message = code === 'UPLOAD_TOO_LARGE' ? '品牌视频文件过大，请更换文件后重试。' : code === 'EMPTY_UPLOAD' ? '品牌视频不能为空。' : code === 'ASSET_KIND_MISMATCH' ? '当前视频格式暂不支持。' : '品牌视频上传失败，请检查文件后重试。';
+      return reply.code(code === 'UPLOAD_TOO_LARGE' ? 413 : 422).send({ error: { code, message, details: [] } });
+    } finally {
+      if (staged) await storage.removeStaged(staged.stagedPath);
+    }
+  });
+  app.delete('/api/v1/video/preset-assets/:assetId', async (request, reply) => {
+    try {
+      const removed = await assets.archiveGlobalVideoAsset((request.params as { assetId: string }).assetId);
+      return removed ? { ok: true } : reply.code(404).send({ error: { code: 'VIDEO_BRANDING_ASSET_NOT_FOUND', message: '品牌视频不存在。', details: [] } });
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === 'VIDEO_BRANDING_ASSET_IN_USE') return reply.code(409).send({ error: { code: cause.message, message: '这个视频正在被剪辑模板使用，请先从模板中移除。', details: [] } });
+      throw cause;
+    }
   });
   app.post('/api/v1/video/presets', async (request, reply) => {
     const parsed = presetInput.safeParse(request.body || {});
     if (!parsed.success || !dependencies.presets) return reply.code(422).send({ error: { code: 'PRESET_INVALID', message: '模板参数不正确。', details: parsed.success ? [] : parsed.error.issues } });
-    try { return reply.code(201).send(await dependencies.presets.create(parsed.data)); } catch { return reply.code(409).send({ error: { code: 'PRESET_CONFLICT', message: '模板名称已存在。', details: [] } }); }
+    try { return reply.code(201).send(await dependencies.presets.create(parsed.data)); } catch (cause) { if (cause instanceof Error && cause.message === 'PRESET_BRANDING_ASSET_INVALID') return reply.code(422).send({ error: { code: cause.message, message: '请选择有效的品牌视频。', details: [] } }); return reply.code(409).send({ error: { code: 'PRESET_CONFLICT', message: '模板名称已存在。', details: [] } }); }
   });
   app.patch('/api/v1/video/presets/:presetId', async (request, reply) => {
     const parsed = presetPatchInput.safeParse(request.body || {}); if (!parsed.success || !dependencies.presets) return reply.code(422).send({ error: { code: 'PRESET_INVALID', message: '模板参数不正确。', details: parsed.success ? [] : parsed.error.issues } });
-    const preset = await dependencies.presets.update((request.params as { presetId: string }).presetId, parsed.data); return preset ? preset : reply.code(404).send({ error: { code: 'PRESET_NOT_FOUND', message: '模板不存在。', details: [] } });
+    try { const preset = await dependencies.presets.update((request.params as { presetId: string }).presetId, parsed.data); return preset ? preset : reply.code(404).send({ error: { code: 'PRESET_NOT_FOUND', message: '模板不存在。', details: [] } }); } catch (cause) { if (cause instanceof Error && cause.message === 'PRESET_BRANDING_ASSET_INVALID') return reply.code(422).send({ error: { code: cause.message, message: '请选择有效的品牌视频。', details: [] } }); throw cause; }
   });
   app.delete('/api/v1/video/presets/:presetId', async (request, reply) => {
     if (!dependencies.presets) return reply.code(503).send({ error: { code: 'PRESET_UNAVAILABLE', message: '模板服务暂不可用。', details: [] } });
@@ -214,6 +242,12 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     const start = match[1] ? Number(match[1]) : Math.max(0, info.size - Number(match[2] || 0)); const end = match[2] ? Number(match[2]) : info.size - 1;
     if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end >= info.size) return reply.code(416).header('content-range', `bytes */${info.size}`).send();
     reply.code(206).header('content-length', end - start + 1).header('content-range', `bytes ${start}-${end}/${info.size}`); return reply.send(createReadStream(file.sourcePath, { start, end }));
+  });
+  app.get('/api/v1/video/preset-assets/:assetId/content', async (request, reply) => {
+    const asset = await assets.getReadyGlobalVideoAssetContent((request.params as { assetId: string }).assetId);
+    if (!asset) return reply.code(404).send({ error: { code: 'VIDEO_BRANDING_ASSET_NOT_FOUND', message: '品牌视频不存在。', details: [] } });
+    reply.header('content-type', mediaContentType(asset)).header('content-length', asset.byteSize).header('accept-ranges', 'bytes').header('etag', `"${asset.checksum}"`);
+    return reply.send(createReadStream(storage.objectPath(asset.storageKey)));
   });
 
   app.post('/api/v1/projects/:projectId/video/montage-plans', async (request, reply) => {

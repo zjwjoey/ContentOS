@@ -121,19 +121,30 @@ export class VideoAdjustmentService {
       const parentValue = parent.manifest as EditManifestV0;
       validateEditManifest(parentValue);
       const sourceIds = [...new Set(parentValue.timeline.map((clip) => clip.assetId))];
-      const hasLocalSources = !input.workspaceId && sourceIds.some((id) => id.startsWith('local-'));
-      if (hasLocalSources) {
+      if (!input.workspaceId) {
         const sourceRootId = parentValue.metadata?.localMediaSourceRootId;
         const persistedPool = sourceRootId && this.localMedia ? await this.localMedia.getLatestScan(input.projectId!, sourceRootId) : null;
         const indexedPool = this.localMedia ? await this.localMedia.listIndex(input.projectId!, {}) : [];
         const indexedAssets = indexedPool.filter((file) => file.available).map((file) => ({ id: `${persistedPool?.sourceRootId || sourceIds[0]?.split(':', 1)[0] || 'local'}:${file.relativePath}`, durationMs: file.durationMs, sourcePath: file.sourcePath, originalName: file.fileName, tags: file.tags, metadata: { width: file.width, height: file.height, format: file.format, category: file.category, usageCount: file.usageCount, recentUsageCount: file.recentUsageCount, lastUsedAt: file.lastUsedAt }, usageCount: file.usageCount, recentUsageCount: file.recentUsageCount, lastUsedAt: file.lastUsedAt }));
-        const projectIds = sourceIds.filter((id) => !id.startsWith('local-'));
-        const projectPool = projectIds.length > 0 ? await this.assets.listReadyVideoAssets(input.projectId!) : [];
+        const projectPool = await this.assets.listReadyVideoAssets(input.projectId!);
         const projectAssets = projectPool.map((asset) => ({ id: asset.id, durationMs: sourceDuration(asset, asset.id), sourcePath: asset.storageKey, originalName: typeof asset.metadata.originalName === 'string' ? asset.metadata.originalName : asset.storageKey, tags: Array.isArray(asset.metadata.tags) ? asset.metadata.tags.filter((tag): tag is string => typeof tag === 'string') : [], metadata: asset.metadata }));
-        const pool = [...(indexedAssets.length > 0 ? indexedAssets : parentValue.timeline.filter((clip) => clip.assetId.startsWith('local-')).map((clip) => ({ id: clip.assetId, durationMs: Math.max(clip.sourceInMs + clip.durationMs, clip.durationMs), sourcePath: clip.sourcePath }))), ...projectAssets];
-        const localSources = new Map(pool.map((asset) => [asset.id, asset]));
-        const next = applyQuickEditOperations(parentValue, operations, pool);
-        next.timeline = next.timeline.map((clip) => { const source = localSources.get(clip.assetId); if (!source) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`); if (clip.sourceInMs + clip.durationMs > source.durationMs) throw new Error(`VIDEO_MANIFEST_CLIP_OUT_OF_BOUNDS: ${clip.assetId}`); return { ...clip, sourcePath: source.sourcePath }; });
+        const localFallback = parentValue.timeline.filter((clip) => clip.assetId.startsWith('local-')).map((clip) => ({ id: clip.assetId, durationMs: Math.max(clip.sourceInMs + clip.durationMs, clip.durationMs), sourcePath: clip.sourcePath }));
+        const localAssets = indexedAssets.length > 0 ? indexedAssets : localFallback;
+        const projectById = new Map(projectAssets.map((asset) => [asset.id, asset]));
+        const operationAssetIds = operations.filter((operation): operation is Extract<QuickEditOperation, { type: 'REPLACE' }> => operation.type === 'REPLACE').map((operation) => operation.assetId);
+        const globalIds = [...new Set([...sourceIds, ...operationAssetIds])].filter((id) => !id.startsWith('local-') && !projectById.has(id));
+        const globalPool = await this.assets.listReadyGlobalVideoAssets(globalIds);
+        const globalAssets = globalPool.map((asset) => ({ id: asset.id, durationMs: sourceDuration(asset, asset.id), sourcePath: asset.storageKey, originalName: typeof asset.metadata.originalName === 'string' ? asset.metadata.originalName : asset.storageKey, tags: Array.isArray(asset.metadata.tags) ? asset.metadata.tags.filter((tag): tag is string => typeof tag === 'string') : [], metadata: asset.metadata }));
+        const sourcePool = [...localAssets, ...projectAssets, ...globalAssets];
+        const contentCandidates = [...localAssets, ...projectAssets];
+        const sourceById = new Map(sourcePool.map((asset) => [asset.id, asset]));
+        const next = applyQuickEditOperations(parentValue, operations, sourcePool, contentCandidates);
+        next.timeline = next.timeline.map((clip) => { const source = sourceById.get(clip.assetId); if (!source) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`); if (clip.sourceInMs + clip.durationMs > source.durationMs) throw new Error(`VIDEO_MANIFEST_CLIP_OUT_OF_BOUNDS: ${clip.assetId}`); return { ...clip, sourcePath: source.sourcePath }; });
+        if (next.audio.voiceAssetId) {
+          const voice = await this.assets.getReadySourceAsset(input.projectId!, next.audio.voiceAssetId, 'AUDIO');
+          if (!voice) throw new Error('VIDEO_MANIFEST_VOICE_UNAVAILABLE');
+          next.audio = { ...next.audio, voicePath: voice.storageKey };
+        }
         validateEditManifest(next);
         const revisionResult = await client.query<{ revision: number }>(`select coalesce(max(revision), 0) + 1 as revision from edit_manifests where ${ownerColumn} = $1`, [ownerId]);
         const revision = Number(revisionResult.rows[0]?.revision || 1);

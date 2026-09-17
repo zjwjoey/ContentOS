@@ -104,6 +104,21 @@ export class AssetCatalogService {
     return result.rows.map((row) => mapSourceAsset(row as Record<string, unknown>));
   }
 
+  async getReadyGlobalVideoAssetContent(assetId: string): Promise<ReadyAssetContent | null> {
+    const result = await this.db.query("select * from assets where id = $1 and project_id is null and kind = 'VIDEO' and lifecycle = 'READY'", [assetId]);
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {};
+    return { id: String(row.id), kind: 'VIDEO', lifecycle: 'READY', byteSize: Number(row.byte_size), checksum: String(row.checksum), originalName: typeof metadata.originalName === 'string' ? metadata.originalName : String(row.storage_key).split('/').pop() || 'asset', metadata: safeMetadata(row), storageKey: String(row.storage_key) };
+  }
+
+  async archiveGlobalVideoAsset(assetId: string): Promise<boolean> {
+    const references = await this.db.query('select id from video_edit_presets where intro_asset_id = $1 or outro_asset_id = $1 limit 1', [assetId]);
+    if (references.rows[0]) throw new Error('VIDEO_BRANDING_ASSET_IN_USE');
+    const result = await this.db.query("update assets set lifecycle = 'ARCHIVED' where id = $1 and project_id is null and kind = 'VIDEO' and lifecycle = 'READY' returning id", [assetId]);
+    return Boolean(result.rows[0]);
+  }
+
   async listReadyWorkspaceAssets(workspaceId: string, kind: SourceAssetKind, role: 'SOURCE' | 'VOICE' = 'SOURCE'): Promise<ReadySourceAsset[]> {
     const result = await this.db.query('select a.id, a.project_id, a.kind, a.storage_key, a.metadata from assets a join video_workspace_assets wa on wa.asset_id = a.id and wa.workspace_id = $1 and wa.role = $2 where a.kind = $3 and a.lifecycle = $4 order by a.created_at, a.id', [workspaceId, role, kind, 'READY']);
     return result.rows.map((row) => mapSourceAsset(row as Record<string, unknown>));
