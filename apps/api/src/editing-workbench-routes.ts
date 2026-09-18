@@ -5,7 +5,6 @@ import { basename, extname, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
-import { assembleBrandedTimeline, buildRandomSentenceMontageManifest, buildScriptMontageManifest, segmentScriptSentences } from '../../../packages/modules/video/src/index.js';
 import type { VideoAdjustmentService, VideoEditPresetService, VideoService } from '../../../packages/modules/video/src/index.js';
 import type { JobService } from '../../../packages/modules/job/src/index.js';
 import type { AssetCatalogService, LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
@@ -151,6 +150,11 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
 
   app.get('/api/v1/edit/presets', async () => ({ items: dependencies.presets ? await dependencies.presets.list() : [] }));
 
+  app.get('/api/v1/edit/permissions', async () => ({
+    localMediaRoots: (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean).map((value) => resolve(value)),
+    outputRoots: allowedOutputRoots(),
+  }));
+
   app.post('/api/v1/edit/uploads/audio', async (request, reply) => {
     const part = await request.file();
     if (!part) return reply.code(422).send({ error: { code: 'EDIT_AUDIO_UPLOAD_REQUIRED', message: '请选择一个音频文件。', details: [] } });
@@ -195,21 +199,19 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
       if (scanned.assets.length === 0) throw new Error('EDIT_NO_VIDEO_ASSETS');
       const batchId = `edit-batch-${randomUUID()}`;
       const title = cleanFilePart(input.title || (input.mode === 'SCRIPT' ? '脚本剪辑' : '批量混剪'));
-      const defaultPreset = input.templateId ? await dependencies.presets?.get(input.templateId) : await dependencies.presets?.getDefault() || null;
-      if (input.templateId && !defaultPreset) throw new Error('EDIT_TEMPLATE_NOT_FOUND');
       const requestedItems = input.mode === 'SCRIPT' ? [{ script: input.script?.trim() || input.items?.[0]?.script || '', title, voiceAssetId: input.items?.[0]?.voiceAssetId, voicePath: input.voicePath || input.items?.[0]?.voicePath }] : (input.items || []);
       const variantLabels = ['A', 'B', 'C', 'D', 'E'];
-      const expandedItems = requestedItems.flatMap((item) => Array.from({ length: input.variants }, (_, variantIndex) => ({ ...item, title: input.variants > 1 ? `${item.title?.trim() || title}_${variantLabels[variantIndex]}` : item.title, variantIndex })));
+      const expandedItems = requestedItems.flatMap((item, sourceIndex) => Array.from({ length: input.variants }, (_, variantIndex) => ({ ...item, title: input.variants > 1 ? `${item.title?.trim() || title}_${variantLabels[variantIndex]}` : item.title, sourceItemOrdinal: sourceIndex + 1, variantIndex })));
       const items = input.testOnly ? expandedItems.slice(0, 1) : expandedItems;
       const durableItems = items.map((item, index) => ({ item, index, itemId: `edit-item-${randomUUID()}`, workspaceId: `workspace-edit-${randomUUID()}`, titleForItem: itemTitle(item, index + 1) }));
       const transaction = await dependencies.db.connect();
       try {
         await transaction.query('begin');
-        await transaction.query('insert into edit_workbench_sessions (id, mode, title, script, source_roots, output_root, settings) values ($1,$2,$3,$4,$5,$6,$7)', [sessionId, input.mode, title, input.script || null, JSON.stringify(scanned.scans.map(({ files: _files, ...scan }) => scan)), outputRoot, { seed: input.seed ?? 1, variants: input.variants, fps: input.fps, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, testOnly: input.testOnly, sourceWorkspaceId, requestedItems, ...(input.templateId ? { templateId: input.templateId } : {}) }]);
+        await transaction.query('insert into edit_workbench_sessions (id, mode, title, script, source_roots, output_root, settings) values ($1,$2,$3,$4,$5,$6,$7)', [sessionId, input.mode, title, input.script || null, JSON.stringify(scanned.scans.map(({ files: _files, ...scan }) => scan)), outputRoot, { seed: input.seed ?? 1, variants: input.variants, fps: input.fps, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, testOnly: input.testOnly, sourceWorkspaceId, requestedItems, scanAssets: scanned.assets, ...(input.templateId ? { templateId: input.templateId } : {}) }]);
         await transaction.query('insert into edit_batches (id, session_id, mode, status, total_count) values ($1,$2,$3,$4,$5)', [batchId, sessionId, input.mode, 'RUNNING', durableItems.length]);
         for (const durable of durableItems) {
           await transaction.query("insert into video_workspaces (id, type, project_id) values ($1, 'STANDALONE', null)", [durable.workspaceId]);
-          await transaction.query('insert into edit_batch_items (id,batch_id,ordinal,title,script,workspace_id,state) values ($1,$2,$3,$4,$5,$6,$7)', [durable.itemId, batchId, durable.index + 1, durable.titleForItem, durable.item.script, durable.workspaceId, 'QUEUED']);
+          await transaction.query('insert into edit_batch_items (id,batch_id,ordinal,source_item_ordinal,variant_index,title,script,voice_asset_id,voice_path,workspace_id,state,settings_snapshot) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [durable.itemId, batchId, durable.index + 1, durable.item.sourceItemOrdinal, durable.item.variantIndex, durable.titleForItem, durable.item.script, durable.item.voiceAssetId || null, durable.item.voicePath || null, durable.workspaceId, 'QUEUED', { seed: (input.seed ?? 1) + ((durable.index + 1) * 100) + Number(durable.item.variantIndex || 0), mode: input.mode, fps: input.fps, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, templateId: input.templateId || null }]);
         }
         await transaction.query('commit');
       } catch (error) {
@@ -218,42 +220,11 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
       } finally { transaction.release(); }
       const resultItems: Record<string, unknown>[] = [];
       for (const durable of durableItems) {
-        const { item, index, itemId, workspaceId, titleForItem } = durable;
-        try {
-          const stableSeed = (input.seed ?? 1) + ((index + 1) * 100) + Number(item.variantIndex || 0);
-          let voiceAssetId = item.voiceAssetId;
-          if (!voiceAssetId && item.voicePath) {
-            const voiceFile = resolve(item.voicePath);
-            await assertSafeSourceFile(voiceFile);
-            const imported = await dependencies.assetService.importFile({ workspaceId, sourcePath: voiceFile, kind: 'AUDIO', role: 'VOICE' }); voiceAssetId = imported.id;
-          }
-          const sentences = segmentScriptSentences(item.script);
-          let planned;
-          if (input.mode === 'MIX') planned = buildRandomSentenceMontageManifest({ workspaceId, sentences, assets: scanned.assets, seed: stableSeed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });
-          else {
-            try { planned = buildScriptMontageManifest({ workspaceId, script: item.script, sentences, assets: scanned.assets, seed: stableSeed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) }); }
-            catch (error) {
-              if (scanned.assets.length !== 1 || !(error instanceof Error) || !error.message.includes('Adjacent duplicate clips')) throw error;
-              planned = buildRandomSentenceMontageManifest({ workspaceId, sentences, assets: scanned.assets, seed: stableSeed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });
-            }
-          }
-          planned.manifest.canvas.fps = input.fps;
-          if (defaultPreset?.introAssetId || defaultPreset?.outroAssetId) {
-            const branding = { ...(defaultPreset.introAssetId ? { intro: await dependencies.assets.getReadyGlobalVideoAssetContent(defaultPreset.introAssetId).then(async (asset) => { if (!asset) throw new Error('VIDEO_BRANDING_ASSET_INVALID'); await dependencies.assets.attachToWorkspace(workspaceId, asset.id, 'SOURCE'); return { id: asset.id, storageKey: asset.storageKey, sourcePath: dependencies.storage.objectPath(asset.storageKey), durationMs: Number(asset.metadata.durationMs || 0), role: 'INTRO' as const }; }) } : {}), ...(defaultPreset.outroAssetId ? { outro: await dependencies.assets.getReadyGlobalVideoAssetContent(defaultPreset.outroAssetId).then(async (asset) => { if (!asset) throw new Error('VIDEO_BRANDING_ASSET_INVALID'); await dependencies.assets.attachToWorkspace(workspaceId, asset.id, 'SOURCE'); return { id: asset.id, storageKey: asset.storageKey, sourcePath: dependencies.storage.objectPath(asset.storageKey), durationMs: Number(asset.metadata.durationMs || 0), role: 'OUTRO' as const }; }) } : {}) };
-            planned.manifest = assembleBrandedTimeline(planned.manifest, branding);
-          }
-          const manifest = await dependencies.quickEdit.createPlannedManifest({ workspaceId, manifest: planned.manifest, createdBy: 'operator' });
-          const job = await dependencies.video.createManifestRenderJobForWorkspace(workspaceId, manifest.id);
-          await dependencies.db.query('update edit_batch_items set voice_asset_id=$2,manifest_id=$3,job_id=$4,state=$5,error=null,updated_at=now() where id=$1', [itemId, voiceAssetId || null, manifest.id, job.id, 'QUEUED']);
-          resultItems.push({ id: itemId, ordinal: index + 1, title: titleForItem, script: item.script, state: job.state, jobId: job.id });
-        } catch (error) {
-          const failure = { code: error instanceof Error ? error.message : 'EDIT_ITEM_PREPARE_FAILED', message: friendlyEditError(error) };
-          await dependencies.db.query('update edit_batch_items set state=$2,error=$3,updated_at=now() where id=$1', [itemId, 'FAILED', failure]);
-          resultItems.push({ id: itemId, ordinal: index + 1, title: titleForItem, script: item.script, state: 'FAILED', error: failure });
-        }
+        const prepareJob = await dependencies.jobs.createIdempotent({ id: `job-${randomUUID()}`, projectId: null, workspaceId: durable.workspaceId, type: 'EDIT_PREPARE_ITEM', payload: { batchId, itemId: durable.itemId, workspaceId: durable.workspaceId }, idempotencyKey: `edit-prepare:${durable.itemId}`, maxAttempts: 3 });
+        await dependencies.db.query("update edit_batch_items set prepare_job_id=$2,state='PREPARING',updated_at=now() where id=$1", [durable.itemId, prepareJob.id]);
+        resultItems.push({ id: durable.itemId, ordinal: durable.index + 1, title: durable.titleForItem, script: durable.item.script, state: 'PREPARING' });
       }
-      const failedCount = resultItems.filter((item) => item.state === 'FAILED').length;
-      await dependencies.db.query('update edit_batches set status=$2,succeeded_count=0,failed_count=$3,updated_at=now() where id=$1', [batchId, failedCount === 0 ? 'RUNNING' : 'PARTIAL', failedCount]);
+      await dependencies.db.query('update edit_batches set status=$2,succeeded_count=0,failed_count=0,updated_at=now() where id=$1', [batchId, 'RUNNING']);
       return reply.code(201).send({ id: sessionId, batchId, mode: input.mode, title, testOnly: input.testOnly, variants: input.variants, sources: scanned.scans.map(({ files: _files, ...scan }) => scan), outputRoot, items: resultItems });
     } catch (error) {
       const code = error instanceof Error ? error.message : 'EDIT_SESSION_CREATE_FAILED';
@@ -282,17 +253,17 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     const batch = (await dependencies.db.query('select b.*, s.title, s.mode, s.output_root from edit_batches b join edit_workbench_sessions s on s.id = b.session_id where b.id = $1', [batchId])).rows[0] as Record<string, unknown> | undefined;
     if (!batch) return reply.code(404).send({ error: { code: 'EDIT_BATCH_NOT_FOUND', message: '剪辑记录不存在。', details: [] } });
     const offset = (pageQuery.data.page - 1) * pageQuery.data.pageSize;
-    const summary = (await dependencies.db.query("select count(*)::int as total, count(*) filter (where coalesce(j.state, i.state) = 'SUCCEEDED')::int as succeeded, count(*) filter (where coalesce(j.state, i.state) = 'FAILED')::int as failed from edit_batch_items i left join jobs j on j.id = i.job_id where i.batch_id = $1", [batchId])).rows[0] as { total?: number; succeeded?: number; failed?: number } | undefined;
-    const rows = (await dependencies.db.query('select i.*, j.state as job_state, j.result as job_result, j.error as job_error from edit_batch_items i left join jobs j on j.id = i.job_id where i.batch_id = $1 order by i.ordinal limit $2 offset $3', [batchId, pageQuery.data.pageSize, offset])).rows as Record<string, unknown>[];
+    const summary = (await dependencies.db.query("select count(*)::int as total, count(*) filter (where coalesce(j.state, i.state) = 'SUCCEEDED')::int as succeeded, count(*) filter (where coalesce(j.state, i.state) = 'FAILED')::int as failed, count(*) filter (where coalesce(j.state, i.state) in ('QUEUED','RUNNING','RETRY_WAIT','CANCEL_REQUESTED','PREPARING','RENDERING'))::int as active from edit_batch_items i left join jobs j on j.id = i.job_id where i.batch_id = $1", [batchId])).rows[0] as { total?: number; succeeded?: number; failed?: number; active?: number } | undefined;
+    const rows = (await dependencies.db.query('select i.*, j.state as job_state, j.result as job_result, j.error as job_error, p.state as prepare_job_state, p.error as prepare_job_error from edit_batch_items i left join jobs j on j.id = i.job_id left join jobs p on p.id = i.prepare_job_id where i.batch_id = $1 order by i.ordinal limit $2 offset $3', [batchId, pageQuery.data.pageSize, offset])).rows as Record<string, unknown>[];
     const items = await Promise.all(rows.map(async (row) => {
-      const job = row.job_id ? { state: row.job_state, result: row.job_result, error: row.job_error } : null;
+      const job = row.job_id ? { state: row.job_state, result: row.job_result, error: row.job_error } : row.prepare_job_id ? { state: row.prepare_job_state, result: null, error: row.prepare_job_error } : null;
       const result = job?.result && typeof job.result === 'object' ? job.result as { outputAssetId?: string } : {};
       const state = job?.state || row.state || 'QUEUED';
       if (state !== row.state || (result.outputAssetId && result.outputAssetId !== row.output_asset_id)) await dependencies.db.query('update edit_batch_items set state=$2, output_asset_id=coalesce($3, output_asset_id), error=$4, updated_at=now() where id=$1', [row.id, state, result.outputAssetId || null, job?.error || null]);
       return publicItem({ ...row, state, ...(result.outputAssetId ? { output_asset_id: result.outputAssetId } : {}) }, job as unknown as Record<string, unknown> | null);
     }));
-    const succeeded = Number(summary?.succeeded || 0); const failed = Number(summary?.failed || 0); const total = Number(summary?.total || batch.total_count || 0);
-    const status = failed > 0 && succeeded > 0 ? 'PARTIAL' : total > 0 && failed === total ? 'FAILED' : total > 0 && succeeded === total ? 'SUCCEEDED' : 'RUNNING';
+    const succeeded = Number(summary?.succeeded || 0); const failed = Number(summary?.failed || 0); const active = Number(summary?.active || 0); const total = Number(summary?.total || batch.total_count || 0);
+    const status = active > 0 ? 'RUNNING' : failed > 0 && succeeded > 0 ? 'PARTIAL' : total > 0 && failed === total ? 'FAILED' : total > 0 && succeeded === total ? 'SUCCEEDED' : 'RUNNING';
     await dependencies.db.query('update edit_batches set status=$2, succeeded_count=$3, failed_count=$4, updated_at=now() where id=$1', [batchId, status, succeeded, failed]);
     return { id: batchId, title: String(batch.title), mode: String(batch.mode), status, totalCount: Number(batch.total_count), succeededCount: succeeded, failedCount: failed, page: pageQuery.data.page, pageSize: pageQuery.data.pageSize, items };
   });
@@ -350,7 +321,10 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     const retried: Record<string, unknown>[] = [];
     for (const row of rows) {
       if (!row.manifest_id || !row.workspace_id) {
-        await dependencies.db.query("update edit_batch_items set state='FAILED',updated_at=now() where id=$1 and state='RUNNING'", [row.id]);
+        if (!row.workspace_id) continue;
+        const prepareJob = await dependencies.jobs.createIdempotent({ id: `job-${randomUUID()}`, projectId: null, workspaceId: String(row.workspace_id), type: 'EDIT_PREPARE_ITEM', payload: { batchId, itemId: String(row.id), workspaceId: String(row.workspace_id) }, idempotencyKey: `edit-prepare:${String(row.id)}:retry:${Date.now()}`, maxAttempts: 3 });
+        await dependencies.db.query("update edit_batch_items set prepare_job_id=$2,state='PREPARING',error=null,updated_at=now() where id=$1 and state='RUNNING'", [row.id, prepareJob.id]);
+        retried.push({ id: String(row.id), state: 'PREPARING' });
         continue;
       }
       try {
@@ -379,31 +353,25 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     }
     const rows = (await dependencies.db.query("select * from edit_batch_items where batch_id=$1 and state='SUCCEEDED' and output_asset_id is not null order by ordinal", [batchId])).rows as Record<string, unknown>[];
     const outputs: string[] = [];
-    for (const row of rows) {
-      const asset = await dependencies.assets.getReadyWorkspaceAssetContent(String(row.workspace_id), String(row.output_asset_id));
-      if (!asset) continue;
-      const stem = outputFileStem(String(row.title), Number(row.ordinal)); let destination = join(outputRoot, `${stem}.mp4`); let suffix = 2; let lockPath = `${destination}.lock`;
-      while (true) {
-        if (await stat(destination).then(() => true).catch(() => false)) { destination = join(outputRoot, `${stem}_${suffix}.mp4`); lockPath = `${destination}.lock`; suffix += 1; continue; }
-        try { await mkdir(lockPath); break; }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; destination = join(outputRoot, `${stem}_${suffix}.mp4`); lockPath = `${destination}.lock`; suffix += 1; }
+    const transaction = await dependencies.db.connect();
+    try {
+      await transaction.query('begin');
+      await transaction.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:edit-export:${batchId}`]);
+      for (const row of rows) {
+        const asset = await dependencies.assets.getReadyWorkspaceAssetContent(String(row.workspace_id), String(row.output_asset_id));
+        if (!asset) continue;
+        const stem = outputFileStem(String(row.title), Number(row.ordinal)); let destination = join(outputRoot, `${stem}.mp4`); let suffix = 2;
+        while (await stat(destination).then(() => true).catch(() => false) || (await transaction.query('select 1 from edit_exports where output_path=$1 and status in (\'QUEUED\',\'RUNNING\',\'SUCCEEDED\')', [destination])).rows[0]) { destination = join(outputRoot, `${stem}_${suffix}.mp4`); suffix += 1; }
+        const exportId = `edit-export-${randomUUID()}`;
+        const jobId = `job-${randomUUID()}`;
+        const idempotencyKey = `edit-export:${row.id}:${destination}`;
+        await transaction.query('insert into jobs (id,project_id,workspace_id,type,state,idempotency_key,payload,max_attempts) values ($1,null,$2,$3,$4,$5,$6,$7)', [jobId, String(row.workspace_id), 'EDIT_EXPORT', 'QUEUED', idempotencyKey, { exportId, batchId, batchItemId: String(row.id), workspaceId: String(row.workspace_id), assetId: asset.id, outputPath: destination, outputRoot }, 3]);
+        await transaction.query('insert into edit_exports (id,batch_item_id,asset_id,output_path,status,job_id) values ($1,$2,$3,$4,$5,$6)', [exportId, row.id, asset.id, destination, 'QUEUED', jobId]);
+        outputs.push(destination);
       }
-      const exportId = `edit-export-${randomUUID()}`;
-      const temp = `${destination}.${randomUUID()}.part`;
-      await dependencies.db.query('insert into edit_exports (id,batch_item_id,asset_id,output_path,status) values ($1,$2,$3,$4,$5)', [exportId, row.id, asset.id, destination, 'RUNNING']);
-      try {
-        await copyFile(dependencies.storage.objectPath(asset.storageKey), temp);
-        await rename(temp, destination);
-        await dependencies.db.query('update edit_exports set status=$2,finished_at=now(),error=null where id=$1', [exportId, 'SUCCEEDED']);
-        await dependencies.db.query('update edit_batch_items set output_path=$2,updated_at=now() where id=$1', [row.id, destination]); outputs.push(destination);
-      } catch (error) {
-        await dependencies.db.query('update edit_exports set status=$2,error=$3,finished_at=now() where id=$1', [exportId, 'FAILED', { code: 'EDIT_EXPORT_FAILED', message: friendlyEditError(error) }]).catch(() => undefined);
-        throw error;
-      } finally {
-        await rm(temp, { force: true }).catch(() => undefined);
-        await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
-      }
-    }
-    return { batchId, outputRoot, files: outputs };
+      await transaction.query('commit');
+    } catch (error) { await transaction.query('rollback').catch(() => undefined); throw error; }
+    finally { transaction.release(); }
+    return { batchId, outputRoot, files: outputs, status: 'QUEUED' };
   });
 }

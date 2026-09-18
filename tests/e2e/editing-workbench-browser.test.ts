@@ -1,4 +1,4 @@
-import { copyFile, mkdir } from 'node:fs/promises';
+import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -37,7 +37,7 @@ async function makeSourceRoots(): Promise<{ first: string; second: string; outpu
 
 async function exportBatch(page: Page, batchId: string, expectedCount = 1): Promise<void> {
   await page.getByRole('button', { name: '导出成片' }).click();
-  try { await page.getByText(/已导出 [1-9]/u).waitFor({ state: 'visible', timeout: 15_000 }); }
+  try { await page.getByText(/已创建 [1-9] 个导出任务/u).waitFor({ state: 'visible', timeout: 15_000 }); }
   catch (error) { throw new Error(`批次 ${batchId} 导出未成功：${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
   const preview = page.locator('video.history-preview');
   await preview.first().waitFor({ state: 'visible', timeout: 15_000 });
@@ -54,6 +54,13 @@ test('独立剪辑工作台完成脚本、测试混剪与批量失败重试流�
   const database = new pg.Pool({ connectionString: process.env.CONTENTOS_BROWSER_DATABASE_URL });
   try {
     // Flow A: script edit, uploaded audio, two source roots, export and preview.
+    const pairTextRoot = join(fixtureDir!, 'pair-text'); const pairAudioRoot = join(fixtureDir!, 'pair-audio');
+    await mkdir(pairTextRoot, { recursive: true }); await mkdir(pairAudioRoot, { recursive: true });
+    await writeFile(join(pairTextRoot, '001.txt'), '第一条文案'); await writeFile(join(pairTextRoot, '003.txt'), '第三条文案');
+    await copyFile(fixtureAudio!, join(pairAudioRoot, '001.wav')); await copyFile(fixtureAudio!, join(pairAudioRoot, '004.wav'));
+    const pairingResponse = await page.request.post(`${apiUrl}/api/v1/edit/pair`, { data: { textFiles: [join(pairTextRoot, '001.txt'), join(pairTextRoot, '003.txt')], audioFiles: [join(pairAudioRoot, '001.wav'), join(pairAudioRoot, '004.wav')] } });
+    assert.equal(pairingResponse.status(), 200); const pairing = await pairingResponse.json() as { items: Array<{ basename: string; status: string }> };
+    assert.deepEqual(pairing.items.map((item) => [item.basename, item.status]), [['001', 'READY'], ['003', 'MISSING_AUDIO'], ['004', 'MISSING_TEXT']]);
     await page.goto(`${baseUrl}/edit/script`, { waitUntil: 'domcontentloaded' });
     const scriptArea = page.locator('.edit-form textarea').first(); await scriptArea.click(); await scriptArea.pressSequentially('第一段脚本。第二段脚本。第三段脚本。');
     await page.getByLabel('脚本配音文件').setInputFiles(fixtureAudio!);

@@ -12,6 +12,8 @@ export type { StoryboardPlannerAsset, StoryboardPlannerDecision, StoryboardPlann
 export type { ScriptSentence, SegmentScriptOptions } from './sentence-segmenter.js';
 export type { RandomSentenceMontageInput, ScriptMontageInput, SentenceMontageAsset, SentenceMontageBaseInput, SentenceMontageDecision, SentenceMontageResult, TimedScriptSentence } from './planner.js';
 export type { BrandingAsset, BrandingConfig } from './planner.js';
+export { prepareEditingWorkbenchItem } from './edit-workbench-preparation.js';
+export type { EditingWorkbenchPreparationDependencies, EditingWorkbenchPreparationInput, EditingWorkbenchPreparationResult } from './edit-workbench-preparation.js';
 export type { EditManifestV0, ManifestClip } from '../../../contracts/src/index.js';
 export { applyQuickEditOperations, digestEditManifest, parseQuickEditOperations, rankAdjustmentAssets } from './quick-edit.js';
 export type { QuickEditOperation } from './quick-edit.js';

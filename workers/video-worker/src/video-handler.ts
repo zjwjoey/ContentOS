@@ -1,13 +1,91 @@
-import { join } from 'node:path';
-import { readdir, rm } from 'node:fs/promises';
+import { dirname, join, sep } from 'node:path';
+import { copyFile, mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
 import type { Pool } from 'pg';
-import type { AssetService, LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
+import { AssetCatalogService, type AssetService, type LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { JobLeaseCancellationHandler, JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
-import type { VideoService } from '../../../packages/modules/video/src/index.js';
+import { prepareEditingWorkbenchItem, VideoAdjustmentService, VideoEditPresetService, type PlannerAsset, type VideoService } from '../../../packages/modules/video/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import { renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 
 export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; localMedia?: LocalMediaSourceService; }
+
+async function authorizedVoicePath(input: string): Promise<string> {
+  const roots = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean);
+  const candidate = await realpath(input).catch(() => null);
+  if (!candidate || !(await stat(candidate).then((value) => value.isFile()).catch(() => false))) throw new Error('EDIT_VOICE_PATH_UNAUTHORIZED');
+  const authorized = await Promise.all(roots.map((root) => realpath(root).catch(() => null)));
+  const contained = authorized.some((root) => root && (candidate.toLowerCase() === root.toLowerCase() || candidate.toLowerCase().startsWith(`${root}${sep}`.toLowerCase())));
+  if (!contained) throw new Error('EDIT_VOICE_PATH_UNAUTHORIZED');
+  return candidate;
+}
+
+async function authorizedOutputPath(outputPath: string, outputRoot: string): Promise<void> {
+  const roots = (process.env.CONTENTOS_OUTPUT_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean);
+  const [configured, actualRoot, parent] = await Promise.all([Promise.all(roots.map((root) => realpath(root).catch(() => null))), realpath(outputRoot).catch(() => null), realpath(dirname(outputPath)).catch(() => null)]);
+  if (!actualRoot || !parent || !configured.some((root) => root && (actualRoot.toLowerCase() === root.toLowerCase() || actualRoot.toLowerCase().startsWith(`${root}${sep}`.toLowerCase())))) throw new Error('EDIT_OUTPUT_ROOT_UNAUTHORIZED');
+  if (!(parent.toLowerCase() === actualRoot.toLowerCase() || parent.toLowerCase().startsWith(`${actualRoot}${sep}`.toLowerCase()))) throw new Error('EDIT_OUTPUT_ROOT_UNAUTHORIZED');
+}
+
+export function createEditPrepareJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
+  return async (job, _attemptId, signal) => {
+    if (job.type !== 'EDIT_PREPARE_ITEM') throw new Error('EDIT_PREPARE_JOB_TYPE_INVALID');
+    if (signal.aborted) throw new Error('EDIT_PREPARE_CANCELLED');
+    const payload = job.payload as { batchId?: string; itemId?: string; workspaceId?: string };
+    if (!payload.batchId || !payload.itemId || !payload.workspaceId) throw new Error('EDIT_PREPARE_PAYLOAD_INVALID');
+    const row = (await deps.db.query('select i.*, b.mode, s.settings from edit_batch_items i join edit_batches b on b.id = i.batch_id join edit_workbench_sessions s on s.id = b.session_id where i.id=$1 and i.batch_id=$2 and i.workspace_id=$3', [payload.itemId, payload.batchId, payload.workspaceId])).rows[0] as Record<string, unknown> | undefined;
+    if (!row) throw new Error('EDIT_PREPARE_ITEM_NOT_FOUND');
+    await deps.db.query("update edit_batch_items set state='PREPARING',error=null,updated_at=now() where id=$1 and state in ('QUEUED','PREPARING','FAILED')", [payload.itemId]);
+    try {
+      const settings = row.settings && typeof row.settings === 'object' && !Array.isArray(row.settings) ? row.settings as Record<string, unknown> : {};
+      const itemSettings = row.settings_snapshot && typeof row.settings_snapshot === 'object' && !Array.isArray(row.settings_snapshot) ? row.settings_snapshot as Record<string, unknown> : {};
+      const scanAssets = Array.isArray(settings.scanAssets) ? settings.scanAssets : [];
+      const voicePath = row.voice_path ? await authorizedVoicePath(String(row.voice_path)) : undefined;
+      const catalog = new AssetCatalogService(deps.db);
+      const quickEdit = new VideoAdjustmentService(deps.db, catalog, deps.localMedia);
+      const result = await prepareEditingWorkbenchItem({ assetService: deps.assets, assets: catalog, quickEdit, storage: deps.storage, video: deps.video, presets: new VideoEditPresetService(deps.db) }, {
+        mode: String(row.mode) as 'SCRIPT' | 'MIX', workspaceId: payload.workspaceId, script: String(row.script), ...(row.voice_asset_id ? { voiceAssetId: String(row.voice_asset_id) } : {}), ...(voicePath ? { voicePath } : {}), assets: scanAssets as PlannerAsset[], seed: Number(itemSettings.seed || 1), minClipDurationMs: Number(itemSettings.minClipDurationMs || 2_000), maxClipDurationMs: Number(itemSettings.maxClipDurationMs || 5_000), preferUnusedMedia: itemSettings.preferUnusedMedia !== false, fps: Number(itemSettings.fps || 30), ...(typeof itemSettings.templateId === 'string' && itemSettings.templateId ? { templateId: itemSettings.templateId } : {})
+      });
+      await deps.db.query("update edit_batch_items set voice_asset_id=$2,manifest_id=$3,job_id=$4,state='RENDERING',error=null,updated_at=now() where id=$1", [payload.itemId, result.voiceAssetId || row.voice_asset_id || null, result.manifestId, result.renderJobId]);
+      return result;
+    } catch (error) {
+      const failure = { code: error instanceof Error ? error.message : 'EDIT_ITEM_PREPARE_FAILED', message: error instanceof Error ? error.message : '编辑任务准备失败' };
+      const terminal = job.attemptCount >= job.maxAttempts;
+      await deps.db.query(`update edit_batch_items set state=$2,error=$3,updated_at=now() where id=$1`, [payload.itemId, terminal ? 'FAILED' : 'PREPARING', failure]);
+      throw error;
+    }
+  };
+}
+
+export function createEditExportJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
+  return async (job, _attemptId, signal) => {
+    if (job.type !== 'EDIT_EXPORT') throw new Error('EDIT_EXPORT_JOB_TYPE_INVALID');
+    if (signal.aborted) throw new Error('EDIT_EXPORT_CANCELLED');
+    const payload = job.payload as { exportId?: string; batchItemId?: string; workspaceId?: string; assetId?: string; outputPath?: string; outputRoot?: string };
+    if (!payload.exportId || !payload.batchItemId || !payload.workspaceId || !payload.assetId || !payload.outputPath || !payload.outputRoot) throw new Error('EDIT_EXPORT_PAYLOAD_INVALID');
+    await deps.db.query("update edit_exports set status='RUNNING',error=null where id=$1 and status in ('QUEUED','FAILED')", [payload.exportId]);
+    const temp = `${payload.outputPath}.${job.id}.part`;
+    const lockPath = `${payload.outputPath}.lock`;
+    try {
+      await authorizedOutputPath(payload.outputPath, payload.outputRoot);
+      if (await stat(payload.outputPath).then(() => true).catch(() => false)) throw new Error('EDIT_EXPORT_DESTINATION_EXISTS');
+      await mkdir(lockPath);
+      const catalog = new AssetCatalogService(deps.db);
+      const asset = await catalog.getReadyWorkspaceAssetContent(payload.workspaceId, payload.assetId);
+      if (!asset) throw new Error('EDIT_EXPORT_ASSET_UNAVAILABLE');
+      await copyFile(deps.storage.objectPath(asset.storageKey), temp);
+      await rename(temp, payload.outputPath);
+      await deps.db.query("update edit_exports set status='SUCCEEDED',error=null,finished_at=now() where id=$1", [payload.exportId]);
+      await deps.db.query('update edit_batch_items set output_path=$2,updated_at=now() where id=$1', [payload.batchItemId, payload.outputPath]);
+      return { exportId: payload.exportId, outputPath: payload.outputPath, status: 'SUCCEEDED' };
+    } catch (error) {
+      await deps.db.query(`update edit_exports set status=$2,error=$3,finished_at=case when $2='FAILED' then now() else finished_at end where id=$1`, [payload.exportId, job.attemptCount >= job.maxAttempts ? 'FAILED' : 'QUEUED', { code: error instanceof Error ? error.message : 'EDIT_EXPORT_FAILED', message: error instanceof Error ? error.message : '导出失败' }]).catch(() => undefined);
+      throw error;
+    } finally {
+      await rm(temp, { force: true }).catch(() => undefined);
+      await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+    }
+  };
+}
 
 export function createVideoLeaseCancellationHandler(video: VideoService, storage: LocalStorageProvider): JobLeaseCancellationHandler {
   return async (job, scope) => {

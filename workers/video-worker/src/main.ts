@@ -8,7 +8,7 @@ import { LocalStorageProvider } from '../../../packages/infrastructure/storage/s
 import { probeMedia } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 import { createDatabase } from '../../../packages/database/src/index.js';
 import { loadConfig } from '../../../packages/config/src/index.js';
-import { createLocalMediaScanJobHandler, createVideoJobHandler, createVideoLeaseCancellationHandler, type VideoHandlerDeps } from './video-handler.js';
+import { createEditExportJobHandler, createEditPrepareJobHandler, createLocalMediaScanJobHandler, createVideoJobHandler, createVideoLeaseCancellationHandler, type VideoHandlerDeps } from './video-handler.js';
 
 export interface VideoWorkerOptions extends VideoHandlerDeps { workerId?: string; reconcileIntervalMs?: number; pollIntervalMs?: number; concurrency?: number; }
 
@@ -66,6 +66,8 @@ export function createVideoWorker(options?: VideoWorkerOptions): WorkerRuntime {
   if (reconcileIntervalMs <= 0 || pollIntervalMs <= 0 || concurrency <= 0) throw new Error('Video worker intervals and concurrency must be positive');
   const runner = new JobRunner(options.jobs, options.workerId || 'video-worker');
   const handler = createVideoJobHandler(options);
+  const prepareHandler = createEditPrepareJobHandler(options);
+  const exportHandler = createEditExportJobHandler(options);
   const localMediaHandler = createLocalMediaScanJobHandler(options);
   const videoCancellation = createVideoLeaseCancellationHandler(options.video, options.storage);
   const recoverCancellation = async (job: Parameters<typeof videoCancellation>[0], scope: Parameters<typeof videoCancellation>[1]): Promise<boolean> => {
@@ -74,11 +76,21 @@ export function createVideoWorker(options?: VideoWorkerOptions): WorkerRuntime {
       if (options.localMedia && payload.scanId) await options.localMedia.failScan(payload.scanId, { code: 'LOCAL_MEDIA_SCAN_CANCELLED', message: 'Scan cancelled after lease expiry' }, 'CANCELLED');
       return true;
     }
+    if (job.type === 'EDIT_PREPARE_ITEM') {
+      const payload = job.payload as { itemId?: string };
+      if (payload.itemId) await options.db.query("update edit_batch_items set state='FAILED',error=$2,updated_at=now() where id=$1", [payload.itemId, { code: 'EDIT_PREPARE_CANCELLED', message: '准备任务租约失效，已停止' }]);
+      return true;
+    }
+    if (job.type === 'EDIT_EXPORT') {
+      const payload = job.payload as { exportId?: string };
+      if (payload.exportId) await options.db.query("update edit_exports set status='FAILED',error=$2,finished_at=now() where id=$1", [payload.exportId, { code: 'EDIT_EXPORT_CANCELLED', message: '导出任务租约失效，已停止' }]);
+      return true;
+    }
     return videoCancellation(job, scope);
   };
   const consume = async (): Promise<void> => {
-    const runnable = await options.jobs.listRunnable(['VIDEO_RENDER', 'LOCAL_MEDIA_SCAN'], concurrency);
-    await Promise.all(runnable.map((job) => runner.run(job.id, job.type === 'LOCAL_MEDIA_SCAN' ? localMediaHandler : handler)));
+    const runnable = await options.jobs.listRunnable(['VIDEO_RENDER', 'LOCAL_MEDIA_SCAN', 'EDIT_PREPARE_ITEM', 'EDIT_EXPORT'], concurrency);
+    await Promise.all(runnable.map((job) => runner.run(job.id, job.type === 'LOCAL_MEDIA_SCAN' ? localMediaHandler : job.type === 'EDIT_PREPARE_ITEM' ? prepareHandler : job.type === 'EDIT_EXPORT' ? exportHandler : handler)));
   };
   const runtime = new VideoWorkerRuntime(options.workerId || 'video-worker', () => options.jobs.reconcileExpiredLeases(new Date(), recoverCancellation), consume, reconcileIntervalMs, pollIntervalMs);
   runtime.register('video.render', async (payload) => {
@@ -90,6 +102,16 @@ export function createVideoWorker(options?: VideoWorkerOptions): WorkerRuntime {
     const jobId = payload && typeof payload === 'object' ? (payload as { jobId?: unknown }).jobId : undefined;
     if (typeof jobId !== 'string' || !jobId) throw new Error('Local media scan delivery requires jobId');
     return runner.run(jobId, localMediaHandler);
+  });
+  runtime.register('edit.prepare_item', async (payload) => {
+    const jobId = payload && typeof payload === 'object' ? (payload as { jobId?: unknown }).jobId : undefined;
+    if (typeof jobId !== 'string' || !jobId) throw new Error('Edit prepare delivery requires jobId');
+    return runner.run(jobId, prepareHandler);
+  });
+  runtime.register('edit.export', async (payload) => {
+    const jobId = payload && typeof payload === 'object' ? (payload as { jobId?: unknown }).jobId : undefined;
+    if (typeof jobId !== 'string' || !jobId) throw new Error('Edit export delivery requires jobId');
+    return runner.run(jobId, exportHandler);
   });
   return runtime;
 }
