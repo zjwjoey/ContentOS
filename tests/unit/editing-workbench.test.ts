@@ -26,6 +26,14 @@ test('editing workbench normalizes basename only with NFKC, trim, and case foldi
   ]);
 });
 
+test('editing workbench pairs across folders, preserves Chinese names, and reports missing files', () => {
+  assert.deepEqual(pairByBasename(['F:\\文案\\门店01.txt', 'F:\\文案\\003.TXT'], ['D:\\配音\\门店01.MP3', 'D:\\配音\\004.wav']), [
+    { ordinal: 1, basename: '003', textFile: 'F:\\文案\\003.TXT', audioFile: null, status: 'MISSING_AUDIO' },
+    { ordinal: 2, basename: '004', textFile: null, audioFile: 'D:\\配音\\004.wav', status: 'MISSING_TEXT' },
+    { ordinal: 3, basename: '门店01', textFile: 'F:\\文案\\门店01.txt', audioFile: 'D:\\配音\\门店01.MP3', status: 'READY' },
+  ]);
+});
+
 test('editing workbench exposes duplicate basenames instead of overwriting them', () => {
   assert.deepEqual(pairByBasename(['one/a.txt', 'two/A.md'], ['one/a.mp3']), [
     { ordinal: 1, basename: 'a', textFile: 'one/a.txt', audioFile: 'one/a.mp3', status: 'DUPLICATE_TEXT_BASENAME' },
@@ -45,4 +53,15 @@ test('editing workbench promotes staged uploads through a target-volume part fil
   assert.equal(await readFile(destination, 'utf8'), 'audio-bytes');
   assert.equal((await readdir(join(root, 'uploads'))).some((name) => name.endsWith('.part')), false);
   await assert.rejects(() => readFile(staged));
+});
+
+test('editing workbench never overwrites an existing upload destination', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-edit-upload-existing-'));
+  const staged = join(root, 'staging.tmp');
+  const destination = join(root, 'uploads', 'voice.mp3');
+  await mkdir(join(root, 'uploads'), { recursive: true });
+  await writeFile(staged, 'new-audio');
+  await writeFile(destination, 'old-audio');
+  await assert.rejects(() => promoteStagedUpload(staged, destination), /EDIT_UPLOAD_DESTINATION_EXISTS/);
+  assert.equal(await readFile(destination, 'utf8'), 'old-audio');
 });
