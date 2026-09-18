@@ -3,7 +3,7 @@
 Date: 2026-09-19  
 Branch: `codex/editing-workbench-v2`  
 Baseline: `ace263275dc14b660807d5fb910816a69df5f220e`  
-Implementation commits: `057d3d5`, `e2cad7c`
+Implementation commits: `057d3d5`, `e2cad7c`, `4d5b409`, `4525375`, `aacbd77`
 
 ## Implemented
 
@@ -41,7 +41,7 @@ Implementation commits: `057d3d5`, `e2cad7c`
 | `pnpm typecheck` | PASS |
 | `pnpm lint` | PASS (`129` TypeScript files) |
 | `pnpm format` | PASS (`300` files) |
-| `pnpm exec tsx --test tests/unit/editing-workbench.test.ts` | PASS (`5` tests) |
+| `pnpm exec tsx --test tests/unit/editing-workbench.test.ts` | PASS (`7` tests) |
 | `pnpm test:browser` | BLOCKED: PostgreSQL unavailable at `127.0.0.1:5432` (`ECONNREFUSED`) |
 | Full `pnpm test` | NOT RUN: the browser/database gate is unavailable in this environment |
 | `git diff --check` | PASS |
@@ -101,6 +101,6 @@ Final local verification on PostgreSQL 16 at `127.0.0.1:55433`:
 | `git diff --check` | PASS |
 
 The branch is **GO for merge from the local verification perspective**. The
-latest local hardening commit is `e2cad7c`; it is ready to push as
+latest local hardening commit is `aacbd77`; it is ready to push as
 `origin/codex/editing-workbench-v2`, but it is not merged. Merging remains an
 explicit review action.
