@@ -3,7 +3,7 @@
 Date: 2026-09-19  
 Branch: `codex/editing-workbench-v2`  
 Baseline: `ace263275dc14b660807d5fb910816a69df5f220e`  
-Implementation commit: pending final hardening commit
+Implementation commit: `057d3d5`
 
 ## Implemented
 
