@@ -57,8 +57,8 @@ promotion.
 - Preparation and scanning remain executed by the API request path; the durable
   item stubs make the state recoverable, but a separate prepare/scan Job worker
   is still a follow-up hardening task.
-- The branch was not merged. A push attempt should be made when GitHub network
-  access is available.
+- The branch was not merged. Push the review branch when the remote is
+  reachable; merging remains an explicit human/review action.
 
 ## Decision
 
@@ -95,5 +95,5 @@ Final local verification on PostgreSQL 16 at `127.0.0.1:55433`:
 | `git diff --check` | PASS |
 
 The branch is **GO for merge from the local verification perspective**. It is
-not yet pushed or merged because GitHub remains unreachable from this host; the
-push must be retried when network access is restored.
+pushed as `origin/codex/editing-workbench-v2` at the implementation/report
+commits above, but it is not merged; merging remains an explicit review action.
