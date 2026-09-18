@@ -1,10 +1,12 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState, type FormEvent } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { useEffect, useState, type FormEvent } from 'react';
 
 type Item = { title: string; script: string; voicePath: string };
 type RootStatus = { state: 'idle' | 'scanning' | 'ready' | 'error'; available?: number; unavailable?: number; message?: string };
+type Preset = { id: string; name: string; description: string; editModeDefault: 'SCRIPT' | 'RANDOM'; minClipDurationMs: number; maxClipDurationMs: number; preferUnusedMedia: boolean; fps: number };
 
 function statusText(status: RootStatus | undefined): string {
   if (!status || status.state === 'idle') return '离开输入框后自动扫描';
@@ -15,19 +17,62 @@ function statusText(status: RootStatus | undefined): string {
 
 export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
   const router = useRouter();
+  const search = useSearchParams();
+  const copyId = search.get('copy');
   const [title, setTitle] = useState('');
   const [script, setScript] = useState('');
   const [voicePath, setVoicePath] = useState('');
   const [items, setItems] = useState<Item[]>([{ title: '', script: '', voicePath: '' }]);
+  const [textFiles, setTextFiles] = useState('');
+  const [audioFiles, setAudioFiles] = useState('');
+  const [pairing, setPairing] = useState(false);
   const [roots, setRoots] = useState(['']);
   const [rootStatuses, setRootStatuses] = useState<Record<number, RootStatus>>({});
   const [outputRoot, setOutputRoot] = useState('');
   const [minClipDurationMs, setMinClipDurationMs] = useState(2000);
   const [maxClipDurationMs, setMaxClipDurationMs] = useState(5000);
   const [seed, setSeed] = useState(1);
+  const [variants, setVariants] = useState(1);
+  const [fps, setFps] = useState(30);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [templateId, setTemplateId] = useState('');
   const [preferUnusedMedia, setPreferUnusedMedia] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(`contentos-edit-settings-${mode}`) || '{}') as { roots?: string[]; outputRoot?: string; minClipDurationMs?: number; maxClipDurationMs?: number; seed?: number; variants?: number; fps?: number; preferUnusedMedia?: boolean; templateId?: string };
+      if (saved.roots?.length) setRoots(saved.roots);
+      if (saved.outputRoot) setOutputRoot(saved.outputRoot);
+      if (saved.minClipDurationMs) setMinClipDurationMs(saved.minClipDurationMs);
+      if (saved.maxClipDurationMs) setMaxClipDurationMs(saved.maxClipDurationMs);
+      if (saved.seed) setSeed(saved.seed);
+      if (saved.variants === 1 || saved.variants === 3 || saved.variants === 5) setVariants(saved.variants);
+      if (saved.fps) setFps(saved.fps);
+      if (saved.preferUnusedMedia !== undefined) setPreferUnusedMedia(saved.preferUnusedMedia);
+      if (saved.templateId) setTemplateId(saved.templateId);
+    } catch { /* ignore malformed local preferences */ }
+  }, [mode]);
+
+  useEffect(() => {
+    void fetch('/api/v1/edit/presets').then(async (response) => response.ok ? await response.json() as { items: Preset[] } : { items: [] }).then((data) => { setPresets(data.items); if (!templateId && data.items[0]) setTemplateId(data.items[0].id); }).catch(() => setPresets([]));
+  }, [mode]);
+
+  useEffect(() => {
+    if (!copyId) return;
+    void fetch(`/api/v1/edit/batches/${encodeURIComponent(copyId)}/config`).then(async (response) => {
+      if (!response.ok) throw new Error('历史任务配置暂时无法读取。');
+      return await response.json() as { mode: 'SCRIPT' | 'MIX'; title: string; script: string; sourceRoots: string[]; outputRoot: string; settings: { minClipDurationMs: number; maxClipDurationMs: number; seed: number; variants: number; fps: number; preferUnusedMedia: boolean; templateId?: string }; items: Item[] };
+    }).then((config) => {
+      if (config.mode !== mode) return;
+      setTitle(`${config.title}（副本）`); setScript(config.script || ''); setRoots(config.sourceRoots.length ? config.sourceRoots : ['']); setOutputRoot(config.outputRoot || ''); setMinClipDurationMs(config.settings.minClipDurationMs); setMaxClipDurationMs(config.settings.maxClipDurationMs); setSeed(config.settings.seed); setVariants(config.settings.variants === 3 || config.settings.variants === 5 ? config.settings.variants : 1); setFps(config.settings.fps); setPreferUnusedMedia(config.settings.preferUnusedMedia); if (config.settings.templateId) setTemplateId(config.settings.templateId); if (mode === 'MIX' && config.items.length) setItems(config.items.map((item) => ({ title: item.title, script: item.script, voicePath: item.voicePath || '' })));
+    }).catch((error) => setMessage(error instanceof Error ? error.message : '历史任务配置暂时无法读取。'));
+  }, [copyId, mode]);
+
+  useEffect(() => {
+    window.localStorage.setItem(`contentos-edit-settings-${mode}`, JSON.stringify({ roots, outputRoot, minClipDurationMs, maxClipDurationMs, seed, variants, fps, preferUnusedMedia, templateId }));
+  }, [mode, roots, outputRoot, minClipDurationMs, maxClipDurationMs, seed, variants, fps, preferUnusedMedia, templateId]);
 
   const updateItem = (index: number, patch: Partial<Item>) => setItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
   const addRoot = () => setRoots((current) => [...current, '']);
@@ -49,9 +94,25 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       setRootStatuses((current) => ({ ...current, [index]: { state: 'error', message: error instanceof Error ? error.message : '素材目录扫描失败。' } }));
     }
   };
+  const pairFiles = async () => {
+    const textList = textFiles.split(/[\r\n,，]+/u).map((value) => value.trim()).filter(Boolean);
+    const audioList = audioFiles.split(/[\r\n,，]+/u).map((value) => value.trim()).filter(Boolean);
+    if (!textList.length || !audioList.length) { setMessage('请先填写文案文件和音频文件路径。'); return; }
+    setPairing(true); setMessage('');
+    try {
+      const response = await fetch('/api/v1/edit/pair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ textFiles: textList, audioFiles: audioList, includeContent: true }) });
+      const data = await response.json() as { items?: Array<{ status: string; basename: string; script?: string; voicePath?: string }>; error?: { message?: string } };
+      if (!response.ok) throw new Error(data.error?.message || '文案和音频配对失败。');
+      const missing = (data.items || []).filter((item) => item.status !== 'READY');
+      setItems((data.items || []).filter((item) => item.status === 'READY' && item.script).map((item) => ({ title: item.basename, script: item.script || '', voicePath: item.voicePath || '' })) || []);
+      setMessage(missing.length ? `已配对 ${((data.items || []).length - missing.length)} 条，另有 ${missing.length} 条缺少对应文件。` : `已自动配对 ${(data.items || []).length} 条任务。`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : '文案和音频配对失败。'); }
+    finally { setPairing(false); }
+  };
   const submit = async (event?: FormEvent, forceTest = false) => {
     event?.preventDefault(); setBusy(true); setMessage('');
     try {
+      if (!outputRoot.trim()) throw new Error('请先填写输出文件夹。');
       const payload = {
         mode,
         ...(title.trim() ? { title: title.trim() } : {}),
@@ -64,6 +125,9 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
         minClipDurationMs,
         maxClipDurationMs,
         seed,
+        variants: mode === 'MIX' ? variants : 1,
+        fps,
+        ...(templateId ? { templateId } : {}),
         preferUnusedMedia,
       };
       const response = await fetch('/api/v1/edit/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
@@ -90,6 +154,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
           {items.length > 1 && <button type="button" onClick={() => setItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>删除这条</button>}
         </div>)}
         <button type="button" className="secondary-action" onClick={() => setItems((current) => [...current, { title: '', script: '', voicePath: '' }])}>+ 添加一条</button>
+        <details className="batch-pairing"><summary>按文件名自动配对文案和音频</summary><label>文案文件路径（每行一个）<textarea value={textFiles} onChange={(event) => setTextFiles(event.target.value)} placeholder="F:\\文案\\001.txt\nF:\\文案\\002.md" /></label><label>音频文件路径（每行一个）<textarea value={audioFiles} onChange={(event) => setAudioFiles(event.target.value)} placeholder="F:\\音频\\001.mp3\nF:\\音频\\002.wav" /></label><button type="button" className="secondary-action" onClick={() => void pairFiles()} disabled={pairing}>{pairing ? '正在配对…' : '自动配对并载入任务'}</button><p className="muted">相同文件名会自动配对；缺少音频或文案的条目会明确标记，不会悄悄跳过。</p></details>
         <p className="muted">可按任务逐条填写文案和音频；服务端会校验音频路径，不会悄悄跳过无效文件。</p>
       </>}
     </section>
@@ -104,12 +169,12 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       <p className="muted">目录离开输入框后会自动验证和扫描，结果会保存在本次剪辑的来源快照中。</p>
     </section>
     <section className="card">
-      <div className="section-title"><h2>3. 输出位置</h2><span>可选</span></div>
-      <label>输出文件夹<input value={outputRoot} onChange={(event) => setOutputRoot(event.target.value)} placeholder="例如：F:\\ContentOS输出\\2026-09-18" /></label>
-      <p className="muted">如填写，目录必须已存在、可写，并位于 CONTENTOS_OUTPUT_ROOTS 允许范围内；完成后可导出成片。</p>
+      <div className="section-title"><h2>3. 输出位置</h2><span>开始前必须确认</span></div>
+      <label>输出文件夹<input value={outputRoot} onChange={(event) => setOutputRoot(event.target.value)} placeholder="例如：F:\\ContentOS输出\\2026-09-18" required /></label>
+      <p className="muted">目录必须已存在、可写，并位于 CONTENTOS_OUTPUT_ROOTS 允许范围内；完成后可直接导出成片。</p>
     </section>
     <details className="card advanced-settings"><summary>4. 高级设置</summary>
-      <div className="grid"><label>剪辑模板<select defaultValue={mode === 'SCRIPT' ? 'SCRIPT' : 'RANDOM'}><option value="SCRIPT">脚本匹配</option><option value="RANDOM">随机混剪</option></select></label><label>素材选择策略<select value={preferUnusedMedia ? 'RECOMMENDED' : 'RANDOM'} onChange={(event) => setPreferUnusedMedia(event.target.value === 'RECOMMENDED')}><option value="RECOMMENDED">优先较少使用</option><option value="RANDOM">随机</option></select></label><label>镜头最短时长（毫秒）<input type="number" min={500} step={100} value={minClipDurationMs} onChange={(event) => setMinClipDurationMs(Number(event.target.value) || 500)} /></label><label>镜头最长时长（毫秒）<input type="number" min={500} step={100} value={maxClipDurationMs} onChange={(event) => setMaxClipDurationMs(Number(event.target.value) || 500)} /></label><label>可复现种子<input type="number" step={1} value={seed} onChange={(event) => setSeed(Number(event.target.value) || 1)} /></label></div>
+      <div className="grid"><label>剪辑模板<select value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{presets.length === 0 ? <option value="">默认短视频</option> : presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select></label><label>素材选择策略<select value={preferUnusedMedia ? 'RECOMMENDED' : 'RANDOM'} onChange={(event) => setPreferUnusedMedia(event.target.value === 'RECOMMENDED')}><option value="RECOMMENDED">优先较少使用</option><option value="RANDOM">随机</option></select></label><label>镜头最短时长（毫秒）<input type="number" min={500} step={100} value={minClipDurationMs} onChange={(event) => setMinClipDurationMs(Number(event.target.value) || 500)} /></label><label>镜头最长时长（毫秒）<input type="number" min={500} step={100} value={maxClipDurationMs} onChange={(event) => setMaxClipDurationMs(Number(event.target.value) || 500)} /></label><label>可复现种子<input type="number" step={1} value={seed} onChange={(event) => setSeed(Number(event.target.value) || 1)} /></label><label>视频帧率<select value={fps} onChange={(event) => setFps(Number(event.target.value))}><option value={24}>24 fps</option><option value={25}>25 fps</option><option value={30}>30 fps</option><option value={50}>50 fps</option><option value={60}>60 fps</option></select></label>{mode === 'MIX' && <label>每条生成版本数<select value={variants} onChange={(event) => setVariants(Number(event.target.value))}><option value={1}>1</option><option value={3}>3</option><option value={5}>5</option></select></label>}</div>
       <p className="muted">片头、片尾和品牌素材继续沿用现有模板配置，不会混入普通素材候选。</p>
     </details>
     {message && <p className="form-error">{message}</p>}

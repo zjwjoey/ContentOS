@@ -1,20 +1,21 @@
 import { randomUUID } from 'node:crypto';
-import { access, constants, copyFile, realpath, rename, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { access, constants, copyFile, readFile, realpath, rename, stat } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
-import { buildRandomSentenceMontageManifest, buildScriptMontageManifest, segmentScriptSentences } from '../../../packages/modules/video/src/index.js';
-import type { VideoAdjustmentService, VideoService } from '../../../packages/modules/video/src/index.js';
+import { assembleBrandedTimeline, buildRandomSentenceMontageManifest, buildScriptMontageManifest, segmentScriptSentences } from '../../../packages/modules/video/src/index.js';
+import type { VideoAdjustmentService, VideoEditPresetService, VideoService } from '../../../packages/modules/video/src/index.js';
 import type { JobService } from '../../../packages/modules/job/src/index.js';
 import type { AssetCatalogService, LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 
 const itemInput = z.object({ title: z.string().trim().max(200).optional(), script: z.string().trim().min(1).max(100_000), voiceAssetId: z.string().trim().min(1).optional(), voicePath: z.string().trim().min(1).optional() });
-const pairInput = z.object({ textFiles: z.array(z.string().trim().min(1)).max(500), audioFiles: z.array(z.string().trim().min(1)).max(500) });
-const sessionInput = z.object({ mode: z.enum(['SCRIPT', 'MIX']), title: z.string().trim().max(200).optional(), script: z.string().trim().max(100_000).optional(), voicePath: z.string().trim().min(1).optional(), items: z.array(itemInput).min(1).max(100).optional(), testOnly: z.boolean().default(false), sourceRoots: z.array(z.string().trim().min(1)).min(1).max(16), outputRoot: z.string().trim().min(1).optional(), seed: z.number().int().optional(), minClipDurationMs: z.number().int().positive().default(2_000), maxClipDurationMs: z.number().int().positive().default(5_000), preferUnusedMedia: z.boolean().default(true) }).superRefine((value, ctx) => { if (value.mode === 'SCRIPT' && !value.script?.trim() && !value.items?.[0]?.script) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['script'], message: '请输入文案。' }); if (value.mode === 'MIX' && (!value.items || value.items.length === 0)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items'], message: '请至少添加一条文案。' }); if (value.maxClipDurationMs < value.minClipDurationMs) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['maxClipDurationMs'], message: '最长镜头不能短于最短镜头。' }); });
+const pairInput = z.object({ textFiles: z.array(z.string().trim().min(1)).max(500), audioFiles: z.array(z.string().trim().min(1)).max(500), includeContent: z.boolean().default(false) });
+const sessionInput = z.object({ mode: z.enum(['SCRIPT', 'MIX']), title: z.string().trim().max(200).optional(), script: z.string().trim().max(100_000).optional(), voicePath: z.string().trim().min(1).optional(), items: z.array(itemInput).min(1).max(100).optional(), testOnly: z.boolean().default(false), sourceRoots: z.array(z.string().trim().min(1)).min(1).max(16), outputRoot: z.string().trim().min(1).optional(), templateId: z.string().trim().min(1).optional(), seed: z.number().int().optional(), variants: z.number().int().refine((value) => value === 1 || value === 3 || value === 5, '版本数只能是 1、3 或 5。').default(1), fps: z.number().int().min(1).max(120).default(30), minClipDurationMs: z.number().int().positive().default(2_000), maxClipDurationMs: z.number().int().positive().default(5_000), preferUnusedMedia: z.boolean().default(true) }).superRefine((value, ctx) => { if (value.mode === 'SCRIPT' && !value.script?.trim() && !value.items?.[0]?.script) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['script'], message: '请输入文案。' }); if (value.mode === 'MIX' && (!value.items || value.items.length === 0)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items'], message: '请至少添加一条文案。' }); if (!value.outputRoot) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['outputRoot'], message: '请填写输出文件夹。' }); if (value.maxClipDurationMs < value.minClipDurationMs) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['maxClipDurationMs'], message: '最长镜头不能短于最短镜头。' }); });
 
-export interface EditingWorkbenchRouteDependencies { db: Pool; localMedia: LocalMediaSourceService; quickEdit: VideoAdjustmentService; video: VideoService; jobs: JobService; assets: AssetCatalogService; assetService: import('../../../packages/modules/asset/src/index.js').AssetService; storage: LocalStorageProvider; }
+export interface EditingWorkbenchRouteDependencies { db: Pool; localMedia: LocalMediaSourceService; quickEdit: VideoAdjustmentService; video: VideoService; jobs: JobService; assets: AssetCatalogService; assetService: import('../../../packages/modules/asset/src/index.js').AssetService; storage: LocalStorageProvider; presets?: VideoEditPresetService; }
 
 function allowedOutputRoots(): string[] { return (process.env.CONTENTOS_OUTPUT_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean).map((value) => resolve(value)); }
 function contained(root: string, candidate: string): boolean { const normalized = root.endsWith(sep) ? root : `${root}${sep}`; return candidate.toLowerCase() === root.toLowerCase() || candidate.toLowerCase().startsWith(normalized.toLowerCase()); }
@@ -39,6 +40,18 @@ export function pairByBasename(textFiles: string[], audioFiles: string[]): Array
   const audios = new Map(audioFiles.filter((file) => /\.(mp3|wav|m4a|aac)$/iu.test(file)).map((file) => [file.replace(/\.[^.]+$/u, '').toLowerCase(), file]));
   return [...new Set([...texts.keys(), ...audios.keys()])].sort().map((key, index) => ({ ordinal: index + 1, basename: key, textFile: texts.get(key) || null, audioFile: audios.get(key) || null, status: texts.has(key) && audios.has(key) ? 'READY' : texts.has(key) ? 'MISSING_AUDIO' : 'MISSING_TEXT' }));
 }
+async function pairWithContent(textFiles: string[], audioFiles: string[]): Promise<Array<Record<string, unknown>>> {
+  const pairs = pairByBasename(textFiles, audioFiles);
+  return await Promise.all(pairs.map(async (pair) => {
+    if (pair.status !== 'READY' || !pair.textFile || !pair.audioFile) return pair;
+    await assertSafeSourceRoot(pair.textFile);
+    await assertSafeSourceRoot(pair.audioFile);
+    const details = await stat(pair.textFile).catch(() => null);
+    if (!details?.isFile() || details.size > 100_000) throw new Error('EDIT_PAIR_TEXT_INVALID');
+    const script = (await readFile(pair.textFile, 'utf8')).trim();
+    return { ...pair, script, voicePath: pair.audioFile };
+  }));
+}
 function itemTitle(item: { title?: string | undefined; script: string }, ordinal: number): string { return cleanFilePart(item.title?.trim() || item.script.split(/[\r\n。！？!?]/u)[0]?.trim() || `任务${ordinal}`); }
 function publicItem(row: Record<string, unknown>, job?: Record<string, unknown> | null): Record<string, unknown> {
   const state = job?.state || row.state || 'QUEUED';
@@ -47,7 +60,7 @@ function publicItem(row: Record<string, unknown>, job?: Record<string, unknown> 
 
 async function assertSafeSourceRoot(sourceRoot: string): Promise<void> {
   const configured = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean).map((value) => resolve(value));
-  if (configured.length === 0) return;
+  if (configured.length === 0) throw new Error('LOCAL_MEDIA_ROOT_UNAUTHORIZED');
   const candidate = await realpath(resolve(sourceRoot)).catch(() => null);
   if (!candidate) return;
   const authorized = await Promise.all(configured.map(async (root) => { try { return await realpath(root); } catch { return null; } }));
@@ -79,8 +92,11 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
   app.post('/api/v1/edit/pair', async (request, reply) => {
     const parsed = pairInput.safeParse(request.body || {});
     if (!parsed.success) return reply.code(422).send({ error: { code: 'EDIT_PAIR_INVALID', message: '文案和音频文件列表不正确。', details: parsed.error.issues } });
-    return { items: pairByBasename(parsed.data.textFiles, parsed.data.audioFiles) };
+    try { return { items: parsed.data.includeContent ? await pairWithContent(parsed.data.textFiles, parsed.data.audioFiles) : pairByBasename(parsed.data.textFiles, parsed.data.audioFiles) }; }
+    catch (error) { const code = error instanceof Error ? error.message : 'EDIT_PAIR_FAILED'; const message = code === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? '文案或音频文件未被授权，请检查素材根目录配置。' : '文案文件无法读取，请检查路径和文件大小。'; return reply.code(code === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? 403 : 422).send({ error: { code, message, details: [] } }); }
   });
+
+  app.get('/api/v1/edit/presets', async () => ({ items: dependencies.presets ? await dependencies.presets.list() : [] }));
 
   app.post('/api/v1/edit/sessions', async (request, reply) => {
     const parsed = sessionInput.safeParse(request.body || {});
@@ -95,9 +111,13 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
       if (scanned.assets.length === 0) throw new Error('EDIT_NO_VIDEO_ASSETS');
       const batchId = `edit-batch-${randomUUID()}`;
       const title = cleanFilePart(input.title || (input.mode === 'SCRIPT' ? '脚本剪辑' : '批量混剪'));
+      const defaultPreset = input.templateId ? await dependencies.presets?.get(input.templateId) : await dependencies.presets?.getDefault() || null;
+      if (input.templateId && !defaultPreset) throw new Error('EDIT_TEMPLATE_NOT_FOUND');
       const requestedItems = input.mode === 'SCRIPT' ? [{ script: input.script?.trim() || input.items?.[0]?.script || '', title, voiceAssetId: input.items?.[0]?.voiceAssetId, voicePath: input.voicePath || input.items?.[0]?.voicePath }] : (input.items || []);
-      const items = input.testOnly ? requestedItems.slice(0, 1) : requestedItems;
-      await dependencies.db.query('insert into edit_workbench_sessions (id, mode, title, script, source_roots, output_root, settings) values ($1,$2,$3,$4,$5,$6,$7)', [sessionId, input.mode, title, input.script || null, JSON.stringify(scanned.scans.map(({ files: _files, ...scan }) => scan)), outputRoot, { seed: input.seed ?? 1, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, testOnly: input.testOnly, sourceWorkspaceId }]);
+      const variantLabels = ['A', 'B', 'C', 'D', 'E'];
+      const expandedItems = requestedItems.flatMap((item) => Array.from({ length: input.variants }, (_, variantIndex) => ({ ...item, title: input.variants > 1 ? `${item.title?.trim() || title}_${variantLabels[variantIndex]}` : item.title, variantIndex })));
+      const items = input.testOnly ? expandedItems.slice(0, 1) : expandedItems;
+      await dependencies.db.query('insert into edit_workbench_sessions (id, mode, title, script, source_roots, output_root, settings) values ($1,$2,$3,$4,$5,$6,$7)', [sessionId, input.mode, title, input.script || null, JSON.stringify(scanned.scans.map(({ files: _files, ...scan }) => scan)), outputRoot, { seed: input.seed ?? 1, variants: input.variants, fps: input.fps, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, testOnly: input.testOnly, sourceWorkspaceId, requestedItems, ...(input.templateId ? { templateId: input.templateId } : {}) }]);
       await dependencies.db.query('insert into edit_batches (id, session_id, mode, status, total_count) values ($1,$2,$3,$4,$5)', [batchId, sessionId, input.mode, 'RUNNING', items.length]);
       const resultItems: Record<string, unknown>[] = [];
       for (let index = 0; index < items.length; index += 1) {
@@ -119,15 +139,20 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
             planned = buildRandomSentenceMontageManifest({ workspaceId, sentences, assets: scanned.assets, seed: (input.seed ?? 1) + index, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });
           }
         }
+        planned.manifest.canvas.fps = input.fps;
+        if (defaultPreset?.introAssetId || defaultPreset?.outroAssetId) {
+          const branding = { ...(defaultPreset.introAssetId ? { intro: await dependencies.assets.getReadyGlobalVideoAssetContent(defaultPreset.introAssetId).then(async (asset) => { if (!asset) throw new Error('VIDEO_BRANDING_ASSET_INVALID'); await dependencies.assets.attachToWorkspace(workspaceId, asset.id, 'SOURCE'); return { id: asset.id, storageKey: asset.storageKey, sourcePath: dependencies.storage.objectPath(asset.storageKey), durationMs: Number(asset.metadata.durationMs || 0), role: 'INTRO' as const }; }) } : {}), ...(defaultPreset.outroAssetId ? { outro: await dependencies.assets.getReadyGlobalVideoAssetContent(defaultPreset.outroAssetId).then(async (asset) => { if (!asset) throw new Error('VIDEO_BRANDING_ASSET_INVALID'); await dependencies.assets.attachToWorkspace(workspaceId, asset.id, 'SOURCE'); return { id: asset.id, storageKey: asset.storageKey, sourcePath: dependencies.storage.objectPath(asset.storageKey), durationMs: Number(asset.metadata.durationMs || 0), role: 'OUTRO' as const }; }) } : {}) };
+          planned.manifest = assembleBrandedTimeline(planned.manifest, branding);
+        }
         const manifest = await dependencies.quickEdit.createPlannedManifest({ workspaceId, manifest: planned.manifest, createdBy: 'operator' });
         const job = await dependencies.video.createManifestRenderJobForWorkspace(workspaceId, manifest.id);
         await dependencies.db.query('insert into edit_batch_items (id,batch_id,ordinal,title,script,voice_asset_id,workspace_id,manifest_id,job_id,state) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [itemId, batchId, index + 1, itemTitle(item, index + 1), item.script, voiceAssetId || null, workspaceId, manifest.id, job.id, 'QUEUED']);
         resultItems.push({ id: itemId, ordinal: index + 1, title: itemTitle(item, index + 1), script: item.script, state: job.state, jobId: job.id });
       }
-      return reply.code(201).send({ id: sessionId, batchId, mode: input.mode, title, testOnly: input.testOnly, sources: scanned.scans.map(({ files: _files, ...scan }) => scan), outputRoot, items: resultItems });
+      return reply.code(201).send({ id: sessionId, batchId, mode: input.mode, title, testOnly: input.testOnly, variants: input.variants, sources: scanned.scans.map(({ files: _files, ...scan }) => scan), outputRoot, items: resultItems });
     } catch (error) {
       const code = error instanceof Error ? error.message : 'EDIT_SESSION_CREATE_FAILED';
-      const message = code === 'EDIT_OUTPUT_ROOT_UNAUTHORIZED' ? '输出目录未被授权，请配置允许的输出根目录。' : code === 'EDIT_OUTPUT_ROOT_NOT_FOUND' ? '输出目录不存在，请先创建目录。' : code === 'EDIT_OUTPUT_ROOT_NOT_WRITABLE' ? '输出目录不可写，请检查权限。' : code === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? '素材目录未被授权，请检查本地素材根目录配置。' : code === 'EDIT_NO_VIDEO_ASSETS' ? '没有找到可用于剪辑的视频素材。' : '剪辑任务创建失败，请检查路径和素材。';
+      const message = code === 'EDIT_OUTPUT_ROOT_UNAUTHORIZED' ? '输出目录未被授权，请配置允许的输出根目录。' : code === 'EDIT_OUTPUT_ROOT_NOT_FOUND' ? '输出目录不存在，请先创建目录。' : code === 'EDIT_OUTPUT_ROOT_NOT_WRITABLE' ? '输出目录不可写，请检查权限。' : code === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? '素材目录未被授权，请检查本地素材根目录配置。' : code === 'EDIT_NO_VIDEO_ASSETS' ? '没有找到可用于剪辑的视频素材。' : code === 'EDIT_TEMPLATE_NOT_FOUND' ? '剪辑模板不存在，请重新选择。' : '剪辑任务创建失败，请检查路径和素材。';
       return reply.code(code.includes('UNAUTHORIZED') ? 403 : 422).send({ error: { code, message, details: [] } });
     }
   });
@@ -166,6 +191,36 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
   app.get('/api/v1/edit/history', async (_request, reply) => {
     const rows = await dependencies.db.query('select b.id, b.mode, b.status, b.total_count, b.succeeded_count, b.failed_count, b.created_at, s.title, s.output_root from edit_batches b join edit_workbench_sessions s on s.id = b.session_id order by b.created_at desc limit 50');
     return { items: rows.rows.map((row) => ({ id: String(row.id), title: String(row.title), mode: String(row.mode), status: String(row.status), totalCount: Number(row.total_count), succeededCount: Number(row.succeeded_count), failedCount: Number(row.failed_count), createdAt: new Date(String(row.created_at)).toISOString(), outputRoot: row.output_root || null })) };
+  });
+
+  app.get('/api/v1/edit/batches/:batchId/config', async (request, reply) => {
+    const batchId = String((request.params as { batchId: string }).batchId);
+    const row = (await dependencies.db.query('select b.id, b.mode, s.title, s.script, s.source_roots, s.output_root, s.settings from edit_batches b join edit_workbench_sessions s on s.id = b.session_id where b.id = $1', [batchId])).rows[0] as Record<string, unknown> | undefined;
+    if (!row) return reply.code(404).send({ error: { code: 'EDIT_BATCH_NOT_FOUND', message: '剪辑记录不存在。', details: [] } });
+    const settings = row.settings && typeof row.settings === 'object' && !Array.isArray(row.settings) ? row.settings as Record<string, unknown> : {};
+    const requestedItems = Array.isArray(settings.requestedItems) ? settings.requestedItems : [];
+    const sourceRoots = Array.isArray(row.source_roots)
+      ? row.source_roots.map((item) => {
+        if (typeof item !== 'object' || !item || !('path' in item)) return '';
+        return String((item as { path?: unknown }).path || '');
+      }).filter(Boolean)
+      : [];
+    return { id: batchId, mode: String(row.mode), title: String(row.title), script: row.script ? String(row.script) : '', sourceRoots, outputRoot: row.output_root ? String(row.output_root) : '', settings: { minClipDurationMs: Number(settings.minClipDurationMs || 2_000), maxClipDurationMs: Number(settings.maxClipDurationMs || 5_000), seed: Number(settings.seed || 1), variants: Number(settings.variants || 1), fps: Number(settings.fps || 30), preferUnusedMedia: settings.preferUnusedMedia !== false, templateId: typeof settings.templateId === 'string' ? settings.templateId : '' }, items: requestedItems };
+  });
+
+  app.get('/api/v1/edit/batches/:batchId/items/:itemId/output', async (request, reply) => {
+    const { batchId, itemId } = request.params as { batchId: string; itemId: string };
+    const row = (await dependencies.db.query('select i.output_path, s.output_root from edit_batch_items i join edit_batches b on b.id = i.batch_id join edit_workbench_sessions s on s.id = b.session_id where i.id = $1 and i.batch_id = $2 and i.state = \'SUCCEEDED\'', [itemId, batchId])).rows[0] as { output_path?: string; output_root?: string | null } | undefined;
+    if (!row?.output_path || !row.output_root) return reply.code(404).send({ error: { code: 'EDIT_OUTPUT_NOT_FOUND', message: '成片尚未导出。', details: [] } });
+    try {
+      const outputRoot = await authorizeOutputRoot(row.output_root);
+      const target = await realpath(row.output_path);
+      if (!contained(outputRoot, target)) throw new Error('EDIT_OUTPUT_ROOT_UNAUTHORIZED');
+      const details = await stat(target);
+      if (!details.isFile()) throw new Error('EDIT_OUTPUT_NOT_FOUND');
+      reply.header('content-type', 'video/mp4'); reply.header('content-length', details.size); reply.header('accept-ranges', 'bytes');
+      return reply.send(createReadStream(target));
+    } catch { return reply.code(404).send({ error: { code: 'EDIT_OUTPUT_NOT_FOUND', message: '成片文件不可用。', details: [] } }); }
   });
 
   app.post('/api/v1/edit/batches/:batchId/retry', async (request, reply) => {
