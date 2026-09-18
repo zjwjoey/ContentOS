@@ -37,6 +37,7 @@ export async function promoteStagedUpload(stagedPath: string, destination: strin
   const sameVolumePart = `${destination}.${randomUUID()}.part`;
   try {
     await copyFile(stagedPath, sameVolumePart);
+    if (await stat(destination).then(() => true).catch(() => false)) throw new Error('EDIT_UPLOAD_DESTINATION_EXISTS');
     await rename(sameVolumePart, destination);
   } finally {
     await rm(sameVolumePart, { force: true }).catch(() => undefined);
