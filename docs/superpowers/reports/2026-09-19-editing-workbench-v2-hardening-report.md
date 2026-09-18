@@ -3,7 +3,7 @@
 Date: 2026-09-19  
 Branch: `codex/editing-workbench-v2`  
 Baseline: `ace263275dc14b660807d5fb910816a69df5f220e`  
-Implementation commits: `057d3d5`, `e2cad7c`, `4d5b409`, `4525375`, `aacbd77`
+Implementation commits: `057d3d5`, `e2cad7c`, `4d5b409`, `4525375`, `aacbd77`, `ce9b037`, `5f02dea`
 
 ## Implemented
 
@@ -83,16 +83,19 @@ report:
 - Batch detail reports `BATCH_INCOMPLETE` when durable item facts do not match
   the declared total, and the history UI marks test-only runs without exposing
   internal seed or environment names.
+- Export failures have a dedicated retry endpoint and history action; destination
+  reservation is serialized per output root, and staged upload promotion refuses
+  to overwrite an existing destination.
 
 Final local verification on PostgreSQL 16 at `127.0.0.1:55433`:
 
 | Gate | Result |
 | --- | --- |
-| `pnpm test` on a clean public test schema | PASS — 241/241 |
+| `pnpm test` on a clean public test schema | PASS — 243/243 |
 | `pnpm test:migrations` | PASS — 8/8 |
 | `pnpm test:auto-edit-v1` | PASS — 25/25 |
 | `pnpm test:auto-edit-v15` | PASS — 19/19 |
-| `pnpm test:browser` | PASS — 2/2 |
+| `pnpm test:browser` with `CONTENTOS_TEST_ADMIN_DATABASE_URL` on PostgreSQL 16 (`127.0.0.1:55433`) | PASS — 2/2 |
 | `pnpm build` | PASS |
 | `node_modules/.bin/next build` (apps/web) | PASS |
 | `node_modules/.bin/tsx scripts/format-check.ts` | PASS — 410 files |
@@ -101,6 +104,6 @@ Final local verification on PostgreSQL 16 at `127.0.0.1:55433`:
 | `git diff --check` | PASS |
 
 The branch is **GO for merge from the local verification perspective**. The
-latest local hardening commit is `aacbd77`; it is ready to push as
-`origin/codex/editing-workbench-v2`, but it is not merged. Merging remains an
+latest verified HEAD is `5f02dea`, and it is already pushed as
+`origin/codex/editing-workbench-v2`; it is not merged. Merging remains an
 explicit review action.
