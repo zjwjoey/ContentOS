@@ -29,7 +29,7 @@ ContentOS 现在提供独立的 `/edit` 剪辑工作台，包含脚本剪辑、�
 - 新增 `edit_workbench_sessions`、`edit_batches`、`edit_batch_items`、`edit_exports`。
 - `local_media_scans` 支持 `workspace_id`，并保持旧 `project_id` 调用兼容。
 - 复用现有 AssetService、VideoService、Manifest 规划、Job/Worker、FFmpeg、Asset Promotion、Intro/Outro 能力。
-- 本地素材在规划阶段仍经过授权路径校验，不把任意用户路径直接交给渲染器。
+- 本地素材在规划阶段仍经过授权路径校验，不把任意用户路径直接交给渲染器；每个来源目录现在会建立 workspace scan，并把 `scanId`、根目录和统计写入本次来源快照。
 
 ## API 与界面
 
@@ -39,7 +39,8 @@ ContentOS 现在提供独立的 `/edit` 剪辑工作台，包含脚本剪辑、�
 - `POST /api/v1/edit/batches/:batchId/retry`：只重试失败条目。
 - `POST /api/v1/edit/batches/:batchId/export`：安全导出完成项。
 - `GET /api/v1/edit/history`：历史列表。
-- 新增 `/edit`、`/edit/script`、`/edit/mix`、`/edit/history` 页面，并统一使用中文用户文案。
+- `POST /api/v1/edit/sources/scan`：目录输入后的预扫描和可用/不可用统计。
+- 新增 `/edit`、`/edit/script`、`/edit/mix`、`/edit/history` 页面，并统一使用中文用户文案；素材目录离开输入框后自动预扫描，状态和高级设置均在页面内展示。
 
 ## 验证记录
 
@@ -51,6 +52,8 @@ ContentOS 现在提供独立的 `/edit` 剪辑工作台，包含脚本剪辑、�
 - `tests/e2e/operator-ui-v1-browser.test.ts`：PASS
 - `tests/e2e/video-standalone-quick-edit-vertical-slice.test.ts`：PASS（停止 Operator worker 后）
 - 实际 HTTP smoke：`/api/v1/edit/pair` 返回 READY/MISSING_TEXT/MISSING_AUDIO；越权素材目录返回 403。
+- 实际 HTTP smoke：单素材脚本剪辑完成、批次查询返回 SUCCEEDED；配置授权输出目录后导出生成 `001_ExportSmoke.mp4`，重复导出生成 `_2` 文件且不覆盖原文件。
+- 新增工作台 unit：Windows 文件名清洗、序号命名和文案/音频 basename 配对均 PASS（2/2）。
 - Edge 实测：创建项目返回 201，并跳转到项目总控；剪辑工作台四个页面均可打开。
 - `pnpm test`：234/236 PASS。剩余 2 项是共享测试库历史脏数据导致的唯一约束/迁移重放冲突，不是本次代码失败；未擅自清理用户数据库。
 - 默认 5432 迁移测试无法运行，因为本机没有该端口监听；使用 55433 的隔离测试库已通过。
@@ -59,6 +62,6 @@ ContentOS 现在提供独立的 `/edit` 剪辑工作台，包含脚本剪辑、�
 
 - 当前多目录扫描在创建请求中同步执行，尚未把扫描本身拆成可恢复的独立后台 Job。
 - UI 目前接收服务端本地路径文本；未引入 Windows 文件选择器上传协议。
-- 输出导出需要预先配置 `CONTENTOS_OUTPUT_ROOTS`，并由 API 触发；不会自动打开资源管理器。
-- 当前仓库没有可直接用于完整浏览器渲染验收的 mp4 素材，且运行环境未默认配置本地媒体/输出授权根目录，因此已完成页面、授权边界和接口级验收，真实素材渲染需在用户机器配置目录后验证。
+- 输出导出需要预先配置 `CONTENTOS_OUTPUT_ROOTS`，且目录必须已存在并可写；由 API 触发，不会自动打开资源管理器。
+- 当前仓库没有可直接用于完整浏览器渲染验收的 mp4 素材，且默认启动命令未配置本地媒体/输出授权根目录；已用临时 fixture 完成真实接口渲染与导出验收，用户机器需配置授权目录后使用。
 - “生成 1 条测试”会创建单条独立批次，便于先验证素材和渲染链路。
