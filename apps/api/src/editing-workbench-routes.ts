@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { access, constants, copyFile, mkdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
-import { dirname, extname, join, resolve, sep } from 'node:path';
+import { basename, extname, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
@@ -34,17 +34,49 @@ async function authorizeOutputRoot(input: string): Promise<string> {
 }
 export function cleanFilePart(value: string): string { return value.replace(/[\\/:*?"<>|]/gu, '_').replace(/[. ]+$/u, '').trim().slice(0, 120) || '未命名'; }
 export function outputFileStem(title: string, ordinal: number): string { return `${String(ordinal).padStart(3, '0')}_${cleanFilePart(title)}`; }
-export function pairByBasename(textFiles: string[], audioFiles: string[]): Array<{ ordinal: number; basename: string; textFile: string | null; audioFile: string | null; status: 'READY' | 'MISSING_AUDIO' | 'MISSING_TEXT' }> {
-  const texts = new Map(textFiles.filter((file) => /\.(txt|md)$/iu.test(file)).map((file) => [file.replace(/\.[^.]+$/u, '').toLowerCase(), file]));
-  const audios = new Map(audioFiles.filter((file) => /\.(mp3|wav|m4a|aac)$/iu.test(file)).map((file) => [file.replace(/\.[^.]+$/u, '').toLowerCase(), file]));
-  return [...new Set([...texts.keys(), ...audios.keys()])].sort().map((key, index) => ({ ordinal: index + 1, basename: key, textFile: texts.get(key) || null, audioFile: audios.get(key) || null, status: texts.has(key) && audios.has(key) ? 'READY' : texts.has(key) ? 'MISSING_AUDIO' : 'MISSING_TEXT' }));
+export async function promoteStagedUpload(stagedPath: string, destination: string): Promise<void> {
+  const sameVolumePart = `${destination}.${randomUUID()}.part`;
+  try {
+    await copyFile(stagedPath, sameVolumePart);
+    await rename(sameVolumePart, destination);
+  } finally {
+    await rm(sameVolumePart, { force: true }).catch(() => undefined);
+    await rm(stagedPath, { force: true }).catch(() => undefined);
+  }
+}
+type PairStatus = 'READY' | 'MISSING_AUDIO' | 'MISSING_TEXT' | 'DUPLICATE_TEXT_BASENAME' | 'DUPLICATE_AUDIO_BASENAME' | 'DUPLICATE_BASENAME';
+function normalizedPairBasename(file: string): string {
+  const name = basename(file).normalize('NFKC').trim();
+  return name.replace(extname(name), '').trim().toLocaleLowerCase();
+}
+export function pairByBasename(textFiles: string[], audioFiles: string[]): Array<{ ordinal: number; basename: string; textFile: string | null; audioFile: string | null; status: PairStatus }> {
+  const collect = (files: string[], pattern: RegExp) => {
+    const map = new Map<string, string[]>();
+    for (const file of files.filter((candidate) => pattern.test(candidate))) {
+      const key = normalizedPairBasename(file);
+      const values = map.get(key) || [];
+      values.push(file);
+      map.set(key, values);
+    }
+    return map;
+  };
+  const texts = collect(textFiles, /\.(txt|md)$/iu);
+  const audios = collect(audioFiles, /\.(mp3|wav|m4a|aac)$/iu);
+  return [...new Set([...texts.keys(), ...audios.keys()])].sort().map((key, index) => {
+    const text = texts.get(key) || [];
+    const audio = audios.get(key) || [];
+    const duplicateText = text.length > 1;
+    const duplicateAudio = audio.length > 1;
+    const status: PairStatus = duplicateText && duplicateAudio ? 'DUPLICATE_BASENAME' : duplicateText ? 'DUPLICATE_TEXT_BASENAME' : duplicateAudio ? 'DUPLICATE_AUDIO_BASENAME' : text.length && audio.length ? 'READY' : text.length ? 'MISSING_AUDIO' : 'MISSING_TEXT';
+    return { ordinal: index + 1, basename: key, textFile: text[0] || null, audioFile: audio[0] || null, status };
+  });
 }
 async function pairWithContent(textFiles: string[], audioFiles: string[]): Promise<Array<Record<string, unknown>>> {
   const pairs = pairByBasename(textFiles, audioFiles);
   return await Promise.all(pairs.map(async (pair) => {
     if (pair.status !== 'READY' || !pair.textFile || !pair.audioFile) return pair;
-    await assertSafeSourceRoot(pair.textFile);
-    await assertSafeSourceRoot(pair.audioFile);
+    await assertSafeSourceFile(pair.textFile);
+    await assertSafeSourceFile(pair.audioFile);
     const details = await stat(pair.textFile).catch(() => null);
     if (!details?.isFile() || details.size > 100_000) throw new Error('EDIT_PAIR_TEXT_INVALID');
     const script = (await readFile(pair.textFile, 'utf8')).trim();
@@ -57,6 +89,7 @@ function friendlyEditError(error: unknown): string {
   if (code === 'VIDEO_SOURCE_ASSET_INVALID' || code === 'EDIT_NO_VIDEO_ASSETS') return '没有找到可用于剪辑的视频素材。';
   if (code === 'VIDEO_MANIFEST_VOICE_UNAVAILABLE' || code === 'EDIT_VOICE_PATH_UNAUTHORIZED') return '配音文件不可用，请重新选择。';
   if (code === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED') return '素材目录未被授权。';
+  if (code === 'LOCAL_MEDIA_ROOT_NOT_FOUND') return '素材路径不存在或不是文件夹。';
   if (code === 'ENOENT') return '素材文件已不存在。';
   return '这一条任务准备失败，可修改后复制任务重试。';
 }
@@ -69,9 +102,22 @@ async function assertSafeSourceRoot(sourceRoot: string): Promise<void> {
   const configured = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean).map((value) => resolve(value));
   if (configured.length === 0) throw new Error('LOCAL_MEDIA_ROOT_UNAUTHORIZED');
   const candidate = await realpath(resolve(sourceRoot)).catch(() => null);
-  if (!candidate) return;
+  if (!candidate) throw new Error('LOCAL_MEDIA_ROOT_NOT_FOUND');
   const authorized = await Promise.all(configured.map(async (root) => { try { return await realpath(root); } catch { return null; } }));
   if (!authorized.some((root) => root && contained(root, candidate))) throw new Error('LOCAL_MEDIA_ROOT_UNAUTHORIZED');
+  const details = await stat(candidate).catch(() => null);
+  if (!details?.isDirectory()) throw new Error('LOCAL_MEDIA_ROOT_NOT_FOUND');
+}
+
+async function assertSafeSourceFile(sourceFile: string): Promise<void> {
+  const configured = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean).map((value) => resolve(value));
+  if (configured.length === 0) throw new Error('LOCAL_MEDIA_ROOT_UNAUTHORIZED');
+  const candidate = await realpath(resolve(sourceFile)).catch(() => null);
+  if (!candidate) throw new Error('LOCAL_MEDIA_ROOT_NOT_FOUND');
+  const authorized = await Promise.all(configured.map(async (root) => { try { return await realpath(root); } catch { return null; } }));
+  if (!authorized.some((root) => root && contained(root, candidate))) throw new Error('LOCAL_MEDIA_ROOT_UNAUTHORIZED');
+  const details = await stat(candidate).catch(() => null);
+  if (!details?.isFile()) throw new Error('LOCAL_MEDIA_ROOT_NOT_FOUND');
 }
 
 async function scanRoots(localMedia: LocalMediaSourceService, roots: string[], workspaceId?: string) {
@@ -122,7 +168,10 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
       if (!contained(sourceRoot, actualUploadRoot)) throw new Error('LOCAL_MEDIA_ROOT_UNAUTHORIZED');
       staged = await dependencies.storage.stageUpload(part.filename, part.file, dependencies.maxUploadBytes || 500 * 1024 * 1024);
       const destination = join(actualUploadRoot, `${randomUUID()}${extension}`);
-      await rename(staged.tempPath, destination);
+      // The storage staging directory may be on another volume. Copy into a
+      // target-root .part file first, then promote with an atomic same-volume
+      // rename so the final path is safe on Windows and POSIX alike.
+      await promoteStagedUpload(staged.tempPath, destination);
       staged = undefined;
       return reply.code(201).send({ name: part.filename, path: destination });
     } catch (error) {
@@ -152,27 +201,40 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
       const variantLabels = ['A', 'B', 'C', 'D', 'E'];
       const expandedItems = requestedItems.flatMap((item) => Array.from({ length: input.variants }, (_, variantIndex) => ({ ...item, title: input.variants > 1 ? `${item.title?.trim() || title}_${variantLabels[variantIndex]}` : item.title, variantIndex })));
       const items = input.testOnly ? expandedItems.slice(0, 1) : expandedItems;
-      await dependencies.db.query('insert into edit_workbench_sessions (id, mode, title, script, source_roots, output_root, settings) values ($1,$2,$3,$4,$5,$6,$7)', [sessionId, input.mode, title, input.script || null, JSON.stringify(scanned.scans.map(({ files: _files, ...scan }) => scan)), outputRoot, { seed: input.seed ?? 1, variants: input.variants, fps: input.fps, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, testOnly: input.testOnly, sourceWorkspaceId, requestedItems, ...(input.templateId ? { templateId: input.templateId } : {}) }]);
-      await dependencies.db.query('insert into edit_batches (id, session_id, mode, status, total_count) values ($1,$2,$3,$4,$5)', [batchId, sessionId, input.mode, 'RUNNING', items.length]);
+      const durableItems = items.map((item, index) => ({ item, index, itemId: `edit-item-${randomUUID()}`, workspaceId: `workspace-edit-${randomUUID()}`, titleForItem: itemTitle(item, index + 1) }));
+      const transaction = await dependencies.db.connect();
+      try {
+        await transaction.query('begin');
+        await transaction.query('insert into edit_workbench_sessions (id, mode, title, script, source_roots, output_root, settings) values ($1,$2,$3,$4,$5,$6,$7)', [sessionId, input.mode, title, input.script || null, JSON.stringify(scanned.scans.map(({ files: _files, ...scan }) => scan)), outputRoot, { seed: input.seed ?? 1, variants: input.variants, fps: input.fps, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, testOnly: input.testOnly, sourceWorkspaceId, requestedItems, ...(input.templateId ? { templateId: input.templateId } : {}) }]);
+        await transaction.query('insert into edit_batches (id, session_id, mode, status, total_count) values ($1,$2,$3,$4,$5)', [batchId, sessionId, input.mode, 'RUNNING', durableItems.length]);
+        for (const durable of durableItems) {
+          await transaction.query("insert into video_workspaces (id, type, project_id) values ($1, 'STANDALONE', null)", [durable.workspaceId]);
+          await transaction.query('insert into edit_batch_items (id,batch_id,ordinal,title,script,workspace_id,state) values ($1,$2,$3,$4,$5,$6,$7)', [durable.itemId, batchId, durable.index + 1, durable.titleForItem, durable.item.script, durable.workspaceId, 'QUEUED']);
+        }
+        await transaction.query('commit');
+      } catch (error) {
+        await transaction.query('rollback').catch(() => undefined);
+        throw error;
+      } finally { transaction.release(); }
       const resultItems: Record<string, unknown>[] = [];
-      for (let index = 0; index < items.length; index += 1) {
-        const item = items[index]!; const workspaceId = `workspace-edit-${randomUUID()}`; const itemId = `edit-item-${randomUUID()}`; const titleForItem = itemTitle(item, index + 1);
-        await dependencies.db.query("insert into video_workspaces (id, type, project_id) values ($1, 'STANDALONE', null)", [workspaceId]);
+      for (const durable of durableItems) {
+        const { item, index, itemId, workspaceId, titleForItem } = durable;
         try {
+          const stableSeed = (input.seed ?? 1) + ((index + 1) * 100) + Number(item.variantIndex || 0);
           let voiceAssetId = item.voiceAssetId;
           if (!voiceAssetId && item.voicePath) {
-            const voiceFile = resolve(item.voicePath); const authorizedVoiceRoot = dependencies.localMedia.authorizeRoot(dirname(voiceFile)); await access(voiceFile);
-            if (!authorizedVoiceRoot.root) throw new Error('EDIT_VOICE_PATH_UNAUTHORIZED');
+            const voiceFile = resolve(item.voicePath);
+            await assertSafeSourceFile(voiceFile);
             const imported = await dependencies.assetService.importFile({ workspaceId, sourcePath: voiceFile, kind: 'AUDIO', role: 'VOICE' }); voiceAssetId = imported.id;
           }
           const sentences = segmentScriptSentences(item.script);
           let planned;
-          if (input.mode === 'MIX') planned = buildRandomSentenceMontageManifest({ workspaceId, sentences, assets: scanned.assets, seed: (input.seed ?? 1) + index, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });
+          if (input.mode === 'MIX') planned = buildRandomSentenceMontageManifest({ workspaceId, sentences, assets: scanned.assets, seed: stableSeed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });
           else {
-            try { planned = buildScriptMontageManifest({ workspaceId, script: item.script, sentences, assets: scanned.assets, seed: (input.seed ?? 1) + index, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) }); }
+            try { planned = buildScriptMontageManifest({ workspaceId, script: item.script, sentences, assets: scanned.assets, seed: stableSeed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) }); }
             catch (error) {
               if (scanned.assets.length !== 1 || !(error instanceof Error) || !error.message.includes('Adjacent duplicate clips')) throw error;
-              planned = buildRandomSentenceMontageManifest({ workspaceId, sentences, assets: scanned.assets, seed: (input.seed ?? 1) + index, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });
+              planned = buildRandomSentenceMontageManifest({ workspaceId, sentences, assets: scanned.assets, seed: stableSeed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });
             }
           }
           planned.manifest.canvas.fps = input.fps;
@@ -182,14 +244,16 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
           }
           const manifest = await dependencies.quickEdit.createPlannedManifest({ workspaceId, manifest: planned.manifest, createdBy: 'operator' });
           const job = await dependencies.video.createManifestRenderJobForWorkspace(workspaceId, manifest.id);
-          await dependencies.db.query('insert into edit_batch_items (id,batch_id,ordinal,title,script,voice_asset_id,workspace_id,manifest_id,job_id,state) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [itemId, batchId, index + 1, titleForItem, item.script, voiceAssetId || null, workspaceId, manifest.id, job.id, 'QUEUED']);
+          await dependencies.db.query('update edit_batch_items set voice_asset_id=$2,manifest_id=$3,job_id=$4,state=$5,error=null,updated_at=now() where id=$1', [itemId, voiceAssetId || null, manifest.id, job.id, 'QUEUED']);
           resultItems.push({ id: itemId, ordinal: index + 1, title: titleForItem, script: item.script, state: job.state, jobId: job.id });
         } catch (error) {
           const failure = { code: error instanceof Error ? error.message : 'EDIT_ITEM_PREPARE_FAILED', message: friendlyEditError(error) };
-          await dependencies.db.query('insert into edit_batch_items (id,batch_id,ordinal,title,script,workspace_id,state,error) values ($1,$2,$3,$4,$5,$6,$7,$8)', [itemId, batchId, index + 1, titleForItem, item.script, workspaceId, 'FAILED', failure]);
+          await dependencies.db.query('update edit_batch_items set state=$2,error=$3,updated_at=now() where id=$1', [itemId, 'FAILED', failure]);
           resultItems.push({ id: itemId, ordinal: index + 1, title: titleForItem, script: item.script, state: 'FAILED', error: failure });
         }
       }
+      const failedCount = resultItems.filter((item) => item.state === 'FAILED').length;
+      await dependencies.db.query('update edit_batches set status=$2,succeeded_count=0,failed_count=$3,updated_at=now() where id=$1', [batchId, failedCount === 0 ? 'RUNNING' : 'PARTIAL', failedCount]);
       return reply.code(201).send({ id: sessionId, batchId, mode: input.mode, title, testOnly: input.testOnly, variants: input.variants, sources: scanned.scans.map(({ files: _files, ...scan }) => scan), outputRoot, items: resultItems });
     } catch (error) {
       const code = error instanceof Error ? error.message : 'EDIT_SESSION_CREATE_FAILED';
@@ -213,25 +277,32 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
 
   app.get('/api/v1/edit/batches/:batchId', async (request, reply) => {
     const batchId = String((request.params as { batchId: string }).batchId);
+    const pageQuery = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(100) }).safeParse(request.query || {});
+    if (!pageQuery.success) return reply.code(422).send({ error: { code: 'EDIT_BATCH_INVALID', message: '批次分页参数不正确。', details: pageQuery.error.issues } });
     const batch = (await dependencies.db.query('select b.*, s.title, s.mode, s.output_root from edit_batches b join edit_workbench_sessions s on s.id = b.session_id where b.id = $1', [batchId])).rows[0] as Record<string, unknown> | undefined;
     if (!batch) return reply.code(404).send({ error: { code: 'EDIT_BATCH_NOT_FOUND', message: '剪辑记录不存在。', details: [] } });
-    const rows = (await dependencies.db.query('select * from edit_batch_items where batch_id = $1 order by ordinal', [batchId])).rows as Record<string, unknown>[];
+    const offset = (pageQuery.data.page - 1) * pageQuery.data.pageSize;
+    const summary = (await dependencies.db.query("select count(*)::int as total, count(*) filter (where coalesce(j.state, i.state) = 'SUCCEEDED')::int as succeeded, count(*) filter (where coalesce(j.state, i.state) = 'FAILED')::int as failed from edit_batch_items i left join jobs j on j.id = i.job_id where i.batch_id = $1", [batchId])).rows[0] as { total?: number; succeeded?: number; failed?: number } | undefined;
+    const rows = (await dependencies.db.query('select i.*, j.state as job_state, j.result as job_result, j.error as job_error from edit_batch_items i left join jobs j on j.id = i.job_id where i.batch_id = $1 order by i.ordinal limit $2 offset $3', [batchId, pageQuery.data.pageSize, offset])).rows as Record<string, unknown>[];
     const items = await Promise.all(rows.map(async (row) => {
-      const job = row.job_id ? await dependencies.jobs.get(String(row.job_id)) : null;
+      const job = row.job_id ? { state: row.job_state, result: row.job_result, error: row.job_error } : null;
       const result = job?.result && typeof job.result === 'object' ? job.result as { outputAssetId?: string } : {};
       const state = job?.state || row.state || 'QUEUED';
       if (state !== row.state || (result.outputAssetId && result.outputAssetId !== row.output_asset_id)) await dependencies.db.query('update edit_batch_items set state=$2, output_asset_id=coalesce($3, output_asset_id), error=$4, updated_at=now() where id=$1', [row.id, state, result.outputAssetId || null, job?.error || null]);
       return publicItem({ ...row, state, ...(result.outputAssetId ? { output_asset_id: result.outputAssetId } : {}) }, job as unknown as Record<string, unknown> | null);
     }));
-    const states = items.map((item) => String(item.state)); const succeeded = states.filter((state) => state === 'SUCCEEDED').length; const failed = states.filter((state) => state === 'FAILED').length;
-    const status = failed > 0 && succeeded > 0 ? 'PARTIAL' : failed === states.length ? 'FAILED' : succeeded === states.length ? 'SUCCEEDED' : 'RUNNING';
+    const succeeded = Number(summary?.succeeded || 0); const failed = Number(summary?.failed || 0); const total = Number(summary?.total || batch.total_count || 0);
+    const status = failed > 0 && succeeded > 0 ? 'PARTIAL' : total > 0 && failed === total ? 'FAILED' : total > 0 && succeeded === total ? 'SUCCEEDED' : 'RUNNING';
     await dependencies.db.query('update edit_batches set status=$2, succeeded_count=$3, failed_count=$4, updated_at=now() where id=$1', [batchId, status, succeeded, failed]);
-    return { id: batchId, title: String(batch.title), mode: String(batch.mode), status, totalCount: states.length, succeededCount: succeeded, failedCount: failed, outputRoot: batch.output_root || null, items };
+    return { id: batchId, title: String(batch.title), mode: String(batch.mode), status, totalCount: Number(batch.total_count), succeededCount: succeeded, failedCount: failed, page: pageQuery.data.page, pageSize: pageQuery.data.pageSize, items };
   });
 
-  app.get('/api/v1/edit/history', async (_request, reply) => {
-    const rows = await dependencies.db.query('select b.id, b.mode, b.status, b.total_count, b.succeeded_count, b.failed_count, b.created_at, s.title, s.output_root from edit_batches b join edit_workbench_sessions s on s.id = b.session_id order by b.created_at desc limit 50');
-    return { items: rows.rows.map((row) => ({ id: String(row.id), title: String(row.title), mode: String(row.mode), status: String(row.status), totalCount: Number(row.total_count), succeededCount: Number(row.succeeded_count), failedCount: Number(row.failed_count), createdAt: new Date(String(row.created_at)).toISOString(), outputRoot: row.output_root || null })) };
+  app.get('/api/v1/edit/history', async (request, reply) => {
+    const parsed = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }).safeParse(request.query || {});
+    if (!parsed.success) return reply.code(422).send({ error: { code: 'EDIT_HISTORY_INVALID', message: '历史记录分页参数不正确。', details: parsed.error.issues } });
+    const offset = (parsed.data.page - 1) * parsed.data.pageSize;
+    const rows = await dependencies.db.query('select b.id, b.mode, b.status, b.total_count, b.succeeded_count, b.failed_count, b.created_at, s.title, s.output_root from edit_batches b join edit_workbench_sessions s on s.id = b.session_id order by b.created_at desc limit $1 offset $2', [parsed.data.pageSize, offset]);
+    return { page: parsed.data.page, pageSize: parsed.data.pageSize, items: rows.rows.map((row) => ({ id: String(row.id), title: String(row.title), mode: String(row.mode), status: String(row.status), totalCount: Number(row.total_count), succeededCount: Number(row.succeeded_count), failedCount: Number(row.failed_count), createdAt: new Date(String(row.created_at)).toISOString(), outputRoot: row.output_root || null })) };
   });
 
   app.get('/api/v1/edit/batches/:batchId/config', async (request, reply) => {
@@ -266,13 +337,29 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
 
   app.post('/api/v1/edit/batches/:batchId/retry', async (request, reply) => {
     const batchId = String((request.params as { batchId: string }).batchId);
-    const rows = (await dependencies.db.query("select * from edit_batch_items where batch_id = $1 and state = 'FAILED' order by ordinal", [batchId])).rows as Record<string, unknown>[];
+    const client = await dependencies.db.connect();
+    let rows: Record<string, unknown>[] = [];
+    try {
+      await client.query('begin');
+      // Claim rows while holding a row lock. A second operator click sees no
+      // FAILED rows until the first request either completes or releases them.
+      rows = (await client.query("select * from edit_batch_items where batch_id = $1 and state = 'FAILED' order by ordinal for update skip locked", [batchId])).rows as Record<string, unknown>[];
+      for (const row of rows) await client.query("update edit_batch_items set state='RUNNING',updated_at=now() where id=$1 and state='FAILED'", [row.id]);
+      await client.query('commit');
+    } catch (error) { await client.query('rollback').catch(() => undefined); throw error; } finally { client.release(); }
     const retried: Record<string, unknown>[] = [];
     for (const row of rows) {
-      if (!row.manifest_id || !row.workspace_id) continue;
-      const job = await dependencies.video.createManifestRenderJobForWorkspace(String(row.workspace_id), String(row.manifest_id), `retry-${Date.now()}-${randomUUID()}`);
-      await dependencies.db.query('update edit_batch_items set job_id=$2,state=$3,error=null,updated_at=now() where id=$1', [row.id, job.id, 'QUEUED']);
-      retried.push({ id: String(row.id), jobId: job.id, state: job.state });
+      if (!row.manifest_id || !row.workspace_id) {
+        await dependencies.db.query("update edit_batch_items set state='FAILED',updated_at=now() where id=$1 and state='RUNNING'", [row.id]);
+        continue;
+      }
+      try {
+        const job = await dependencies.video.createManifestRenderJobForWorkspace(String(row.workspace_id), String(row.manifest_id), `edit-retry-${String(row.id)}`);
+        await dependencies.db.query('update edit_batch_items set job_id=$2,state=$3,error=null,updated_at=now() where id=$1 and state=$4', [row.id, job.id, 'QUEUED', 'RUNNING']);
+        retried.push({ id: String(row.id), jobId: job.id, state: job.state });
+      } catch (error) {
+        await dependencies.db.query("update edit_batch_items set state='FAILED',error=$2,updated_at=now() where id=$1 and state='RUNNING'", [row.id, { code: 'EDIT_RETRY_FAILED', message: friendlyEditError(error) }]);
+      }
     }
     return reply.code(202).send({ batchId, items: retried });
   });
@@ -295,11 +382,27 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     for (const row of rows) {
       const asset = await dependencies.assets.getReadyWorkspaceAssetContent(String(row.workspace_id), String(row.output_asset_id));
       if (!asset) continue;
-      const stem = outputFileStem(String(row.title), Number(row.ordinal)); let destination = join(outputRoot, `${stem}.mp4`); let suffix = 2;
-      while (true) { try { await access(destination); destination = join(outputRoot, `${stem}_${suffix}.mp4`); suffix += 1; } catch { break; } }
-      const temp = `${destination}.${randomUUID()}.part`; await copyFile(dependencies.storage.objectPath(asset.storageKey), temp); await rename(temp, destination);
-      await dependencies.db.query('insert into edit_exports (id,batch_item_id,asset_id,output_path,status,finished_at) values ($1,$2,$3,$4,$5,now()) on conflict (batch_item_id,output_path) do update set status=excluded.status, finished_at=excluded.finished_at', [`edit-export-${randomUUID()}`, row.id, asset.id, destination, 'SUCCEEDED']);
-      await dependencies.db.query('update edit_batch_items set output_path=$2,updated_at=now() where id=$1', [row.id, destination]); outputs.push(destination);
+      const stem = outputFileStem(String(row.title), Number(row.ordinal)); let destination = join(outputRoot, `${stem}.mp4`); let suffix = 2; let lockPath = `${destination}.lock`;
+      while (true) {
+        if (await stat(destination).then(() => true).catch(() => false)) { destination = join(outputRoot, `${stem}_${suffix}.mp4`); lockPath = `${destination}.lock`; suffix += 1; continue; }
+        try { await mkdir(lockPath); break; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; destination = join(outputRoot, `${stem}_${suffix}.mp4`); lockPath = `${destination}.lock`; suffix += 1; }
+      }
+      const exportId = `edit-export-${randomUUID()}`;
+      const temp = `${destination}.${randomUUID()}.part`;
+      await dependencies.db.query('insert into edit_exports (id,batch_item_id,asset_id,output_path,status) values ($1,$2,$3,$4,$5)', [exportId, row.id, asset.id, destination, 'RUNNING']);
+      try {
+        await copyFile(dependencies.storage.objectPath(asset.storageKey), temp);
+        await rename(temp, destination);
+        await dependencies.db.query('update edit_exports set status=$2,finished_at=now(),error=null where id=$1', [exportId, 'SUCCEEDED']);
+        await dependencies.db.query('update edit_batch_items set output_path=$2,updated_at=now() where id=$1', [row.id, destination]); outputs.push(destination);
+      } catch (error) {
+        await dependencies.db.query('update edit_exports set status=$2,error=$3,finished_at=now() where id=$1', [exportId, 'FAILED', { code: 'EDIT_EXPORT_FAILED', message: friendlyEditError(error) }]).catch(() => undefined);
+        throw error;
+      } finally {
+        await rm(temp, { force: true }).catch(() => undefined);
+        await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+      }
     }
     return { batchId, outputRoot, files: outputs };
   });

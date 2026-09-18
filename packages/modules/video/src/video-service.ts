@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { access } from 'node:fs/promises';
+import { access, realpath, stat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import type { Pool } from 'pg';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
@@ -14,9 +14,13 @@ export interface VideoJobPayload extends Omit<CreateVideoJobInput, 'projectId'> 
 export interface VideoPlanResult { manifestId: string; renderId: string; manifest: ReturnType<typeof buildVideoManifest>; renderStatus: string; outputAssetId: string | null; }
 
 function projectWorkspaceId(projectId: string): string { return `workspace-project-${projectId}`; }
-function authorizedLocalSource(sourcePath: string): boolean {
+async function authorizedLocalSource(sourcePath: string): Promise<boolean> {
   const roots = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((root) => root.trim()).filter(Boolean).map((root) => resolve(root));
-  const candidate = resolve(sourcePath); return roots.some((root) => candidate.toLowerCase() === root.toLowerCase() || candidate.toLowerCase().startsWith(`${root}${sep}`.toLowerCase()));
+  if (!sourcePath || sourcePath.includes('\0') || roots.length === 0) return false;
+  const candidate = await realpath(resolve(sourcePath)).catch(() => null);
+  if (!candidate || !(await stat(candidate).then((details) => details.isFile()).catch(() => false))) return false;
+  const authorized = await Promise.all(roots.map((root) => realpath(root).catch(() => null)));
+  return authorized.some((root) => root && (candidate.toLowerCase() === root.toLowerCase() || candidate.toLowerCase().startsWith(`${root}${sep}`.toLowerCase())));
 }
 
 export class VideoService {
@@ -155,23 +159,22 @@ export class VideoService {
     const projectById = new Map([...projectSources, ...globalSources].map((source) => [source.id, source]));
     if (projectById.size !== projectIds.length) throw new Error('VIDEO_MANIFEST_SOURCE_UNAVAILABLE');
     const localById = new Map<string, { sourcePath: string; durationMs: number }>();
-    const configuredRoots = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((root) => root.trim()).filter(Boolean);
     for (const localId of localIds) {
       const rootId = localId.split(':', 1)[0] || '';
       const result = await this.db.query<{ source_path: string; duration_ms: number; available: boolean }>("select f.source_path, f.duration_ms, f.available from local_media_scan_files f join local_media_scans s on s.id = f.scan_id where s.project_id = $1 and s.source_root_id = $2 and f.file_id = $3 and s.status = 'SUCCEEDED' order by s.scanned_at desc nulls last limit 1", [job.projectId, rootId, localId]);
       const row = result.rows[0];
-      if (!row?.available || !row.source_path || (configuredRoots.length > 0 && !authorizedLocalSource(row.source_path))) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${localId}`);
+      if (!row?.available || !row.source_path || !(await authorizedLocalSource(row.source_path))) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${localId}`);
       try { await access(row.source_path); } catch { throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${localId}`); }
       localById.set(localId, { sourcePath: row.source_path, durationMs: Number(row.duration_ms) });
     }
-    manifest.timeline = manifest.timeline.map((clip) => {
+    manifest.timeline = await Promise.all(manifest.timeline.map(async (clip) => {
       const local = localById.get(clip.assetId);
       const source = local ? null : projectById.get(clip.assetId);
       const duration = local?.durationMs ?? (source ? Number(source.metadata.durationMs) : Number.NaN);
       if (!local && !source) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`);
       if (!Number.isFinite(duration) || clip.sourceInMs + clip.durationMs > duration) throw new Error(`VIDEO_MANIFEST_CLIP_OUT_OF_BOUNDS: ${clip.assetId}`);
       return { ...clip, sourcePath: local ? local.sourcePath : this.storage!.objectPath(source!.storageKey) };
-    });
+    }));
     if (manifest.audio.voiceAssetId) {
       const voice = await this.assets.getReadySourceAsset(job.projectId!, manifest.audio.voiceAssetId, 'AUDIO');
       if (!voice) throw new Error('VIDEO_MANIFEST_VOICE_UNAVAILABLE');
@@ -205,10 +208,10 @@ export class VideoService {
     const sources = await this.assets.listReadyWorkspaceAssets(payload.workspaceId, 'VIDEO');
     const byId = new Map(sources.map((source) => [source.id, source]));
     const manifest = structuredClone(row.manifest);
-    manifest.timeline = manifest.timeline.map((clip) => {
+    manifest.timeline = await Promise.all(manifest.timeline.map(async (clip) => {
       if (clip.assetId.startsWith('local-')) {
         const candidate = clip.sourcePath;
-        if (!authorizedLocalSource(candidate)) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`);
+        if (!(await authorizedLocalSource(candidate))) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`);
         return { ...clip, sourcePath: candidate };
       }
       const source = byId.get(clip.assetId);
@@ -216,7 +219,7 @@ export class VideoService {
       const duration = Number(source.metadata.durationMs);
       if (!Number.isFinite(duration) || clip.sourceInMs + clip.durationMs > duration) throw new Error(`VIDEO_MANIFEST_CLIP_OUT_OF_BOUNDS: ${clip.assetId}`);
       return { ...clip, sourcePath: this.storage!.objectPath(source.storageKey) };
-    });
+    }));
     if (manifest.audio.voiceAssetId) {
       const voice = await this.assets.getReadyWorkspaceAsset(payload.workspaceId, manifest.audio.voiceAssetId, 'AUDIO', 'VOICE');
       if (!voice) throw new Error('VIDEO_MANIFEST_VOICE_UNAVAILABLE');

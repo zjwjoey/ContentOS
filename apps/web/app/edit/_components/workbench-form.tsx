@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 
 type Item = { title: string; script: string; voicePath: string; voiceName?: string };
+type PairRow = { status: string; basename: string; script?: string; voicePath?: string; textFile?: string | null; audioFile?: string | null };
 type RootStatus = { state: 'idle' | 'scanning' | 'ready' | 'error'; available?: number; unavailable?: number; message?: string };
 type Preset = { id: string; name: string; description: string; editModeDefault: 'SCRIPT' | 'RANDOM'; minClipDurationMs: number; maxClipDurationMs: number; preferUnusedMedia: boolean; fps: number };
 
@@ -34,6 +35,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
   const [textFiles, setTextFiles] = useState('');
   const [audioFiles, setAudioFiles] = useState('');
   const [pairing, setPairing] = useState(false);
+  const [pairRows, setPairRows] = useState<PairRow[]>([]);
   const [roots, setRoots] = useState(['']);
   const [rootStatuses, setRootStatuses] = useState<Record<number, RootStatus>>({});
   const [outputRoot, setOutputRoot] = useState('');
@@ -115,11 +117,12 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
     setPairing(true); setMessage('');
     try {
       const response = await fetch('/api/v1/edit/pair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ textFiles: textList, audioFiles: audioList, includeContent: true }) });
-      const data = await response.json() as { items?: Array<{ status: string; basename: string; script?: string; voicePath?: string }>; error?: { message?: string } };
+      const data = await response.json() as { items?: PairRow[]; error?: { message?: string } };
       if (!response.ok) throw new Error(data.error?.message || '文案和音频配对失败。');
+      setPairRows(data.items || []);
       const missing = (data.items || []).filter((item) => item.status !== 'READY');
       setItems((data.items || []).filter((item) => item.status === 'READY' && item.script).map((item) => ({ title: item.basename, script: item.script || '', voicePath: item.voicePath || '' })) || []);
-      setMessage(missing.length ? `已配对 ${((data.items || []).length - missing.length)} 条，另有 ${missing.length} 条缺少对应文件。` : `已自动配对 ${(data.items || []).length} 条任务。`);
+      setMessage(missing.length ? `已载入 ${((data.items || []).length - missing.length)} 条可用任务；${missing.length} 条存在缺失或重复，请处理后再提交。` : `已自动配对 ${(data.items || []).length} 条任务。`);
     } catch (error) { setMessage(error instanceof Error ? error.message : '文案和音频配对失败。'); }
     finally { setPairing(false); }
   };
@@ -188,7 +191,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
           {items.length > 1 && <button type="button" onClick={() => setItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>删除这条</button>}
         </div>)}
         <button type="button" className="secondary-action" onClick={() => setItems((current) => [...current, { title: '', script: '', voicePath: '' }])}>+ 添加一条</button>
-        <details className="batch-pairing"><summary>按文件名自动配对文案和音频</summary><label>文案文件路径（每行一个）<textarea value={textFiles} onChange={(event) => setTextFiles(event.target.value)} placeholder="F:\\文案\\001.txt\nF:\\文案\\002.md" /></label><label>音频文件路径（每行一个）<textarea value={audioFiles} onChange={(event) => setAudioFiles(event.target.value)} placeholder="F:\\音频\\001.mp3\nF:\\音频\\002.wav" /></label><button type="button" className="secondary-action" onClick={() => void pairFiles()} disabled={pairing}>{pairing ? '正在配对…' : '自动配对并载入任务'}</button><p className="muted">相同文件名会自动配对；缺少音频或文案的条目会明确标记，不会悄悄跳过。</p></details>
+        <details className="batch-pairing"><summary>按文件名自动配对文案和音频</summary><label>文案文件路径（每行一个）<textarea value={textFiles} onChange={(event) => setTextFiles(event.target.value)} placeholder="F:\\文案\\001.txt\nF:\\文案\\002.md" /></label><label>音频文件路径（每行一个）<textarea value={audioFiles} onChange={(event) => setAudioFiles(event.target.value)} placeholder="F:\\音频\\001.mp3\nF:\\音频\\002.wav" /></label><button type="button" className="secondary-action" onClick={() => void pairFiles()} disabled={pairing}>{pairing ? '正在配对…' : '自动配对并载入任务'}</button><p className="muted">相同文件名会自动配对；缺少或重复的条目会明确标记，不会悄悄跳过。</p>{pairRows.length > 0 && <ul className="pair-preview">{pairRows.map((row) => <li key={`${row.basename}-${row.status}`}><strong>{row.basename}</strong><span>{row.status === 'READY' ? '✓ 已配对' : row.status === 'MISSING_AUDIO' ? '⚠ 缺少音频' : row.status === 'MISSING_TEXT' ? '⚠ 缺少文案' : `⚠ 重复文件名（${row.status}）`}</span></li>)}</ul>}</details>
         <p className="muted">可按任务逐条填写文案和音频；服务端会校验音频路径，不会悄悄跳过无效文件。</p>
       </>}
     </section>
@@ -205,10 +208,10 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
     <section className="card">
       <div className="section-title"><h2>3. 输出位置</h2><span>开始前必须确认</span></div>
       <label>输出文件夹<input value={outputRoot} onChange={(event) => setOutputRoot(event.target.value)} placeholder="例如：F:\\ContentOS输出\\2026-09-18" required /></label>
-      <p className="muted">目录必须已存在、可写，并位于 CONTENTOS_OUTPUT_ROOTS 允许范围内；完成后可直接导出成片。</p>
+      <p className="muted">目录必须已存在、可写，并位于服务端允许范围内；权限仅作只读校验，完成后可直接导出成片。</p>
     </section>
     <details className="card advanced-settings"><summary>4. 高级设置</summary>
-      <div className="grid"><label>剪辑模板<select value={templateId} onChange={handleTemplateChange}>{presets.length === 0 ? <option value="">默认短视频</option> : presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select></label><label>素材选择策略<select value={preferUnusedMedia ? 'RECOMMENDED' : 'RANDOM'} onChange={(event) => setPreferUnusedMedia(event.target.value === 'RECOMMENDED')}><option value="RECOMMENDED">优先较少使用</option><option value="RANDOM">随机</option></select></label><label>镜头最短时长（毫秒）<input type="number" min={500} step={100} value={minClipDurationMs} onChange={(event) => setMinClipDurationMs(Number(event.target.value) || 500)} /></label><label>镜头最长时长（毫秒）<input type="number" min={500} step={100} value={maxClipDurationMs} onChange={(event) => setMaxClipDurationMs(Number(event.target.value) || 500)} /></label><label>可复现种子<input type="number" step={1} value={seed} onChange={(event) => setSeed(Number(event.target.value) || 1)} /></label><label>视频帧率<select value={fps} onChange={(event) => setFps(Number(event.target.value))}><option value={24}>24 fps</option><option value={25}>25 fps</option><option value={30}>30 fps</option><option value={50}>50 fps</option><option value={60}>60 fps</option></select></label>{mode === 'MIX' && <label>每条生成版本数<select value={variants} onChange={(event) => setVariants(Number(event.target.value))}><option value={1}>1</option><option value={3}>3</option><option value={5}>5</option></select></label>}</div>
+      <div className="grid"><label>剪辑模板<select value={templateId} onChange={handleTemplateChange}>{presets.length === 0 ? <option value="">默认短视频</option> : presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select></label><label>素材选择策略<select value={preferUnusedMedia ? 'RECOMMENDED' : 'RANDOM'} onChange={(event) => setPreferUnusedMedia(event.target.value === 'RECOMMENDED')}><option value="RECOMMENDED">优先较少使用</option><option value="RANDOM">随机</option></select></label><label>镜头最短时长（秒）<input type="number" min={0.5} step={0.5} value={minClipDurationMs / 1000} onChange={(event) => setMinClipDurationMs(Math.round((Number(event.target.value) || 0.5) * 1000))} /></label><label>镜头最长时长（秒）<input type="number" min={0.5} step={0.5} value={maxClipDurationMs / 1000} onChange={(event) => setMaxClipDurationMs(Math.round((Number(event.target.value) || 0.5) * 1000))} /></label><label>视频帧率<select value={fps} onChange={(event) => setFps(Number(event.target.value))}><option value={24}>24 fps</option><option value={25}>25 fps</option><option value={30}>30 fps</option><option value={50}>50 fps</option><option value={60}>60 fps</option></select></label>{mode === 'MIX' && <label>每条生成版本数<select value={variants} onChange={(event) => setVariants(Number(event.target.value))}><option value={1}>1</option><option value={3}>3</option><option value={5}>5</option></select></label>}</div>
       <p className="muted">片头、片尾和品牌素材继续沿用现有模板配置，不会混入普通素材候选。</p>
     </details>
     {message && <p className="form-error">{message}</p>}
