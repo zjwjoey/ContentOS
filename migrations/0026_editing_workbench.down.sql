@@ -3,6 +3,9 @@ drop table if exists edit_batch_items;
 drop table if exists edit_batches;
 drop table if exists edit_workbench_sessions;
 drop index if exists local_media_scans_workspace_idx;
+-- Workspace-only scans cannot be represented after rolling back the
+-- workspace ownership column. Remove their dependent files with the scan.
+delete from local_media_scans where workspace_id is not null;
 alter table local_media_scans drop constraint if exists local_media_scans_owner_check;
 alter table local_media_scans add constraint local_media_scans_project_id_workspace_id_check
   check ((project_id is not null and workspace_id is null) or (project_id is null and workspace_id is not null));
