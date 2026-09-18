@@ -1,6 +1,6 @@
 import { EditModeSelector, type EditMode } from './edit-mode-selector';
 
-export type ScriptPreset = { id: string; name: string; editModeDefault: EditMode; minClipDurationMs: number; maxClipDurationMs: number; preferUnusedMedia: boolean; introAssetId: string | null; outroAssetId: string | null };
+export type ScriptPreset = { id: string; name: string; description: string; editModeDefault: EditMode; minClipDurationMs: number; maxClipDurationMs: number; preferUnusedMedia: boolean; introAssetId: string | null; outroAssetId: string | null };
 export type ScriptInfo = { revision: number };
 
 export function ScriptStep({ preset, presets, mode, scriptSource, script, scriptInfo, scriptCount, describePreset, onPresetChange, onModeChange, onScriptSourceChange, onScriptChange, onNext }: { preset: ScriptPreset | null; presets: ScriptPreset[]; mode: EditMode; scriptSource: 'PROJECT' | 'CUSTOM'; script: string; scriptInfo: ScriptInfo | null; scriptCount: number; describePreset: (preset: ScriptPreset | null) => string; onPresetChange: (preset: ScriptPreset) => void | Promise<void>; onModeChange: (mode: EditMode) => void; onScriptSourceChange: (source: 'PROJECT' | 'CUSTOM') => void; onScriptChange: (value: string) => void; onNext: () => void }) {
