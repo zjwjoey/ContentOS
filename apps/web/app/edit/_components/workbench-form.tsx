@@ -121,10 +121,15 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       if (!response.ok) throw new Error(data.error?.message || '文案和音频配对失败。');
       setPairRows(data.items || []);
       const missing = (data.items || []).filter((item) => item.status !== 'READY');
-      setItems((data.items || []).filter((item) => item.status === 'READY' && item.script).map((item) => ({ title: item.basename, script: item.script || '', voicePath: item.voicePath || '' })) || []);
-      setMessage(missing.length ? `已载入 ${((data.items || []).length - missing.length)} 条可用任务；${missing.length} 条存在缺失或重复，请处理后再提交。` : `已自动配对 ${(data.items || []).length} 条任务。`);
+      setMessage(missing.length ? `已识别 ${((data.items || []).length - missing.length)} 条可配对任务；${missing.length} 条存在缺失或重复。请确认后再载入。` : `已识别 ${(data.items || []).length} 条可配对任务，请确认后载入。`);
     } catch (error) { setMessage(error instanceof Error ? error.message : '文案和音频配对失败。'); }
     finally { setPairing(false); }
+  };
+  const loadReadyPairs = () => {
+    const ready = pairRows.filter((item) => item.status === 'READY' && item.script).map((item) => ({ title: item.basename, script: item.script || '', voicePath: item.voicePath || '' }));
+    if (!ready.length) { setMessage('当前没有可载入的完整配对项。'); return; }
+    setItems(ready);
+    setMessage(`已载入 ${ready.length} 条已确认配对任务。`);
   };
   const uploadAudio = async (file: File, onReady: (path: string, name: string) => void) => {
     setUploadingVoice(true); setMessage('');
@@ -191,7 +196,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
           {items.length > 1 && <button type="button" onClick={() => setItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>删除这条</button>}
         </div>)}
         <button type="button" className="secondary-action" onClick={() => setItems((current) => [...current, { title: '', script: '', voicePath: '' }])}>+ 添加一条</button>
-        <details className="batch-pairing"><summary>按文件名自动配对文案和音频</summary><label>文案文件路径（每行一个）<textarea value={textFiles} onChange={(event) => setTextFiles(event.target.value)} placeholder="F:\\文案\\001.txt\nF:\\文案\\002.md" /></label><label>音频文件路径（每行一个）<textarea value={audioFiles} onChange={(event) => setAudioFiles(event.target.value)} placeholder="F:\\音频\\001.mp3\nF:\\音频\\002.wav" /></label><button type="button" className="secondary-action" onClick={() => void pairFiles()} disabled={pairing}>{pairing ? '正在配对…' : '自动配对并载入任务'}</button><p className="muted">相同文件名会自动配对；缺少或重复的条目会明确标记，不会悄悄跳过。</p>{pairRows.length > 0 && <ul className="pair-preview">{pairRows.map((row) => <li key={`${row.basename}-${row.status}`}><strong>{row.basename}</strong><span>{row.status === 'READY' ? '✓ 已配对' : row.status === 'MISSING_AUDIO' ? '⚠ 缺少音频' : row.status === 'MISSING_TEXT' ? '⚠ 缺少文案' : `⚠ 重复文件名（${row.status}）`}</span></li>)}</ul>}</details>
+        <details className="batch-pairing"><summary>按文件名自动配对文案和音频</summary><label>文案文件路径（每行一个）<textarea value={textFiles} onChange={(event) => setTextFiles(event.target.value)} placeholder="F:\\文案\\001.txt\nF:\\文案\\002.md" /></label><label>音频文件路径（每行一个）<textarea value={audioFiles} onChange={(event) => setAudioFiles(event.target.value)} placeholder="F:\\音频\\001.mp3\nF:\\音频\\002.wav" /></label><button type="button" className="secondary-action" onClick={() => void pairFiles()} disabled={pairing}>{pairing ? '正在配对…' : '检查文件名配对'}</button><p className="muted">相同文件名会自动配对；缺少或重复的条目会明确标记，不会悄悄跳过。</p>{pairRows.length > 0 && <><ul className="pair-preview">{pairRows.map((row) => <li key={`${row.basename}-${row.status}`}><strong>{row.basename}</strong><span>{row.status === 'READY' ? '✓ 已配对' : row.status === 'MISSING_AUDIO' ? '⚠ 缺少音频' : row.status === 'MISSING_TEXT' ? '⚠ 缺少文案' : `⚠ 重复文件名（${row.status}）`}</span></li>)}</ul><button type="button" className="secondary-action" onClick={loadReadyPairs}>仅载入已确认配对项</button></>}</details>
         <p className="muted">可按任务逐条填写文案和音频；服务端会校验音频路径，不会悄悄跳过无效文件。</p>
       </>}
     </section>

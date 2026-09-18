@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { access, constants, copyFile, mkdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
-import { basename, extname, join, resolve, sep } from 'node:path';
+import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
@@ -83,6 +83,10 @@ async function pairWithContent(textFiles: string[], audioFiles: string[]): Promi
   }));
 }
 function itemTitle(item: { title?: string | undefined; script: string }, ordinal: number): string { return cleanFilePart(item.title?.trim() || item.script.split(/[\r\n。！？!?]/u)[0]?.trim() || `任务${ordinal}`); }
+function stableItemSeed(batchId: string, sourceItemOrdinal: number, variantIndex: number, requestedSeed: number): number {
+  const digest = createHash('sha256').update(`${batchId}:${sourceItemOrdinal}:${variantIndex}:${requestedSeed}`).digest('hex');
+  return (Number.parseInt(digest.slice(0, 8), 16) % 2_147_483_646) + 1;
+}
 function friendlyEditError(error: unknown): string {
   const code = error instanceof Error ? error.message : String(error);
   if (code === 'VIDEO_SOURCE_ASSET_INVALID' || code === 'EDIT_NO_VIDEO_ASSETS') return '没有找到可用于剪辑的视频素材。';
@@ -93,8 +97,19 @@ function friendlyEditError(error: unknown): string {
   return '这一条任务准备失败，可修改后复制任务重试。';
 }
 function publicItem(row: Record<string, unknown>, job?: Record<string, unknown> | null): Record<string, unknown> {
-  const state = job?.state || row.state || 'QUEUED';
-  return { id: String(row.id), ordinal: Number(row.ordinal), title: String(row.title), script: String(row.script), state, jobId: row.job_id ? String(row.job_id) : undefined, outputAssetId: row.output_asset_id ? String(row.output_asset_id) : undefined, outputPath: row.output_path ? String(row.output_path) : undefined, error: row.error || job?.error || undefined };
+  const state = row.state || 'QUEUED';
+  return { id: String(row.id), ordinal: Number(row.ordinal), title: String(row.title), script: String(row.script), state, jobId: row.job_id ? String(row.job_id) : undefined, outputAssetId: row.output_asset_id ? String(row.output_asset_id) : undefined, outputPath: row.output_path ? String(row.output_path) : undefined, error: row.error || job?.error || undefined, exportId: row.export_id ? String(row.export_id) : undefined, exportStatus: row.export_status ? String(row.export_status) : undefined, exportError: row.export_error || undefined };
+}
+type EffectiveItemState = 'QUEUED' | 'PREPARING' | 'RENDERING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
+function effectiveItemState(row: Record<string, unknown>, jobState?: unknown): EffectiveItemState {
+  const state = String(jobState || '');
+  if (state === 'SUCCEEDED') return 'SUCCEEDED';
+  if (state === 'FAILED' || state === 'BLOCKED') return 'FAILED';
+  if (state === 'CANCELLED' || state === 'CANCEL_REQUESTED') return 'CANCELLED';
+  if (row.prepare_job_id && !row.job_id) return 'PREPARING';
+  if (row.job_id) return 'RENDERING';
+  const persisted = String(row.state || 'QUEUED');
+  return ['QUEUED', 'PREPARING', 'RENDERING', 'SUCCEEDED', 'FAILED', 'CANCELLED'].includes(persisted) ? persisted as EffectiveItemState : 'QUEUED';
 }
 
 async function assertSafeSourceRoot(sourceRoot: string): Promise<void> {
@@ -211,7 +226,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
         await transaction.query('insert into edit_batches (id, session_id, mode, status, total_count) values ($1,$2,$3,$4,$5)', [batchId, sessionId, input.mode, 'RUNNING', durableItems.length]);
         for (const durable of durableItems) {
           await transaction.query("insert into video_workspaces (id, type, project_id) values ($1, 'STANDALONE', null)", [durable.workspaceId]);
-          await transaction.query('insert into edit_batch_items (id,batch_id,ordinal,source_item_ordinal,variant_index,title,script,voice_asset_id,voice_path,workspace_id,state,settings_snapshot) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [durable.itemId, batchId, durable.index + 1, durable.item.sourceItemOrdinal, durable.item.variantIndex, durable.titleForItem, durable.item.script, durable.item.voiceAssetId || null, durable.item.voicePath || null, durable.workspaceId, 'QUEUED', { seed: (input.seed ?? 1) + ((durable.index + 1) * 100) + Number(durable.item.variantIndex || 0), mode: input.mode, fps: input.fps, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, templateId: input.templateId || null }]);
+          await transaction.query('insert into edit_batch_items (id,batch_id,ordinal,source_item_ordinal,variant_index,title,script,voice_asset_id,voice_path,workspace_id,state,settings_snapshot) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [durable.itemId, batchId, durable.index + 1, durable.item.sourceItemOrdinal, durable.item.variantIndex, durable.titleForItem, durable.item.script, durable.item.voiceAssetId || null, durable.item.voicePath || null, durable.workspaceId, 'QUEUED', { seed: stableItemSeed(batchId, Number(durable.item.sourceItemOrdinal), Number(durable.item.variantIndex), input.seed ?? 1), mode: input.mode, fps: input.fps, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, templateId: input.templateId || null }]);
         }
         await transaction.query('commit');
       } catch (error) {
@@ -250,30 +265,38 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     const batchId = String((request.params as { batchId: string }).batchId);
     const pageQuery = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(100) }).safeParse(request.query || {});
     if (!pageQuery.success) return reply.code(422).send({ error: { code: 'EDIT_BATCH_INVALID', message: '批次分页参数不正确。', details: pageQuery.error.issues } });
-    const batch = (await dependencies.db.query('select b.*, s.title, s.mode, s.output_root from edit_batches b join edit_workbench_sessions s on s.id = b.session_id where b.id = $1', [batchId])).rows[0] as Record<string, unknown> | undefined;
+    const batch = (await dependencies.db.query('select b.*, s.title, s.mode, s.output_root, s.settings from edit_batches b join edit_workbench_sessions s on s.id = b.session_id where b.id = $1', [batchId])).rows[0] as Record<string, unknown> | undefined;
     if (!batch) return reply.code(404).send({ error: { code: 'EDIT_BATCH_NOT_FOUND', message: '剪辑记录不存在。', details: [] } });
     const offset = (pageQuery.data.page - 1) * pageQuery.data.pageSize;
-    const summary = (await dependencies.db.query("select count(*)::int as total, count(*) filter (where coalesce(j.state, i.state) = 'SUCCEEDED')::int as succeeded, count(*) filter (where coalesce(j.state, i.state) = 'FAILED')::int as failed, count(*) filter (where coalesce(j.state, i.state) in ('QUEUED','RUNNING','RETRY_WAIT','CANCEL_REQUESTED','PREPARING','RENDERING'))::int as active from edit_batch_items i left join jobs j on j.id = i.job_id where i.batch_id = $1", [batchId])).rows[0] as { total?: number; succeeded?: number; failed?: number; active?: number } | undefined;
-    const rows = (await dependencies.db.query('select i.*, j.state as job_state, j.result as job_result, j.error as job_error, p.state as prepare_job_state, p.error as prepare_job_error from edit_batch_items i left join jobs j on j.id = i.job_id left join jobs p on p.id = i.prepare_job_id where i.batch_id = $1 order by i.ordinal limit $2 offset $3', [batchId, pageQuery.data.pageSize, offset])).rows as Record<string, unknown>[];
+    const summary = (await dependencies.db.query("select count(*)::int as total, count(*) filter (where (case when j.state = 'SUCCEEDED' then 'SUCCEEDED' when j.state in ('FAILED','BLOCKED') then 'FAILED' when j.state in ('CANCELLED','CANCEL_REQUESTED') then 'CANCELLED' when i.prepare_job_id is not null and i.job_id is null then 'PREPARING' when i.job_id is not null then 'RENDERING' else i.state end) = 'SUCCEEDED')::int as succeeded, count(*) filter (where (case when j.state in ('FAILED','BLOCKED') then 'FAILED' else i.state end) = 'FAILED' or j.state in ('FAILED','BLOCKED'))::int as failed, count(*) filter (where (case when j.state in ('SUCCEEDED','FAILED','BLOCKED','CANCELLED') then j.state when i.prepare_job_id is not null and i.job_id is null then 'PREPARING' when i.job_id is not null then 'RENDERING' else i.state end) in ('QUEUED','RUNNING','RETRY_WAIT','CANCEL_REQUESTED','PREPARING','RENDERING'))::int as active from edit_batch_items i left join jobs j on j.id = coalesce(i.job_id, i.prepare_job_id) where i.batch_id = $1", [batchId])).rows[0] as { total?: number; succeeded?: number; failed?: number; active?: number } | undefined;
+    const rows = (await dependencies.db.query(`select i.*, j.state as job_state, j.result as job_result, j.error as job_error,
+      p.state as prepare_job_state, p.error as prepare_job_error,
+      e.id as export_id, e.status as export_status, e.error as export_error
+      from edit_batch_items i left join jobs j on j.id = i.job_id
+      left join jobs p on p.id = i.prepare_job_id
+      left join lateral (select id, status, error from edit_exports where batch_item_id = i.id order by created_at desc, id desc limit 1) e on true
+      where i.batch_id = $1 order by i.ordinal limit $2 offset $3`, [batchId, pageQuery.data.pageSize, offset])).rows as Record<string, unknown>[];
     const items = await Promise.all(rows.map(async (row) => {
       const job = row.job_id ? { state: row.job_state, result: row.job_result, error: row.job_error } : row.prepare_job_id ? { state: row.prepare_job_state, result: null, error: row.prepare_job_error } : null;
       const result = job?.result && typeof job.result === 'object' ? job.result as { outputAssetId?: string } : {};
-      const state = job?.state || row.state || 'QUEUED';
+      const state = effectiveItemState(row, job?.state);
       if (state !== row.state || (result.outputAssetId && result.outputAssetId !== row.output_asset_id)) await dependencies.db.query('update edit_batch_items set state=$2, output_asset_id=coalesce($3, output_asset_id), error=$4, updated_at=now() where id=$1', [row.id, state, result.outputAssetId || null, job?.error || null]);
       return publicItem({ ...row, state, ...(result.outputAssetId ? { output_asset_id: result.outputAssetId } : {}) }, job as unknown as Record<string, unknown> | null);
     }));
-    const succeeded = Number(summary?.succeeded || 0); const failed = Number(summary?.failed || 0); const active = Number(summary?.active || 0); const total = Number(summary?.total || batch.total_count || 0);
-    const status = active > 0 ? 'RUNNING' : failed > 0 && succeeded > 0 ? 'PARTIAL' : total > 0 && failed === total ? 'FAILED' : total > 0 && succeeded === total ? 'SUCCEEDED' : 'RUNNING';
-    await dependencies.db.query('update edit_batches set status=$2, succeeded_count=$3, failed_count=$4, updated_at=now() where id=$1', [batchId, status, succeeded, failed]);
-    return { id: batchId, title: String(batch.title), mode: String(batch.mode), status, totalCount: Number(batch.total_count), succeededCount: succeeded, failedCount: failed, page: pageQuery.data.page, pageSize: pageQuery.data.pageSize, items };
+    const actualTotal = Number(summary?.total || 0); const expectedTotal = Number(batch.total_count || 0); const succeeded = Number(summary?.succeeded || 0); const failed = Number(summary?.failed || 0); const active = Number(summary?.active || 0); const incomplete = actualTotal !== expectedTotal;
+    const status = incomplete ? 'FAILED' : active > 0 ? 'RUNNING' : failed > 0 && succeeded > 0 ? 'PARTIAL' : expectedTotal > 0 && failed === expectedTotal ? 'FAILED' : expectedTotal > 0 && succeeded === expectedTotal ? 'SUCCEEDED' : 'RUNNING';
+    const reportedFailed = failed + (incomplete && expectedTotal > actualTotal ? expectedTotal - actualTotal : 0);
+    await dependencies.db.query('update edit_batches set status=$2, succeeded_count=$3, failed_count=$4, updated_at=now() where id=$1', [batchId, status, succeeded, reportedFailed]);
+    const settings = batch.settings && typeof batch.settings === 'object' && !Array.isArray(batch.settings) ? batch.settings as Record<string, unknown> : {};
+    return { id: batchId, title: String(batch.title), mode: String(batch.mode), testOnly: settings.testOnly === true, status, totalCount: expectedTotal, actualItemCount: actualTotal, consistency: incomplete ? { code: 'BATCH_INCOMPLETE', expected: expectedTotal, actual: actualTotal } : { code: 'OK', expected: expectedTotal, actual: actualTotal }, succeededCount: succeeded, failedCount: reportedFailed, page: pageQuery.data.page, pageSize: pageQuery.data.pageSize, items };
   });
 
   app.get('/api/v1/edit/history', async (request, reply) => {
     const parsed = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }).safeParse(request.query || {});
     if (!parsed.success) return reply.code(422).send({ error: { code: 'EDIT_HISTORY_INVALID', message: '历史记录分页参数不正确。', details: parsed.error.issues } });
     const offset = (parsed.data.page - 1) * parsed.data.pageSize;
-    const rows = await dependencies.db.query('select b.id, b.mode, b.status, b.total_count, b.succeeded_count, b.failed_count, b.created_at, s.title, s.output_root from edit_batches b join edit_workbench_sessions s on s.id = b.session_id order by b.created_at desc limit $1 offset $2', [parsed.data.pageSize, offset]);
-    return { page: parsed.data.page, pageSize: parsed.data.pageSize, items: rows.rows.map((row) => ({ id: String(row.id), title: String(row.title), mode: String(row.mode), status: String(row.status), totalCount: Number(row.total_count), succeededCount: Number(row.succeeded_count), failedCount: Number(row.failed_count), createdAt: new Date(String(row.created_at)).toISOString(), outputRoot: row.output_root || null })) };
+    const rows = await dependencies.db.query('select b.id, b.mode, b.status, b.total_count, b.succeeded_count, b.failed_count, b.created_at, s.title, s.output_root, s.settings from edit_batches b join edit_workbench_sessions s on s.id = b.session_id order by b.created_at desc limit $1 offset $2', [parsed.data.pageSize, offset]);
+    return { page: parsed.data.page, pageSize: parsed.data.pageSize, items: rows.rows.map((row) => ({ id: String(row.id), title: String(row.title), mode: String(row.mode), status: String(row.status), totalCount: Number(row.total_count), succeededCount: Number(row.succeeded_count), failedCount: Number(row.failed_count), createdAt: new Date(String(row.created_at)).toISOString(), outputRoot: row.output_root || null, testOnly: Boolean(row.settings && typeof row.settings === 'object' && !Array.isArray(row.settings) && (row.settings as Record<string, unknown>).testOnly === true) })) };
   });
 
   app.get('/api/v1/edit/batches/:batchId/config', async (request, reply) => {
@@ -322,7 +345,8 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     for (const row of rows) {
       if (!row.manifest_id || !row.workspace_id) {
         if (!row.workspace_id) continue;
-        const prepareJob = await dependencies.jobs.createIdempotent({ id: `job-${randomUUID()}`, projectId: null, workspaceId: String(row.workspace_id), type: 'EDIT_PREPARE_ITEM', payload: { batchId, itemId: String(row.id), workspaceId: String(row.workspace_id) }, idempotencyKey: `edit-prepare:${String(row.id)}:retry:${Date.now()}`, maxAttempts: 3 });
+        const retryKey = row.prepare_job_id ? `edit-prepare:${String(row.id)}:retry:${String(row.prepare_job_id)}` : `edit-prepare:${String(row.id)}`;
+        const prepareJob = await dependencies.jobs.createIdempotent({ id: `job-${randomUUID()}`, projectId: null, workspaceId: String(row.workspace_id), type: 'EDIT_PREPARE_ITEM', payload: { batchId, itemId: String(row.id), workspaceId: String(row.workspace_id) }, idempotencyKey: retryKey, maxAttempts: 3 });
         await dependencies.db.query("update edit_batch_items set prepare_job_id=$2,state='PREPARING',error=null,updated_at=now() where id=$1 and state='RUNNING'", [row.id, prepareJob.id]);
         retried.push({ id: String(row.id), state: 'PREPARING' });
         continue;
@@ -356,7 +380,9 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     const transaction = await dependencies.db.connect();
     try {
       await transaction.query('begin');
-      await transaction.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:edit-export:${batchId}`]);
+      // Serialize destination reservation per output root, not only per batch.
+      // This closes the TOCTOU window when two batches export concurrently.
+      await transaction.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:edit-export-root:${outputRoot.toLowerCase()}`]);
       for (const row of rows) {
         const asset = await dependencies.assets.getReadyWorkspaceAssetContent(String(row.workspace_id), String(row.output_asset_id));
         if (!asset) continue;
@@ -373,5 +399,41 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     } catch (error) { await transaction.query('rollback').catch(() => undefined); throw error; }
     finally { transaction.release(); }
     return { batchId, outputRoot, files: outputs, status: 'QUEUED' };
+  });
+
+  app.post('/api/v1/edit/exports/:exportId/retry', async (request, reply) => {
+    const exportId = String((request.params as { exportId: string }).exportId);
+    const row = (await dependencies.db.query(`select e.*, i.batch_id, i.workspace_id, s.output_root
+      from edit_exports e join edit_batch_items i on i.id = e.batch_item_id
+      join edit_batches b on b.id = i.batch_id
+      join edit_workbench_sessions s on s.id = b.session_id
+      where e.id = $1`, [exportId])).rows[0] as Record<string, unknown> | undefined;
+    if (!row) return reply.code(404).send({ error: { code: 'EDIT_EXPORT_NOT_FOUND', message: '导出任务不存在。', details: [] } });
+    if (String(row.status) !== 'FAILED') return reply.code(409).send({ error: { code: 'EDIT_EXPORT_NOT_RETRYABLE', message: '当前导出任务不需要重试。', details: [] } });
+    let outputRoot: string;
+    try {
+      outputRoot = await authorizeOutputRoot(String(row.output_root || ''));
+      const destinationParent = await realpath(dirname(String(row.output_path))).catch(() => null);
+      if (!destinationParent || !contained(outputRoot, destinationParent)) throw new Error('EDIT_OUTPUT_ROOT_UNAUTHORIZED');
+      if (await stat(String(row.output_path)).then(() => true).catch(() => false)) throw new Error('EDIT_EXPORT_DESTINATION_EXISTS');
+    } catch (error) {
+      const code = error instanceof Error ? error.message : 'EDIT_EXPORT_RETRY_FAILED';
+      const message = code === 'EDIT_EXPORT_DESTINATION_EXISTS' ? '目标文件已存在，请重新发起导出以生成新文件名。' : '导出目录未被授权或不可用。';
+      return reply.code(code === 'EDIT_EXPORT_DESTINATION_EXISTS' ? 409 : 422).send({ error: { code, message, details: [] } });
+    }
+    const transaction = await dependencies.db.connect();
+    try {
+      await transaction.query('begin');
+      const locked = (await transaction.query('select status, batch_item_id, asset_id, output_path from edit_exports where id=$1 for update', [exportId])).rows[0] as { status: string; batch_item_id: string; asset_id: string; output_path: string } | undefined;
+      if (!locked || locked.status !== 'FAILED') { await transaction.query('rollback'); return reply.code(409).send({ error: { code: 'EDIT_EXPORT_NOT_RETRYABLE', message: '当前导出任务不需要重试。', details: [] } }); }
+      await transaction.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:edit-export-root:${outputRoot.toLowerCase()}`]);
+      const jobId = `job-${randomUUID()}`;
+      const idempotencyKey = `edit-export-retry:${exportId}:${jobId}`;
+      await transaction.query('insert into jobs (id,project_id,workspace_id,type,state,idempotency_key,payload,max_attempts) values ($1,null,$2,$3,$4,$5,$6,$7)', [jobId, String(row.workspace_id), 'EDIT_EXPORT', 'QUEUED', idempotencyKey, { exportId, batchId: String(row.batch_id), batchItemId: String(locked.batch_item_id), workspaceId: String(row.workspace_id), assetId: String(locked.asset_id), outputPath: String(locked.output_path), outputRoot }, 3]);
+      await transaction.query("update edit_exports set status='QUEUED',error=null,finished_at=null,job_id=$2 where id=$1", [exportId, jobId]);
+      await transaction.query('commit');
+      return reply.code(202).send({ exportId, jobId, status: 'QUEUED' });
+    } catch (error) { await transaction.query('rollback').catch(() => undefined); throw error; }
+    finally { transaction.release(); }
   });
 }

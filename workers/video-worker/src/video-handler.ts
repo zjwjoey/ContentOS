@@ -20,9 +20,10 @@ async function authorizedVoicePath(input: string): Promise<string> {
 }
 
 async function authorizedOutputPath(outputPath: string, outputRoot: string): Promise<void> {
+  if (!outputPath || !outputRoot || outputPath.includes('\0') || outputRoot.includes('\0')) throw new Error('EDIT_OUTPUT_ROOT_INVALID');
   const roots = (process.env.CONTENTOS_OUTPUT_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean);
-  const [configured, actualRoot, parent] = await Promise.all([Promise.all(roots.map((root) => realpath(root).catch(() => null))), realpath(outputRoot).catch(() => null), realpath(dirname(outputPath)).catch(() => null)]);
-  if (!actualRoot || !parent || !configured.some((root) => root && (actualRoot.toLowerCase() === root.toLowerCase() || actualRoot.toLowerCase().startsWith(`${root}${sep}`.toLowerCase())))) throw new Error('EDIT_OUTPUT_ROOT_UNAUTHORIZED');
+  const [configured, actualRoot, parent, rootStat] = await Promise.all([Promise.all(roots.map((root) => realpath(root).catch(() => null))), realpath(outputRoot).catch(() => null), realpath(dirname(outputPath)).catch(() => null), stat(outputRoot).catch(() => null)]);
+  if (!actualRoot || !parent || !rootStat?.isDirectory() || !configured.some((root) => root && (actualRoot.toLowerCase() === root.toLowerCase() || actualRoot.toLowerCase().startsWith(`${root}${sep}`.toLowerCase())))) throw new Error('EDIT_OUTPUT_ROOT_UNAUTHORIZED');
   if (!(parent.toLowerCase() === actualRoot.toLowerCase() || parent.toLowerCase().startsWith(`${actualRoot}${sep}`.toLowerCase()))) throw new Error('EDIT_OUTPUT_ROOT_UNAUTHORIZED');
 }
 
@@ -43,7 +44,7 @@ export function createEditPrepareJobHandler(deps: VideoHandlerDeps): (job: JobRe
       const catalog = new AssetCatalogService(deps.db);
       const quickEdit = new VideoAdjustmentService(deps.db, catalog, deps.localMedia);
       const result = await prepareEditingWorkbenchItem({ assetService: deps.assets, assets: catalog, quickEdit, storage: deps.storage, video: deps.video, presets: new VideoEditPresetService(deps.db) }, {
-        mode: String(row.mode) as 'SCRIPT' | 'MIX', workspaceId: payload.workspaceId, script: String(row.script), ...(row.voice_asset_id ? { voiceAssetId: String(row.voice_asset_id) } : {}), ...(voicePath ? { voicePath } : {}), assets: scanAssets as PlannerAsset[], seed: Number(itemSettings.seed || 1), minClipDurationMs: Number(itemSettings.minClipDurationMs || 2_000), maxClipDurationMs: Number(itemSettings.maxClipDurationMs || 5_000), preferUnusedMedia: itemSettings.preferUnusedMedia !== false, fps: Number(itemSettings.fps || 30), ...(typeof itemSettings.templateId === 'string' && itemSettings.templateId ? { templateId: itemSettings.templateId } : {})
+        mode: String(row.mode) as 'SCRIPT' | 'MIX', workspaceId: payload.workspaceId, script: String(row.script), ...(row.voice_asset_id ? { voiceAssetId: String(row.voice_asset_id) } : {}), ...(voicePath ? { voicePath } : {}), assets: scanAssets as PlannerAsset[], seed: Number(itemSettings.seed || 1), minClipDurationMs: Number(itemSettings.minClipDurationMs || 2_000), maxClipDurationMs: Number(itemSettings.maxClipDurationMs || 5_000), preferUnusedMedia: itemSettings.preferUnusedMedia !== false, fps: Number(itemSettings.fps || 30), ...(typeof itemSettings.templateId === 'string' && itemSettings.templateId ? { templateId: itemSettings.templateId } : {}), renderIdempotencySuffix: `edit-item-${payload.itemId}`
       });
       await deps.db.query("update edit_batch_items set voice_asset_id=$2,manifest_id=$3,job_id=$4,state='RENDERING',error=null,updated_at=now() where id=$1", [payload.itemId, result.voiceAssetId || row.voice_asset_id || null, result.manifestId, result.renderJobId]);
       return result;

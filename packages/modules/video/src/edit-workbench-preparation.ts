@@ -29,6 +29,7 @@ export interface EditingWorkbenchPreparationInput {
   preferUnusedMedia: boolean;
   fps: number;
   templateId?: string;
+  renderIdempotencySuffix?: string;
 }
 
 export interface EditingWorkbenchPreparationResult {
@@ -85,6 +86,6 @@ export async function prepareEditingWorkbenchItem(
     planned.manifest = assembleBrandedTimeline(planned.manifest, branding);
   }
   const manifest = await dependencies.quickEdit.createPlannedManifest({ workspaceId: input.workspaceId, manifest: planned.manifest, createdBy: 'operator' });
-  const job = await dependencies.video.createManifestRenderJobForWorkspace(input.workspaceId, manifest.id);
+  const job = await dependencies.video.createManifestRenderJobForWorkspace(input.workspaceId, manifest.id, input.renderIdempotencySuffix);
   return { ...(voiceAssetId ? { voiceAssetId } : {}), manifestId: manifest.id, renderJobId: job.id, renderJobState: job.state };
 }

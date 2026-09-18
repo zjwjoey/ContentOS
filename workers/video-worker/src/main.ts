@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 import { WorkerRuntime } from '../../../packages/shared/src/worker-runtime.js';
 import { JobRunner } from '../../../packages/modules/job/src/index.js';
@@ -54,6 +55,53 @@ class VideoWorkerRuntime extends WorkerRuntime {
   }
 }
 
+/**
+ * Repairs the small crash window between durable item creation and enqueueing
+ * its first job. The item row is the source of truth; a restarted worker can
+ * safely recreate the idempotent prepare job without losing the batch.
+ */
+async function recoverEditWorkbenchItems(options: VideoWorkerOptions, limit: number): Promise<void> {
+  const client = await options.db.connect();
+  try {
+    await client.query('begin');
+    const rows = (await client.query(`select i.id, i.batch_id, i.workspace_id, i.prepare_job_id, p.state as prepare_state
+      from edit_batch_items i left join jobs p on p.id = i.prepare_job_id
+      where i.job_id is null and i.manifest_id is null and (i.prepare_job_id is null or p.state in ('FAILED','CANCELLED'))
+        and i.state in ('QUEUED','PREPARING','RUNNING')
+      order by i.created_at, i.id
+      for update of i skip locked limit $1`, [Math.max(1, limit)])).rows as Array<{ id: string; batch_id: string; workspace_id: string; prepare_job_id?: string; prepare_state?: string }>;
+    for (const row of rows) {
+      const job = (await client.query(`insert into jobs (id,project_id,workspace_id,type,state,idempotency_key,payload,max_attempts)
+        values ($1,null,$2,'EDIT_PREPARE_ITEM','QUEUED',$3,$4,3)
+        on conflict (idempotency_key) do update set id=jobs.id
+        returning id`, [`job-${randomUUID()}`, row.workspace_id, row.prepare_job_id ? `edit-prepare:${row.id}:retry:${row.prepare_job_id}` : `edit-prepare:${row.id}`, { batchId: row.batch_id, itemId: row.id, workspaceId: row.workspace_id }])).rows[0] as { id: string };
+      await client.query("update edit_batch_items set prepare_job_id=$2,state='PREPARING',updated_at=now() where id=$1 and job_id is null", [row.id, job.id]);
+    }
+    await client.query('commit');
+  } catch (error) { await client.query('rollback').catch(() => undefined); throw error; }
+  finally { client.release(); }
+
+  const prepared = (await options.db.query(`select i.id, p.result->>'manifestId' as manifest_id, p.result->>'renderJobId' as job_id
+    from edit_batch_items i join jobs p on p.id = i.prepare_job_id
+    where i.job_id is null and i.manifest_id is null and p.state='SUCCEEDED'
+      and p.result->>'manifestId' is not null and p.result->>'renderJobId' is not null
+    order by i.updated_at, i.id limit $1`, [Math.max(1, limit)])).rows as Array<{ id: string; manifest_id: string; job_id: string }>;
+  for (const row of prepared) await options.db.query("update edit_batch_items set manifest_id=$2,job_id=$3,state='RENDERING',updated_at=now() where id=$1 and job_id is null", [row.id, row.manifest_id, row.job_id]);
+
+  const orphaned = (await options.db.query(`select id, workspace_id, manifest_id
+    from edit_batch_items
+    where manifest_id is not null and job_id is null and state in ('RUNNING','RENDERING')
+    order by updated_at, id limit $1`, [Math.max(1, limit)])).rows as Array<{ id: string; workspace_id: string; manifest_id: string }>;
+  for (const row of orphaned) {
+    try {
+      const job = await options.video.createManifestRenderJobForWorkspace(row.workspace_id, row.manifest_id, `edit-item-${row.id}`);
+      await options.db.query("update edit_batch_items set job_id=$2,state='RENDERING',updated_at=now() where id=$1 and job_id is null", [row.id, job.id]);
+    } catch (error) {
+      await options.db.query("update edit_batch_items set error=$2,updated_at=now() where id=$1 and job_id is null", [row.id, { code: 'EDIT_RENDER_RECOVERY_FAILED', message: error instanceof Error ? error.message : '渲染任务恢复失败' }]).catch(() => undefined);
+    }
+  }
+}
+
 export function createVideoWorker(options?: VideoWorkerOptions): WorkerRuntime {
   if (!options) {
     const runtime = new WorkerRuntime('video-worker');
@@ -92,7 +140,8 @@ export function createVideoWorker(options?: VideoWorkerOptions): WorkerRuntime {
     const runnable = await options.jobs.listRunnable(['VIDEO_RENDER', 'LOCAL_MEDIA_SCAN', 'EDIT_PREPARE_ITEM', 'EDIT_EXPORT'], concurrency);
     await Promise.all(runnable.map((job) => runner.run(job.id, job.type === 'LOCAL_MEDIA_SCAN' ? localMediaHandler : job.type === 'EDIT_PREPARE_ITEM' ? prepareHandler : job.type === 'EDIT_EXPORT' ? exportHandler : handler)));
   };
-  const runtime = new VideoWorkerRuntime(options.workerId || 'video-worker', () => options.jobs.reconcileExpiredLeases(new Date(), recoverCancellation), consume, reconcileIntervalMs, pollIntervalMs);
+  const reconcile = async (): Promise<void> => { await options.jobs.reconcileExpiredLeases(new Date(), recoverCancellation); await recoverEditWorkbenchItems(options, concurrency * 4); };
+  const runtime = new VideoWorkerRuntime(options.workerId || 'video-worker', reconcile, consume, reconcileIntervalMs, pollIntervalMs);
   runtime.register('video.render', async (payload) => {
     const jobId = payload && typeof payload === 'object' ? (payload as { jobId?: unknown }).jobId : undefined;
     if (typeof jobId !== 'string' || !jobId) throw new Error('Video delivery requires jobId');
