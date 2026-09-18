@@ -62,14 +62,14 @@ export class VideoService {
     catch (error) { if ((error as { code?: string }).code === '23505') { const existing = await this.jobs.getByIdempotencyKey(idempotencyKey); if (existing) return existing; } throw error; }
   }
 
-  async createManifestRenderJobForWorkspace(workspaceId: string, manifestId: string): Promise<JobRecord> {
+  async createManifestRenderJobForWorkspace(workspaceId: string, manifestId: string, idempotencySuffix?: string): Promise<JobRecord> {
     const result = await this.db.query<{ revision: number; workspace_id: string; manifest: EditManifestV0; manifest_digest: string | null }>('select revision, workspace_id, manifest, manifest_digest from edit_manifests where id = $1 and workspace_id = $2', [manifestId, workspaceId]);
     const row = result.rows[0];
     if (!row) throw new Error('VIDEO_MANIFEST_NOT_FOUND');
     const manifestDigest = digestEditManifest(row.manifest);
     if (row.manifest_digest && row.manifest_digest !== manifestDigest) throw new Error('VIDEO_MANIFEST_DIGEST_CONFLICT');
     if (!row.manifest_digest) await this.db.query('update edit_manifests set manifest_digest = $2 where id = $1 and manifest_digest is null', [manifestId, manifestDigest]);
-    const idempotencyKey = `video-render:workspace:${workspaceId}:${manifestId}:v${Number(row.revision)}`;
+    const idempotencyKey = `video-render:workspace:${workspaceId}:${manifestId}:v${Number(row.revision)}${idempotencySuffix ? `:${idempotencySuffix}` : ''}`;
     try { return await this.jobs.create({ id: `job-${randomUUID()}`, projectId: null, workspaceId, type: 'VIDEO_RENDER', payload: { workspaceId, manifestId, manifestRevision: Number(row.revision), manifestDigest } as VideoJobPayload, idempotencyKey, maxAttempts: 3 }); }
     catch (error) { if ((error as { code?: string }).code === '23505') { const existing = await this.jobs.getByIdempotencyKey(idempotencyKey); if (existing) return existing; } throw error; }
   }
@@ -206,6 +206,11 @@ export class VideoService {
     const byId = new Map(sources.map((source) => [source.id, source]));
     const manifest = structuredClone(row.manifest);
     manifest.timeline = manifest.timeline.map((clip) => {
+      if (clip.assetId.startsWith('local-')) {
+        const candidate = clip.sourcePath;
+        if (!authorizedLocalSource(candidate)) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`);
+        return { ...clip, sourcePath: candidate };
+      }
       const source = byId.get(clip.assetId);
       if (!source) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`);
       const duration = Number(source.metadata.durationMs);

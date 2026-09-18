@@ -54,7 +54,7 @@ export default function HomePage() {
   };
 
   return <main className="shell">
-    <header><p className="eyebrow">ContentOS / Operator</p><h1>内容项目</h1><p className="muted">从项目总控查看 Director、Video、Approval 和 Publisher 的整体进度。</p><nav className="module-nav"><Link href="/video/quick-edit">快速剪辑</Link></nav></header>
+    <header><p className="eyebrow">ContentOS / Operator</p><h1>内容项目</h1><p className="muted">从项目总控查看 Director、Video、Approval 和 Publisher 的整体进度。快速剪辑（兼容入口）已迁移到独立剪辑工作台。</p><nav className="module-nav"><Link href="/edit">进入独立剪辑工作台</Link></nav></header>
     <section className="card">
       <div className="section-title"><h2>创建项目</h2><span>Operator</span></div>
       <form className="project-create" onSubmit={createProject}>

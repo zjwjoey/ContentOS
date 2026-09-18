@@ -27,6 +27,7 @@ import { registerReviewAnalyticsRoutes } from './review-analytics-routes.js';
 import { BenchmarkService } from '../../../packages/modules/benchmark/src/index.js';
 import { registerBenchmarkRoutes } from './benchmark-routes.js';
 import { readAIProviderConfig } from '../../../packages/modules/ai/src/index.js';
+import { registerEditingWorkbenchRoutes } from './editing-workbench-routes.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { access } from 'node:fs/promises';
@@ -77,6 +78,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerDashboardRoutes(app, { projects, center: projectCenter });
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
   registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, assetService, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes, localMedia, presets });
+  registerEditingWorkbenchRoutes(app, { db, localMedia, quickEdit, video, jobs, assets, assetService, storage });
   registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs, allowFakePublisherControls: runtime.allowFakePublisherControls === true, ...(runtime.allowFakePublisherControls ? { fakeSimulations: new FakePublisherSimulationService(db) } : {}) });
   registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher, director: directorV1 });
   app.get('/health', async () => ({ status: 'ok' }));
