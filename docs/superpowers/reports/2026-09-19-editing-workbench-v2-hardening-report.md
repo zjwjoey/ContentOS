@@ -3,7 +3,7 @@
 Date: 2026-09-19  
 Branch: `codex/editing-workbench-v2`  
 Baseline: `ace263275dc14b660807d5fb910816a69df5f220e`  
-Implementation commit: `057d3d5`
+Implementation commits: `057d3d5`, `e2cad7c`
 
 ## Implemented
 
@@ -77,6 +77,12 @@ report:
   the new item/job fields and state constraints.
 - `test:browser` now includes both Auto Edit V1 and Editing Workbench browser
   suites by default.
+- Worker reconciliation now repairs prepare/render crash windows, and retry
+  idempotency keys advance from the failed job id so repeated retries create a
+  fresh attempt while duplicate clicks remain safe.
+- Batch detail reports `BATCH_INCOMPLETE` when durable item facts do not match
+  the declared total, and the history UI marks test-only runs without exposing
+  internal seed or environment names.
 
 Final local verification on PostgreSQL 16 at `127.0.0.1:55433`:
 
@@ -88,12 +94,13 @@ Final local verification on PostgreSQL 16 at `127.0.0.1:55433`:
 | `pnpm test:auto-edit-v15` | PASS — 19/19 |
 | `pnpm test:browser` | PASS — 2/2 |
 | `pnpm build` | PASS |
-| `pnpm --filter @contentos/web exec next build` | PASS |
-| `pnpm format` | PASS — 329 files |
-| `pnpm lint` | PASS — 136 TypeScript files |
+| `node_modules/.bin/next build` (apps/web) | PASS |
+| `node_modules/.bin/tsx scripts/format-check.ts` | PASS — 410 files |
+| `node_modules/.bin/tsx scripts/lint.ts` | PASS — 147 TypeScript files |
 | `pnpm doctor` | PASS with one PATH warning for the global pnpm bin directory |
 | `git diff --check` | PASS |
 
-The branch is **GO for merge from the local verification perspective**. It is
-pushed as `origin/codex/editing-workbench-v2` at the implementation/report
-commits above, but it is not merged; merging remains an explicit review action.
+The branch is **GO for merge from the local verification perspective**. The
+latest local hardening commit is `e2cad7c`; it is ready to push as
+`origin/codex/editing-workbench-v2`, but it is not merged. Merging remains an
+explicit review action.
