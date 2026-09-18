@@ -34,6 +34,7 @@ ContentOS 现在提供独立的 `/edit` 剪辑工作台，包含脚本剪辑、�
 ## API 与界面
 
 - `POST /api/v1/edit/pair`：按 basename 配对文案与音频，并明确报告缺失项。
+- `POST /api/v1/edit/uploads/audio`：把浏览器选择的音频安全写入已授权本地素材根目录，再沿用现有 Asset 导入链路。
 - `POST /api/v1/edit/sessions`：创建脚本/混剪批次，支持多个目录、来源去重、测试单条。
 - `GET /api/v1/edit/batches/:batchId`：汇总逐条任务状态。
 - `POST /api/v1/edit/batches/:batchId/retry`：只重试失败条目。
@@ -42,6 +43,7 @@ ContentOS 现在提供独立的 `/edit` 剪辑工作台，包含脚本剪辑、�
 - `POST /api/v1/edit/sources/scan`：目录输入后的预扫描和可用/不可用统计。
 - 新增 `/edit`、`/edit/script`、`/edit/mix`、`/edit/history` 页面，并统一使用中文用户文案；素材目录离开输入框后自动预扫描，状态和高级设置均在页面内展示。批量页支持按文件 basename 自动配对文案/音频、1/3/5 个确定性版本、模板选择、帧率选择和“满意，开始全部混剪”复制入口。
 - 历史记录支持复制任务、成片预览（导出后）和复制输出路径；服务端提供配置读取和受授权输出文件流，不会暴露任意路径。
+- 失败项在准备阶段也会落入批次，显示可读错误；渲染失败项可单独重试，完成后再次导出全部成功项。
 
 ## 验证记录
 
@@ -55,15 +57,17 @@ ContentOS 现在提供独立的 `/edit` 剪辑工作台，包含脚本剪辑、�
 - 实际 HTTP smoke：`/api/v1/edit/pair` 返回 READY/MISSING_TEXT/MISSING_AUDIO；越权素材目录返回 403。
 - 实际 HTTP smoke：单素材脚本剪辑完成、批次查询返回 SUCCEEDED；配置授权输出目录后导出生成 `001_ExportSmoke.mp4`，重复导出生成 `_2` 文件且不覆盖原文件。
 - 新增工作台 unit：Windows 文件名清洗、序号命名和文案/音频 basename 配对均 PASS（2/2）。
+- 新增隔离浏览器验收：脚本剪辑（上传音频、双素材目录、输出与预览）、批量混剪（复制 3 条、全量导出）及一条渲染失败后的单项重试均 PASS（1/1）。
 - Edge 实测：创建项目返回 201，并跳转到项目总控；剪辑工作台四个页面均可打开。
 - `pnpm test`：236/238 PASS。剩余 2 项是共享测试库历史脏数据导致的 `ai_runs_operation_check` 迁移重放冲突和 `assets_source_checksum_key` 重复数据，不是本次代码失败；迁移兼容性问题已修复，未擅自清理用户数据库。
 - 默认 5432 迁移测试无法运行，因为本机没有该端口监听；使用 55433 的隔离测试库已通过。
 - `pnpm --dir apps/web build`：PASS（含 `/edit/history`、`/edit/script`、`/edit/mix` 的静态预渲染）。
+- `pnpm doctor`：PASS（仅提示 pnpm 全局 bin 不在 PATH）。
 
 ## 已知限制
 
 - 当前多目录扫描在创建请求中同步执行，尚未把扫描本身拆成可恢复的独立后台 Job。
-- UI 目前接收服务端本地路径文本；未引入 Windows 文件选择器上传协议。
+- 音频已支持浏览器选择/上传；素材视频仍通过授权目录输入，未引入 Windows 文件选择器上传协议。
 - 输出目录现在是独立工作台创建任务的必填 preflight；仍需预先配置 `CONTENTOS_OUTPUT_ROOTS`，且目录必须已存在并可写；由 API 触发，不会自动打开资源管理器。
 - 独立工作台严格要求 `CONTENTOS_LOCAL_MEDIA_ROOTS` 已配置；未授权或未配置时不会扫描任意服务器路径。
 - 当前仓库没有可直接用于完整浏览器渲染验收的 mp4 素材，且默认启动命令未配置本地媒体/输出授权根目录；已用临时 fixture 完成真实接口渲染与导出验收，用户机器需配置授权目录后使用。

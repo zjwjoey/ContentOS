@@ -78,7 +78,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerDashboardRoutes(app, { projects, center: projectCenter });
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
   registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, assetService, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes, localMedia, presets });
-  registerEditingWorkbenchRoutes(app, { db, localMedia, quickEdit, video, jobs, assets, assetService, storage, presets });
+  registerEditingWorkbenchRoutes(app, { db, localMedia, quickEdit, video, jobs, assets, assetService, storage, maxUploadBytes: uploadMaxBytes, presets });
   registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs, allowFakePublisherControls: runtime.allowFakePublisherControls === true, ...(runtime.allowFakePublisherControls ? { fakeSimulations: new FakePublisherSimulationService(db) } : {}) });
   registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher, director: directorV1 });
   app.get('/health', async () => ({ status: 'ok' }));

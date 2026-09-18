@@ -2,11 +2,18 @@
 
 import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 
-type Item = { title: string; script: string; voicePath: string };
+type Item = { title: string; script: string; voicePath: string; voiceName?: string };
 type RootStatus = { state: 'idle' | 'scanning' | 'ready' | 'error'; available?: number; unavailable?: number; message?: string };
 type Preset = { id: string; name: string; description: string; editModeDefault: 'SCRIPT' | 'RANDOM'; minClipDurationMs: number; maxClipDurationMs: number; preferUnusedMedia: boolean; fps: number };
+
+function applyPresetValues(preset: Preset, setters: { setMinClipDurationMs: (value: number) => void; setMaxClipDurationMs: (value: number) => void; setPreferUnusedMedia: (value: boolean) => void; setFps: (value: number) => void }): void {
+  setters.setMinClipDurationMs(preset.minClipDurationMs);
+  setters.setMaxClipDurationMs(preset.maxClipDurationMs);
+  setters.setPreferUnusedMedia(preset.preferUnusedMedia);
+  setters.setFps(preset.fps);
+}
 
 function statusText(status: RootStatus | undefined): string {
   if (!status || status.state === 'idle') return '离开输入框后自动扫描';
@@ -22,6 +29,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
   const [title, setTitle] = useState('');
   const [script, setScript] = useState('');
   const [voicePath, setVoicePath] = useState('');
+  const [voiceName, setVoiceName] = useState('');
   const [items, setItems] = useState<Item[]>([{ title: '', script: '', voicePath: '' }]);
   const [textFiles, setTextFiles] = useState('');
   const [audioFiles, setAudioFiles] = useState('');
@@ -38,6 +46,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
   const [templateId, setTemplateId] = useState('');
   const [preferUnusedMedia, setPreferUnusedMedia] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [uploadingVoice, setUploadingVoice] = useState(false);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
@@ -56,7 +65,12 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
   }, [mode]);
 
   useEffect(() => {
-    void fetch('/api/v1/edit/presets').then(async (response) => response.ok ? await response.json() as { items: Preset[] } : { items: [] }).then((data) => { setPresets(data.items); if (!templateId && data.items[0]) setTemplateId(data.items[0].id); }).catch(() => setPresets([]));
+    void fetch('/api/v1/edit/presets').then(async (response) => response.ok ? await response.json() as { items: Preset[] } : { items: [] }).then((data) => {
+      setPresets(data.items);
+      let savedTemplate = '';
+      try { savedTemplate = (JSON.parse(window.localStorage.getItem(`contentos-edit-settings-${mode}`) || '{}') as { templateId?: string }).templateId || ''; } catch { /* ignore malformed local preferences */ }
+      if (!savedTemplate && data.items[0]) { setTemplateId(data.items[0].id); applyPresetValues(data.items[0], { setMinClipDurationMs, setMaxClipDurationMs, setPreferUnusedMedia, setFps }); }
+    }).catch(() => setPresets([]));
   }, [mode]);
 
   useEffect(() => {
@@ -66,7 +80,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       return await response.json() as { mode: 'SCRIPT' | 'MIX'; title: string; script: string; sourceRoots: string[]; outputRoot: string; settings: { minClipDurationMs: number; maxClipDurationMs: number; seed: number; variants: number; fps: number; preferUnusedMedia: boolean; templateId?: string }; items: Item[] };
     }).then((config) => {
       if (config.mode !== mode) return;
-      setTitle(`${config.title}（副本）`); setScript(config.script || ''); setRoots(config.sourceRoots.length ? config.sourceRoots : ['']); setOutputRoot(config.outputRoot || ''); setMinClipDurationMs(config.settings.minClipDurationMs); setMaxClipDurationMs(config.settings.maxClipDurationMs); setSeed(config.settings.seed); setVariants(config.settings.variants === 3 || config.settings.variants === 5 ? config.settings.variants : 1); setFps(config.settings.fps); setPreferUnusedMedia(config.settings.preferUnusedMedia); if (config.settings.templateId) setTemplateId(config.settings.templateId); if (mode === 'MIX' && config.items.length) setItems(config.items.map((item) => ({ title: item.title, script: item.script, voicePath: item.voicePath || '' })));
+      setTitle(`${config.title}（副本）`); setScript(config.script || ''); setRoots(config.sourceRoots.length ? config.sourceRoots : ['']); setOutputRoot(config.outputRoot || ''); setMinClipDurationMs(config.settings.minClipDurationMs); setMaxClipDurationMs(config.settings.maxClipDurationMs); setSeed(config.settings.seed); setVariants(config.settings.variants === 3 || config.settings.variants === 5 ? config.settings.variants : 1); setFps(config.settings.fps); setPreferUnusedMedia(config.settings.preferUnusedMedia); if (config.settings.templateId) setTemplateId(config.settings.templateId); if (mode === 'MIX' && config.items.length) setItems(config.items.map((item) => ({ title: item.title, script: item.script, voicePath: item.voicePath || '', ...(item.voicePath ? { voiceName: item.voicePath.split(/[\\/]/u).pop() } : {}) })));
     }).catch((error) => setMessage(error instanceof Error ? error.message : '历史任务配置暂时无法读取。'));
   }, [copyId, mode]);
 
@@ -109,6 +123,22 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
     } catch (error) { setMessage(error instanceof Error ? error.message : '文案和音频配对失败。'); }
     finally { setPairing(false); }
   };
+  const uploadAudio = async (file: File, onReady: (path: string, name: string) => void) => {
+    setUploadingVoice(true); setMessage('');
+    try {
+      const body = new FormData(); body.append('file', file);
+      const response = await fetch('/api/v1/edit/uploads/audio', { method: 'POST', body });
+      const data = await response.json() as { path?: string; name?: string; error?: { message?: string } };
+      if (!response.ok || !data.path) throw new Error(data.error?.message || '音频上传失败，请检查文件后重试。');
+      onReady(data.path, data.name || file.name);
+    } catch (error) { setMessage(error instanceof Error ? error.message : '音频上传失败，请检查文件后重试。'); }
+    finally { setUploadingVoice(false); }
+  };
+  const handleTemplateChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    const nextId = event.target.value; setTemplateId(nextId);
+    const preset = presets.find((item) => item.id === nextId);
+    if (preset) applyPresetValues(preset, { setMinClipDurationMs, setMaxClipDurationMs, setPreferUnusedMedia, setFps });
+  };
   const submit = async (event?: FormEvent, forceTest = false) => {
     event?.preventDefault(); setBusy(true); setMessage('');
     try {
@@ -118,7 +148,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
         ...(title.trim() ? { title: title.trim() } : {}),
         script: mode === 'SCRIPT' ? script : undefined,
         ...(mode === 'SCRIPT' && voicePath.trim() ? { voicePath: voicePath.trim() } : {}),
-        items: mode === 'MIX' ? items.filter((item) => item.script.trim()).map((item) => ({ title: item.title.trim() || undefined, script: item.script.trim(), ...(item.voicePath.trim() ? { voicePath: item.voicePath.trim() } : {}) })) : undefined,
+        items: mode === 'MIX' ? items.filter((item) => (item.script || '').trim()).map((item) => ({ title: (item.title || '').trim() || undefined, script: (item.script || '').trim(), ...((item.voicePath || '').trim() ? { voicePath: (item.voicePath || '').trim() } : {}) })) : undefined,
         testOnly: mode === 'MIX' && forceTest,
         sourceRoots: roots.map((root) => root.trim()).filter(Boolean),
         ...(outputRoot.trim() ? { outputRoot: outputRoot.trim() } : {}),
@@ -144,13 +174,17 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       <label>任务名称（可选）<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={mode === 'MIX' ? '例如：门店宣传混剪' : '例如：Action 研究视频'} /></label>
       {mode === 'SCRIPT' ? <>
         <label>输入视频文案<textarea value={script} onChange={(event) => setScript(event.target.value)} placeholder="把要表达的内容粘贴到这里……" required /></label>
-        <label>配音文件路径（可选）<input value={voicePath} onChange={(event) => setVoicePath(event.target.value)} placeholder="例如：F:\\音频\\旁白.mp3" /></label>
-        <p className="muted">支持服务端授权目录中的 mp3、wav、m4a 或 aac 音频；未填写时会按文案时长剪辑。</p>
+        <label>配音文件（可选）<span className="upload-control">选择/上传音频<input aria-label="脚本配音文件" type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAudio(file, (path, name) => { setVoicePath(path); setVoiceName(name); }); event.target.value = ''; }} disabled={uploadingVoice} /></span></label>
+        {voiceName && <p className="selected-file">已选择：{voiceName}</p>}
+        <label className="path-fallback">本地音频路径（可选）<input value={voicePath} onChange={(event) => { setVoicePath(event.target.value); setVoiceName(event.target.value.split(/[\\/]/u).pop() || ''); }} placeholder="也可以填写服务端授权目录中的路径" /></label>
+        <p className="muted">支持上传 mp3、wav、m4a、aac、flac 或 ogg；未填写时会按文案时长剪辑。</p>
       </> : <>
         {items.map((item, index) => <div className="batch-row" key={index}>
           <label>任务 {index + 1} 标题<input value={item.title} onChange={(event) => updateItem(index, { title: event.target.value })} placeholder="可选" /></label>
           <label>文案<textarea value={item.script} onChange={(event) => updateItem(index, { script: event.target.value })} placeholder="输入这一条视频的文案" required /></label>
-          <label>配音路径<input value={item.voicePath} onChange={(event) => updateItem(index, { voicePath: event.target.value })} placeholder="可选：F:\\音频\\001.mp3" /></label>
+          <label>配音文件（可选）<span className="upload-control">选择/上传音频<input aria-label={`任务 ${index + 1} 配音文件`} type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAudio(file, (path, name) => updateItem(index, { voicePath: path, voiceName: name })); event.target.value = ''; }} disabled={uploadingVoice} /></span></label>
+          {item.voiceName && <p className="selected-file">已选择：{item.voiceName}</p>}
+          <label className="path-fallback">本地音频路径（可选）<input value={item.voicePath} onChange={(event) => updateItem(index, { voicePath: event.target.value, voiceName: event.target.value.split(/[\\/]/u).pop() || '' })} placeholder="也可以填写服务端授权目录中的路径" /></label>
           {items.length > 1 && <button type="button" onClick={() => setItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>删除这条</button>}
         </div>)}
         <button type="button" className="secondary-action" onClick={() => setItems((current) => [...current, { title: '', script: '', voicePath: '' }])}>+ 添加一条</button>
@@ -174,7 +208,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       <p className="muted">目录必须已存在、可写，并位于 CONTENTOS_OUTPUT_ROOTS 允许范围内；完成后可直接导出成片。</p>
     </section>
     <details className="card advanced-settings"><summary>4. 高级设置</summary>
-      <div className="grid"><label>剪辑模板<select value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{presets.length === 0 ? <option value="">默认短视频</option> : presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select></label><label>素材选择策略<select value={preferUnusedMedia ? 'RECOMMENDED' : 'RANDOM'} onChange={(event) => setPreferUnusedMedia(event.target.value === 'RECOMMENDED')}><option value="RECOMMENDED">优先较少使用</option><option value="RANDOM">随机</option></select></label><label>镜头最短时长（毫秒）<input type="number" min={500} step={100} value={minClipDurationMs} onChange={(event) => setMinClipDurationMs(Number(event.target.value) || 500)} /></label><label>镜头最长时长（毫秒）<input type="number" min={500} step={100} value={maxClipDurationMs} onChange={(event) => setMaxClipDurationMs(Number(event.target.value) || 500)} /></label><label>可复现种子<input type="number" step={1} value={seed} onChange={(event) => setSeed(Number(event.target.value) || 1)} /></label><label>视频帧率<select value={fps} onChange={(event) => setFps(Number(event.target.value))}><option value={24}>24 fps</option><option value={25}>25 fps</option><option value={30}>30 fps</option><option value={50}>50 fps</option><option value={60}>60 fps</option></select></label>{mode === 'MIX' && <label>每条生成版本数<select value={variants} onChange={(event) => setVariants(Number(event.target.value))}><option value={1}>1</option><option value={3}>3</option><option value={5}>5</option></select></label>}</div>
+      <div className="grid"><label>剪辑模板<select value={templateId} onChange={handleTemplateChange}>{presets.length === 0 ? <option value="">默认短视频</option> : presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select></label><label>素材选择策略<select value={preferUnusedMedia ? 'RECOMMENDED' : 'RANDOM'} onChange={(event) => setPreferUnusedMedia(event.target.value === 'RECOMMENDED')}><option value="RECOMMENDED">优先较少使用</option><option value="RANDOM">随机</option></select></label><label>镜头最短时长（毫秒）<input type="number" min={500} step={100} value={minClipDurationMs} onChange={(event) => setMinClipDurationMs(Number(event.target.value) || 500)} /></label><label>镜头最长时长（毫秒）<input type="number" min={500} step={100} value={maxClipDurationMs} onChange={(event) => setMaxClipDurationMs(Number(event.target.value) || 500)} /></label><label>可复现种子<input type="number" step={1} value={seed} onChange={(event) => setSeed(Number(event.target.value) || 1)} /></label><label>视频帧率<select value={fps} onChange={(event) => setFps(Number(event.target.value))}><option value={24}>24 fps</option><option value={25}>25 fps</option><option value={30}>30 fps</option><option value={50}>50 fps</option><option value={60}>60 fps</option></select></label>{mode === 'MIX' && <label>每条生成版本数<select value={variants} onChange={(event) => setVariants(Number(event.target.value))}><option value={1}>1</option><option value={3}>3</option><option value={5}>5</option></select></label>}</div>
       <p className="muted">片头、片尾和品牌素材继续沿用现有模板配置，不会混入普通素材候选。</p>
     </details>
     {message && <p className="form-error">{message}</p>}

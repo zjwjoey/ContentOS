@@ -137,6 +137,7 @@ async function main(): Promise<void> {
       CONTENTOS_API_URL: apiUrl,
       CONTENTOS_FAKE_PUBLISHER_CONTROLS: '1',
       CONTENTOS_LOCAL_MEDIA_ROOTS: temporaryRoot,
+      CONTENTOS_OUTPUT_ROOTS: temporaryRoot,
     };
     operator = spawnPnpm(['dev:operator'], environment);
     await waitForHealth(apiUrl);
