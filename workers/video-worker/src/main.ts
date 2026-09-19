@@ -100,6 +100,20 @@ async function recoverEditWorkbenchItems(options: VideoWorkerOptions, limit: num
       await options.db.query("update edit_batch_items set error=$2,updated_at=now() where id=$1 and job_id is null", [row.id, { code: 'EDIT_RENDER_RECOVERY_FAILED', message: error instanceof Error ? error.message : '渲染任务恢复失败' }]).catch(() => undefined);
     }
   }
+
+  const retrying = (await options.db.query(`select i.id, i.workspace_id, i.manifest_id, i.job_id
+    from edit_batch_items i join jobs j on j.id = i.job_id
+    where i.manifest_id is not null and i.job_id is not null and i.state = 'RUNNING'
+      and j.state in ('FAILED','BLOCKED')
+    order by i.updated_at, i.id limit $1`, [Math.max(1, limit)])).rows as Array<{ id: string; workspace_id: string; manifest_id: string; job_id: string }>;
+  for (const row of retrying) {
+    try {
+      const job = await options.video.createManifestRenderJobForWorkspace(row.workspace_id, row.manifest_id, `edit-retry:${row.id}:${row.job_id}`);
+      await options.db.query("update edit_batch_items set job_id=$2,state='RENDERING',error=null,updated_at=now() where id=$1 and state='RUNNING' and job_id=$3", [row.id, job.id, row.job_id]);
+    } catch (error) {
+      await options.db.query("update edit_batch_items set state='FAILED',error=$2,updated_at=now() where id=$1 and state='RUNNING' and job_id=$3", [row.id, { code: 'EDIT_RENDER_RECOVERY_FAILED', message: error instanceof Error ? error.message : '渲染任务恢复失败' }, row.job_id]).catch(() => undefined);
+    }
+  }
 }
 
 export function createVideoWorker(options?: VideoWorkerOptions): WorkerRuntime {

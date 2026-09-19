@@ -9,6 +9,23 @@ import { renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/
 
 export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; localMedia?: LocalMediaSourceService; }
 
+async function syncEditBatch(db: Pool, batchId: string): Promise<void> {
+  const row = (await db.query<{ expected: number; actual: number; succeeded: number; failed: number; active: number }>(`select b.total_count as expected, count(i.id)::int as actual,
+    count(*) filter (where i.state='SUCCEEDED')::int as succeeded,
+    count(*) filter (where i.state='FAILED')::int as failed,
+    count(*) filter (where i.state in ('QUEUED','PREPARING','RENDERING','RUNNING'))::int as active
+    from edit_batches b left join edit_batch_items i on i.batch_id=b.id where b.id=$1 group by b.total_count`, [batchId])).rows[0];
+  if (!row) return;
+  const incomplete = Number(row.actual) !== Number(row.expected);
+  const status = incomplete ? 'FAILED' : Number(row.active) > 0 ? 'RUNNING' : Number(row.failed) > 0 && Number(row.succeeded) > 0 ? 'PARTIAL' : Number(row.expected) > 0 && Number(row.failed) === Number(row.expected) ? 'FAILED' : Number(row.expected) > 0 && Number(row.succeeded) === Number(row.expected) ? 'SUCCEEDED' : 'RUNNING';
+  await db.query('update edit_batches set status=$2,succeeded_count=$3,failed_count=$4,updated_at=now() where id=$1', [batchId, status, row.succeeded, Number(row.failed) + (incomplete && Number(row.expected) > Number(row.actual) ? Number(row.expected) - Number(row.actual) : 0)]);
+}
+
+async function syncEditBatchForItem(db: Pool, itemId: string): Promise<void> {
+  const row = (await db.query<{ batch_id: string }>('select batch_id from edit_batch_items where id=$1', [itemId])).rows[0];
+  if (row) await syncEditBatch(db, row.batch_id);
+}
+
 async function authorizedVoicePath(input: string): Promise<string> {
   const roots = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean);
   const candidate = await realpath(input).catch(() => null);
@@ -47,11 +64,13 @@ export function createEditPrepareJobHandler(deps: VideoHandlerDeps): (job: JobRe
         mode: String(row.mode) as 'SCRIPT' | 'MIX', workspaceId: payload.workspaceId, script: String(row.script), ...(row.voice_asset_id ? { voiceAssetId: String(row.voice_asset_id) } : {}), ...(voicePath ? { voicePath } : {}), assets: scanAssets as PlannerAsset[], seed: Number(itemSettings.seed || 1), minClipDurationMs: Number(itemSettings.minClipDurationMs || 2_000), maxClipDurationMs: Number(itemSettings.maxClipDurationMs || 5_000), preferUnusedMedia: itemSettings.preferUnusedMedia !== false, fps: Number(itemSettings.fps || 30), ...(typeof itemSettings.templateId === 'string' && itemSettings.templateId ? { templateId: itemSettings.templateId } : {}), renderIdempotencySuffix: `edit-item-${payload.itemId}`
       });
       await deps.db.query("update edit_batch_items set voice_asset_id=$2,manifest_id=$3,job_id=$4,state='RENDERING',error=null,updated_at=now() where id=$1", [payload.itemId, result.voiceAssetId || row.voice_asset_id || null, result.manifestId, result.renderJobId]);
+      await syncEditBatchForItem(deps.db, payload.itemId);
       return result;
     } catch (error) {
       const failure = { code: error instanceof Error ? error.message : 'EDIT_ITEM_PREPARE_FAILED', message: error instanceof Error ? error.message : '编辑任务准备失败' };
       const terminal = job.attemptCount >= job.maxAttempts;
       await deps.db.query(`update edit_batch_items set state=$2,error=$3,updated_at=now() where id=$1`, [payload.itemId, terminal ? 'FAILED' : 'PREPARING', failure]);
+      await syncEditBatchForItem(deps.db, payload.itemId);
       throw error;
     }
   };
@@ -119,6 +138,17 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
         const outputAsset = await deps.assets.commitPrepared(outputInput, preparedOutput, scope);
         const completed = await deps.video.completeRender(planned.renderId, scope, outputAsset.id, { durationMs: rendered.durationMs, width: rendered.width, height: rendered.height, format: rendered.format, outputAssetId: outputAsset.id });
         if (!completed) throw Object.assign(new Error('Current Job attempt could not complete its Render'), { code: 'RENDER_FENCE_REJECTED', retryable: true });
+        const item = await scope.query<{ id: string; batch_id: string }>("update edit_batch_items set state='SUCCEEDED',output_asset_id=$2,error=null,updated_at=now() where job_id=$1 returning id,batch_id", [job.id, outputAsset.id]);
+        if (item.rows[0]) {
+          const batch = item.rows[0].batch_id;
+          const counts = await scope.query<{ expected: number; actual: number; succeeded: number; failed: number; active: number }>(`select b.total_count as expected, count(i.id)::int as actual, count(*) filter (where i.state='SUCCEEDED')::int as succeeded, count(*) filter (where i.state='FAILED')::int as failed, count(*) filter (where i.state in ('QUEUED','PREPARING','RENDERING','RUNNING'))::int as active from edit_batches b left join edit_batch_items i on i.batch_id=b.id where b.id=$1 group by b.total_count`, [batch]);
+          const summary = counts.rows[0];
+          if (summary) {
+            const incomplete = Number(summary.actual) !== Number(summary.expected);
+            const status = incomplete ? 'FAILED' : Number(summary.active) > 0 ? 'RUNNING' : Number(summary.failed) > 0 && Number(summary.succeeded) > 0 ? 'PARTIAL' : Number(summary.expected) > 0 && Number(summary.failed) === Number(summary.expected) ? 'FAILED' : 'SUCCEEDED';
+            await scope.query('update edit_batches set status=$2,succeeded_count=$3,failed_count=$4,updated_at=now() where id=$1', [batch, status, summary.succeeded, Number(summary.failed) + (incomplete && Number(summary.expected) > Number(summary.actual) ? Number(summary.expected) - Number(summary.actual) : 0)]);
+          }
+        }
         return { manifestId: planned.manifestId, renderId: planned.renderId, outputAssetId: outputAsset.id, diagnostics: rendered };
       });
       if (finalized.executed) {
@@ -138,7 +168,18 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
         const cancelled = await deps.jobs.cancelAttempt(job.id, attemptId, async (scope) => { await deps.video.cancelRender(planned.renderId, scope, diagnostics); });
         if (cancelled.state === 'CANCELLED') throw error;
       }
-      await deps.jobs.fail(job.id, attemptId, diagnostics, true, async (scope) => { await deps.video.failRender(planned.renderId, scope, diagnostics); });
+      const failedJob = await deps.jobs.fail(job.id, attemptId, diagnostics, true, async (scope) => {
+        await deps.video.failRender(planned.renderId, scope, diagnostics);
+        if (job.attemptCount >= job.maxAttempts) {
+          const item = await scope.query<{ id: string; batch_id: string }>("update edit_batch_items set state='FAILED',error=$2,updated_at=now() where job_id=$1 returning id,batch_id", [job.id, diagnostics]);
+          if (item.rows[0]) {
+            const counts = await scope.query<{ expected: number; actual: number; succeeded: number; failed: number; active: number }>(`select b.total_count as expected, count(i.id)::int as actual, count(*) filter (where i.state='SUCCEEDED')::int as succeeded, count(*) filter (where i.state='FAILED')::int as failed, count(*) filter (where i.state in ('QUEUED','PREPARING','RENDERING','RUNNING'))::int as active from edit_batches b left join edit_batch_items i on i.batch_id=b.id where b.id=$1 group by b.total_count`, [item.rows[0].batch_id]);
+            const summary = counts.rows[0];
+            if (summary) await scope.query('update edit_batches set status=$2,succeeded_count=$3,failed_count=$4,updated_at=now() where id=$1', [item.rows[0].batch_id, Number(summary.active) > 0 ? 'RUNNING' : Number(summary.failed) > 0 && Number(summary.succeeded) > 0 ? 'PARTIAL' : 'FAILED', summary.succeeded, summary.failed]);
+          }
+        }
+      });
+      void failedJob;
       throw error;
     } finally { await rm(outputPath, { force: true }); }
   };

@@ -107,3 +107,19 @@ The branch is **GO for merge from the local verification perspective**. The
 latest verified HEAD is `56c1190`, and it is already pushed as
 `origin/codex/editing-workbench-v2`; it is not merged. Merging remains an
 explicit review action.
+
+## Final merge-blocker review
+
+| Finding | Status | Evidence |
+| --- | --- | --- |
+| Render retry generations and duplicate-click idempotency | FIXED / VERIFIED | Retry suffix includes the previous failed job id; worker recovery repairs the post-commit crash window. |
+| Prepare terminal failure summary | FIXED / VERIFIED | Item failure is written by the worker and batch aggregation reports zero active items. |
+| Render worker write-side item completion | FIXED / VERIFIED | VIDEO_RENDER success/final failure updates the linked editing item and batch in the attempt transaction. |
+| GET batch read-only behavior | FIXED / VERIFIED | Normal GET no longer updates item or batch rows. |
+| Migration 0027 down with live states | FIXED / VERIFIED | PREPARING/RENDERING normalize to RUNNING before the legacy constraint; migration test covers down/up. |
+| Variant output grouping | FIXED / VERIFIED | Output uses source ordinal plus A/B/C suffix; unit coverage added. |
+| Batch detail pagination and export polling | FIXED / VERIFIED | UI requests page/pageSize and waits on aggregate export counts with no queued exports. |
+
+Local-media scan snapshot reuse remains a follow-up, and the separate hybrid
+local/Pexels script-editing V1 feature is intentionally developed on its own
+feature branch.

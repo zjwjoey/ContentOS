@@ -3,12 +3,27 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cleanFilePart, outputFileStem, pairByBasename, promoteStagedUpload } from '../../apps/api/src/editing-workbench-routes.js';
+import { cleanFilePart, outputFileStem, pairByBasename, promoteStagedUpload, renderRetryIdempotencySuffix } from '../../apps/api/src/editing-workbench-routes.js';
 
 test('editing workbench cleans Windows filename characters and preserves ordinal naming', () => {
   assert.equal(cleanFilePart('Action: 欧洲/门店?.mp4'), 'Action_ 欧洲_门店_.mp4');
   assert.equal(outputFileStem('门店宣传', 3), '003_门店宣传');
   assert.equal(cleanFilePart('...'), '未命名');
+});
+
+test('editing workbench groups variant output names by source ordinal', () => {
+  assert.deepEqual([0, 1, 2].map((variant) => outputFileStem('标题', 1, variant, 3)), ['001_标题_A', '001_标题_B', '001_标题_C']);
+  assert.deepEqual([0, 1, 2].map((variant) => outputFileStem('标题', 2, variant, 3)), ['002_标题_A', '002_标题_B', '002_标题_C']);
+  assert.equal(outputFileStem('标题_A', 1, 0, 1), '001_标题_A');
+  assert.equal(outputFileStem('标题_A', 1, 0, 3), '001_标题_A');
+});
+
+test('editing workbench advances render retry generation by previous failed job', () => {
+  const first = renderRetryIdempotencySuffix('item-1', 'job-original');
+  const duplicate = renderRetryIdempotencySuffix('item-1', 'job-original');
+  const second = renderRetryIdempotencySuffix('item-1', 'job-retry-1');
+  assert.equal(first, duplicate);
+  assert.notEqual(first, second);
 });
 
 test('editing workbench pairs text and audio by basename without silently dropping files', () => {

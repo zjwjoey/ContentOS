@@ -32,7 +32,12 @@ async function authorizeOutputRoot(input: string): Promise<string> {
   return actualRoot;
 }
 export function cleanFilePart(value: string): string { return value.replace(/[\\/:*?"<>|]/gu, '_').replace(/[. ]+$/u, '').trim().slice(0, 120) || '未命名'; }
-export function outputFileStem(title: string, ordinal: number): string { return `${String(ordinal).padStart(3, '0')}_${cleanFilePart(title)}`; }
+export function outputFileStem(title: string, ordinal: number, variantIndex = 0, variantCount = 1): string {
+  const cleanTitle = cleanFilePart(title);
+  const base = `${String(ordinal).padStart(3, '0')}_${variantCount > 1 ? cleanTitle.replace(/_[A-E]$/u, '') : cleanTitle}`;
+  return variantCount > 1 ? `${base}_${String.fromCharCode(65 + variantIndex)}` : base;
+}
+export function renderRetryIdempotencySuffix(itemId: string, previousJobId: string | null | undefined): string { return `edit-retry:${itemId}:${previousJobId || 'initial'}`; }
 export async function promoteStagedUpload(stagedPath: string, destination: string): Promise<void> {
   const sameVolumePart = `${destination}.${randomUUID()}.part`;
   try {
@@ -103,13 +108,15 @@ function publicItem(row: Record<string, unknown>, job?: Record<string, unknown> 
 }
 type EffectiveItemState = 'QUEUED' | 'PREPARING' | 'RENDERING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
 function effectiveItemState(row: Record<string, unknown>, jobState?: unknown): EffectiveItemState {
+  const persisted = String(row.state || 'QUEUED');
+  if (persisted === 'FAILED') return 'FAILED';
+  if (persisted === 'CANCELLED') return 'CANCELLED';
   const state = String(jobState || '');
   if (state === 'SUCCEEDED') return 'SUCCEEDED';
   if (state === 'FAILED' || state === 'BLOCKED') return 'FAILED';
   if (state === 'CANCELLED' || state === 'CANCEL_REQUESTED') return 'CANCELLED';
   if (row.prepare_job_id && !row.job_id) return 'PREPARING';
   if (row.job_id) return 'RENDERING';
-  const persisted = String(row.state || 'QUEUED');
   return ['QUEUED', 'PREPARING', 'RENDERING', 'SUCCEEDED', 'FAILED', 'CANCELLED'].includes(persisted) ? persisted as EffectiveItemState : 'QUEUED';
 }
 
@@ -216,8 +223,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
       const batchId = `edit-batch-${randomUUID()}`;
       const title = cleanFilePart(input.title || (input.mode === 'SCRIPT' ? '脚本剪辑' : '批量混剪'));
       const requestedItems = input.mode === 'SCRIPT' ? [{ script: input.script?.trim() || input.items?.[0]?.script || '', title, voiceAssetId: input.items?.[0]?.voiceAssetId, voicePath: input.voicePath || input.items?.[0]?.voicePath }] : (input.items || []);
-      const variantLabels = ['A', 'B', 'C', 'D', 'E'];
-      const expandedItems = requestedItems.flatMap((item, sourceIndex) => Array.from({ length: input.variants }, (_, variantIndex) => ({ ...item, title: input.variants > 1 ? `${item.title?.trim() || title}_${variantLabels[variantIndex]}` : item.title, sourceItemOrdinal: sourceIndex + 1, variantIndex })));
+      const expandedItems = requestedItems.flatMap((item, sourceIndex) => Array.from({ length: input.variants }, (_, variantIndex) => ({ ...item, sourceItemOrdinal: sourceIndex + 1, variantIndex })));
       const items = input.testOnly ? expandedItems.slice(0, 1) : expandedItems;
       const durableItems = items.map((item, index) => ({ item, index, itemId: `edit-item-${randomUUID()}`, workspaceId: `workspace-edit-${randomUUID()}`, titleForItem: itemTitle(item, index + 1) }));
       const transaction = await dependencies.db.connect();
@@ -269,7 +275,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     const batch = (await dependencies.db.query('select b.*, s.title, s.mode, s.output_root, s.settings from edit_batches b join edit_workbench_sessions s on s.id = b.session_id where b.id = $1', [batchId])).rows[0] as Record<string, unknown> | undefined;
     if (!batch) return reply.code(404).send({ error: { code: 'EDIT_BATCH_NOT_FOUND', message: '剪辑记录不存在。', details: [] } });
     const offset = (pageQuery.data.page - 1) * pageQuery.data.pageSize;
-    const summary = (await dependencies.db.query("select count(*)::int as total, count(*) filter (where (case when j.state = 'SUCCEEDED' then 'SUCCEEDED' when j.state in ('FAILED','BLOCKED') then 'FAILED' when j.state in ('CANCELLED','CANCEL_REQUESTED') then 'CANCELLED' when i.prepare_job_id is not null and i.job_id is null then 'PREPARING' when i.job_id is not null then 'RENDERING' else i.state end) = 'SUCCEEDED')::int as succeeded, count(*) filter (where (case when j.state in ('FAILED','BLOCKED') then 'FAILED' else i.state end) = 'FAILED' or j.state in ('FAILED','BLOCKED'))::int as failed, count(*) filter (where (case when j.state in ('SUCCEEDED','FAILED','BLOCKED','CANCELLED') then j.state when i.prepare_job_id is not null and i.job_id is null then 'PREPARING' when i.job_id is not null then 'RENDERING' else i.state end) in ('QUEUED','RUNNING','RETRY_WAIT','CANCEL_REQUESTED','PREPARING','RENDERING'))::int as active from edit_batch_items i left join jobs j on j.id = coalesce(i.job_id, i.prepare_job_id) where i.batch_id = $1", [batchId])).rows[0] as { total?: number; succeeded?: number; failed?: number; active?: number } | undefined;
+    const summary = (await dependencies.db.query("select count(*)::int as total, count(*) filter (where (case when i.state='FAILED' then 'FAILED' when i.state='CANCELLED' then 'CANCELLED' when j.state = 'SUCCEEDED' then 'SUCCEEDED' when j.state in ('FAILED','BLOCKED') or p.state in ('FAILED','BLOCKED') then 'FAILED' when j.state in ('CANCELLED','CANCEL_REQUESTED') then 'CANCELLED' when j.state in ('QUEUED','RUNNING','RETRY_WAIT') then 'RENDERING' when p.state in ('QUEUED','RUNNING','RETRY_WAIT') then 'PREPARING' else i.state end) = 'SUCCEEDED')::int as succeeded, count(*) filter (where (case when i.state='FAILED' then 'FAILED' when i.state='CANCELLED' then 'CANCELLED' when j.state in ('FAILED','BLOCKED') or p.state in ('FAILED','BLOCKED') then 'FAILED' else i.state end) = 'FAILED')::int as failed, count(*) filter (where (case when i.state in ('FAILED','CANCELLED','SUCCEEDED') then i.state when j.state in ('QUEUED','RUNNING','RETRY_WAIT') then 'RENDERING' when p.state in ('QUEUED','RUNNING','RETRY_WAIT') then 'PREPARING' else i.state end) in ('QUEUED','RUNNING','RETRY_WAIT','PREPARING','RENDERING'))::int as active from edit_batch_items i left join jobs j on j.id = i.job_id left join jobs p on p.id = i.prepare_job_id where i.batch_id = $1", [batchId])).rows[0] as { total?: number; succeeded?: number; failed?: number; active?: number } | undefined;
     const rows = (await dependencies.db.query(`select i.*, j.state as job_state, j.result as job_result, j.error as job_error,
       p.state as prepare_job_state, p.error as prepare_job_error,
       e.id as export_id, e.status as export_status, e.error as export_error
@@ -281,15 +287,14 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
       const job = row.job_id ? { state: row.job_state, result: row.job_result, error: row.job_error } : row.prepare_job_id ? { state: row.prepare_job_state, result: null, error: row.prepare_job_error } : null;
       const result = job?.result && typeof job.result === 'object' ? job.result as { outputAssetId?: string } : {};
       const state = effectiveItemState(row, job?.state);
-      if (state !== row.state || (result.outputAssetId && result.outputAssetId !== row.output_asset_id)) await dependencies.db.query('update edit_batch_items set state=$2, output_asset_id=coalesce($3, output_asset_id), error=$4, updated_at=now() where id=$1', [row.id, state, result.outputAssetId || null, job?.error || null]);
       return publicItem({ ...row, state, ...(result.outputAssetId ? { output_asset_id: result.outputAssetId } : {}) }, job as unknown as Record<string, unknown> | null);
     }));
     const actualTotal = Number(summary?.total || 0); const expectedTotal = Number(batch.total_count || 0); const succeeded = Number(summary?.succeeded || 0); const failed = Number(summary?.failed || 0); const active = Number(summary?.active || 0); const incomplete = actualTotal !== expectedTotal;
     const status = incomplete ? 'FAILED' : active > 0 ? 'RUNNING' : failed > 0 && succeeded > 0 ? 'PARTIAL' : expectedTotal > 0 && failed === expectedTotal ? 'FAILED' : expectedTotal > 0 && succeeded === expectedTotal ? 'SUCCEEDED' : 'RUNNING';
     const reportedFailed = failed + (incomplete && expectedTotal > actualTotal ? expectedTotal - actualTotal : 0);
-    await dependencies.db.query('update edit_batches set status=$2, succeeded_count=$3, failed_count=$4, updated_at=now() where id=$1', [batchId, status, succeeded, reportedFailed]);
     const settings = batch.settings && typeof batch.settings === 'object' && !Array.isArray(batch.settings) ? batch.settings as Record<string, unknown> : {};
-    return { id: batchId, title: String(batch.title), mode: String(batch.mode), testOnly: settings.testOnly === true, status, totalCount: expectedTotal, actualItemCount: actualTotal, consistency: incomplete ? { code: 'BATCH_INCOMPLETE', expected: expectedTotal, actual: actualTotal } : { code: 'OK', expected: expectedTotal, actual: actualTotal }, succeededCount: succeeded, failedCount: reportedFailed, page: pageQuery.data.page, pageSize: pageQuery.data.pageSize, items };
+    const exportSummary = (await dependencies.db.query("select count(*) filter (where e.status='SUCCEEDED')::int as exported, count(*) filter (where e.status in ('QUEUED','RUNNING'))::int as queued, count(*) filter (where e.status='FAILED')::int as export_failed from edit_exports e join edit_batch_items i on i.id=e.batch_item_id where i.batch_id=$1", [batchId])).rows[0] as { exported?: number; queued?: number; export_failed?: number } | undefined;
+    return { id: batchId, title: String(batch.title), mode: String(batch.mode), testOnly: settings.testOnly === true, status, totalCount: expectedTotal, actualItemCount: actualTotal, consistency: incomplete ? { code: 'BATCH_INCOMPLETE', expected: expectedTotal, actual: actualTotal } : { code: 'OK', expected: expectedTotal, actual: actualTotal }, succeededCount: succeeded, failedCount: reportedFailed, exportTotalCount: Number(exportSummary?.exported || 0) + Number(exportSummary?.queued || 0) + Number(exportSummary?.export_failed || 0), exportedCount: Number(exportSummary?.exported || 0), exportQueuedCount: Number(exportSummary?.queued || 0), exportFailedCount: Number(exportSummary?.export_failed || 0), page: pageQuery.data.page, pageSize: pageQuery.data.pageSize, items };
   });
 
   app.get('/api/v1/edit/history', async (request, reply) => {
@@ -353,7 +358,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
         continue;
       }
       try {
-        const job = await dependencies.video.createManifestRenderJobForWorkspace(String(row.workspace_id), String(row.manifest_id), `edit-retry-${String(row.id)}`);
+        const job = await dependencies.video.createManifestRenderJobForWorkspace(String(row.workspace_id), String(row.manifest_id), renderRetryIdempotencySuffix(String(row.id), row.job_id ? String(row.job_id) : null));
         await dependencies.db.query('update edit_batch_items set job_id=$2,state=$3,error=null,updated_at=now() where id=$1 and state=$4', [row.id, job.id, 'QUEUED', 'RUNNING']);
         retried.push({ id: String(row.id), jobId: job.id, state: job.state });
       } catch (error) {
@@ -367,7 +372,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     const batchId = String((request.params as { batchId: string }).batchId);
     const requested = z.object({ outputRoot: z.string().trim().min(1).optional() }).safeParse(request.body || {});
     if (!requested.success) return reply.code(422).send({ error: { code: 'EDIT_OUTPUT_INVALID', message: '输出目录不正确。', details: requested.error.issues } });
-    const batch = (await dependencies.db.query('select b.*, s.title, s.output_root from edit_batches b join edit_workbench_sessions s on s.id = b.session_id where b.id = $1', [batchId])).rows[0] as Record<string, unknown> | undefined;
+    const batch = (await dependencies.db.query('select b.*, s.title, s.output_root, s.settings from edit_batches b join edit_workbench_sessions s on s.id = b.session_id where b.id = $1', [batchId])).rows[0] as Record<string, unknown> | undefined;
     if (!batch) return reply.code(404).send({ error: { code: 'EDIT_BATCH_NOT_FOUND', message: '剪辑记录不存在。', details: [] } });
     let outputRoot: string;
     try { outputRoot = await authorizeOutputRoot(String(requested.data.outputRoot || batch.output_root || '')); }
@@ -387,7 +392,9 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
       for (const row of rows) {
         const asset = await dependencies.assets.getReadyWorkspaceAssetContent(String(row.workspace_id), String(row.output_asset_id));
         if (!asset) continue;
-        const stem = outputFileStem(String(row.title), Number(row.ordinal)); let destination = join(outputRoot, `${stem}.mp4`); let suffix = 2;
+        const settings = batch.settings && typeof batch.settings === 'object' && !Array.isArray(batch.settings) ? batch.settings as Record<string, unknown> : {};
+        const variantCount = Number(settings.variants || 1);
+        const stem = outputFileStem(String(row.title), Number(row.source_item_ordinal || row.ordinal), Number(row.variant_index || 0), variantCount); let destination = join(outputRoot, `${stem}.mp4`); let suffix = 2;
         while (await stat(destination).then(() => true).catch(() => false) || (await transaction.query('select 1 from edit_exports where output_path=$1 and status in (\'QUEUED\',\'RUNNING\',\'SUCCEEDED\')', [destination])).rows[0]) { destination = join(outputRoot, `${stem}_${suffix}.mp4`); suffix += 1; }
         const exportId = `edit-export-${randomUUID()}`;
         const jobId = `job-${randomUUID()}`;
