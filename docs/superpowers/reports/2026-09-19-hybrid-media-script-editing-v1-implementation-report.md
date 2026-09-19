@@ -122,8 +122,8 @@ montage manifest. No merge to `main` was performed.
 All gates below were run locally against PostgreSQL on `127.0.0.1:55433` where
 the suite requires a database:
 
-- `pnpm format` — 415 files checked
-- `pnpm lint` — 149 TypeScript files passed
+- `pnpm format` — 334 files checked
+- `pnpm lint` — 138 TypeScript files passed
 - `pnpm typecheck` — passed
 - `pnpm test` — 268/268 passed
 - `pnpm test:migrations` — 9/9 passed
