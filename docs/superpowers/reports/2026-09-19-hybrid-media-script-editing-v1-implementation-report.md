@@ -3,7 +3,7 @@
 Date: 2026-09-19
 Branch: `codex/hybrid-media-script-editing-v1`
 Base SHA: `7961b5e04f99544159d600865622bc16e8f0e248`
-Final SHA: populated after the Final Entity Integrity Closure commit
+Final SHA: 70a1454 (Final Entity Integrity Closure commit)
 
 ## Delivery status
 
