@@ -31,7 +31,7 @@ NO-GO（实现前）：V2 规划、持久化、渲染和浏览器验收均缺失
 
 ## 实施后记录
 
-- Final implementation SHA：`1e30c1f` (implementation head; verification report follows with docs commit)
+- Final implementation SHA：`76717b0` (implementation head; verification report follows with docs commit)
 - 新增 1 个 0029 up/down migration、1 个规则规划器、1 个 V2 API route、1 个 worker job handler、1 个 V2 UI 入口、1 个 planner 单元测试。
 - 支持：角色规则、节奏/镜头密度、1–3 clip scene、voice timing、字幕/Hero Text、BGM/ducking、V1 manifest 兼容、路径级唯一素材、锁定/换片 API、独立规划状态与 revision、V2 历史摘要/复制、现有 Branding Preset 的片头片尾。
 - 通过：`pnpm typecheck`、`pnpm lint`、`pnpm format`、`pnpm build`、Web production build、editorial/workbench/renderer 17 项单元测试、PostgreSQL migration matrix 9/9、browser operator 3/3、`pnpm doctor`、`git diff --check`。
