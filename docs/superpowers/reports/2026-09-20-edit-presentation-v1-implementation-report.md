@@ -2,7 +2,7 @@
 
 日期：2026-09-20  
 基线：`bc98812`  
-最终提交：`58688d5`  
+最终提交：`d3ba3b3`  
 目标分支：`codex/script-editing-v2-rule-editorial-layer`
 
 ## 已完成
