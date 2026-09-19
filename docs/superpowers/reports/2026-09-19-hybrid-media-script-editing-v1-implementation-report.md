@@ -3,7 +3,7 @@
 Date: 2026-09-19
 Branch: `codex/hybrid-media-script-editing-v1`
 Base SHA: `7961b5e04f99544159d600865622bc16e8f0e248`
-Final SHA: d023d21 (Hybrid Script Editing V1 closure implementation)
+Final SHA: e1a10a6 (final Hybrid Script Editing V1 closure and FFmpeg regression)
 
 ## Delivery status
 
@@ -125,18 +125,23 @@ the suite requires a database:
 - `pnpm format` — 415 files checked
 - `pnpm lint` — 149 TypeScript files passed
 - `pnpm typecheck` — passed
-- `pnpm test` — 266/266 passed
+- `pnpm test` — 267/267 passed
 - `pnpm test:migrations` — 9/9 passed
 - `pnpm test:auto-edit-v1` — 27/27 passed
 - `pnpm test:auto-edit-v15` — 19/19 passed
 - `pnpm test:browser` — 3/3 passed (Auto Edit, Editing Workbench, Hybrid)
-- FFmpeg regression (`video-renderer` + `auto-edit-v15`) — 15/15 passed,
-  including playable H.264/AAC vertical MP4, `yuv420p`, duration and abort cleanup
+- FFmpeg regression — dedicated SCRIPT+Voice, MIX and Hybrid+Fake Pexels renders
+  passed 1/1, plus renderer/V1.5 suite 15/15; probes verified 1080x1920, H.264,
+  AAC when voiced, `yuv420p`, 30 fps and manifest-aligned duration
 - `pnpm build` — passed
 - `pnpm --dir apps/web build` — passed, 13/13 routes generated
 - `pnpm doctor` — passed with one non-blocking warning about the global pnpm
   bin directory not being on PATH
 - `git diff --check` — passed
+
+Branch state at final audit: `origin/main...HEAD = 0 33` (behind main: 0;
+ahead of main: 33). The final branch HEAD is `e1a10a6` and is pushed to the
+remote branch; no GitHub CI workflow is configured for this branch.
 
 There is no GitHub remote CI status configured for this branch; the local gates
 above are the acceptance evidence.
