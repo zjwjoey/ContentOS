@@ -71,6 +71,7 @@ export interface EditManifestV0 {
     editorialRevision?: number;
     templateId?: string;
     plannerVersion?: string;
+    warnings?: string[];
   };
   output: { format: 'mp4'; videoCodec: 'mpeg4' | 'h264'; audioCodec: 'aac' };
 }

@@ -43,3 +43,20 @@ test('editorial rules expose deterministic roles, template effects, priority and
   assert.deepEqual(manifest.timeline.map((clip) => clip.assetId), rerolled.scenes.flatMap((scene) => scene.clipSlots.map((slot) => slot.selectedAssetId)));
   assert.equal(manifest.metadata?.editorialPlanId, 'p');
 });
+
+test('editorial resolver treats duplicate file paths as one material', () => {
+  const plan = planEditorialScript({ sentences: [
+    { index: 0, text: '开头', normalizedText: '开头', voiceStartMs: 0, voiceEndMs: 4_000 },
+    { index: 1, text: '正文', normalizedText: '正文', voiceStartMs: 4_000, voiceEndMs: 8_000 },
+  ], shotDensity: 'HIGH' });
+  const resolved = resolveEditorialPlan(plan, [
+    { id: 'same-a', path: '素材/同一文件.mp4', durationMs: 10_000, source: 'LOCAL' },
+    { id: 'same-b', path: '素材/同一文件.mp4', durationMs: 10_000, source: 'LOCAL' },
+    { id: 'other', path: '素材/另一个文件.mp4', durationMs: 10_000, source: 'LOCAL' },
+    { id: 'other-2', path: '素材/第三个文件.mp4', durationMs: 10_000, source: 'LOCAL' },
+    { id: 'other-3', path: '素材/第四个文件.mp4', durationMs: 10_000, source: 'LOCAL' },
+    { id: 'other-4', path: '素材/第五个文件.mp4', durationMs: 10_000, source: 'LOCAL' },
+  ], 1, { strictUnique: true });
+  const selected = resolved.scenes.flatMap((scene) => scene.clipSlots.map((slot) => slot.asset?.path));
+  assert.equal(new Set(selected).size, selected.length);
+});

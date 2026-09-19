@@ -43,10 +43,11 @@ export function createScriptPlanJobHandler(deps: VideoHandlerDeps): (job: JobRec
     if (!row.resolved_plan && editorial) {
       const scannedAssets: EditorialAssetV1[] = Array.isArray(row.settings?.assets) ? row.settings.assets as EditorialAssetV1[] : [];
       const sourceRoots = Array.isArray(row.source_roots) ? row.source_roots : [];
+      const knownEntities = Array.isArray(row.settings?.knownEntities) ? row.settings.knownEntities.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())) : [];
       if (deps.localMedia && sourceRoots.length) {
         for (const root of sourceRoots.filter((item): item is string => typeof item === 'string')) {
           const scan = await deps.localMedia.scan({ sourceRoot: root, recursive: true, signal });
-          scannedAssets.push(...scan.files.filter((file) => file.available).map((file) => ({ id: `${scan.sourceRootId}:${file.relativePath}`, path: file.sourcePath, durationMs: file.durationMs, source: 'LOCAL' as const, originalName: file.fileName, keywords: file.tags, tags: file.tags })));
+          scannedAssets.push(...scan.files.filter((file) => file.available).map((file) => { const terms = `${file.fileName} ${(file.tags || []).join(' ')}`.toLocaleLowerCase(); const entity = knownEntities.find((candidate) => terms.includes(candidate.toLocaleLowerCase())); return { id: `${scan.sourceRootId}:${file.relativePath}`, path: file.sourcePath, durationMs: file.durationMs, source: 'LOCAL' as const, originalName: file.fileName, keywords: file.tags, tags: file.tags, ...(entity ? { entity } : {}) }; }));
         }
       }
       if (row.settings?.usePexels === true && deps.mediaProvider) {
@@ -57,13 +58,13 @@ export function createScriptPlanJobHandler(deps: VideoHandlerDeps): (job: JobRec
       const rawPriority = Array.isArray(row.settings.priorityAssets) ? row.settings.priorityAssets as Array<{ assetId: string; mode: 'PREFER' | 'MUST_USE'; path?: string }> : [];
       const priorityAssets = rawPriority.map((item) => { const match = scannedAssets.find((asset) => asset.id === item.assetId || asset.path === item.assetId || asset.path === item.path); return { assetId: match?.id ?? item.assetId, mode: item.mode, ...(item.path ? { path: item.path } : {}) }; });
       let resolved = resolveEditorialPlan(editorial, scannedAssets, Number(row.settings.seed || 1), { priorityAssets, allowControlledReuse: true });
-      if (resolved.audioPlan.backgroundMusicMode === 'AUTO' && !resolved.audioPlan.path) { const musicPath = await chooseLocalMusic(resolved.audioPlan.category, Number(row.settings.seed || 1)); if (musicPath) resolved = { ...resolved, audioPlan: { ...resolved.audioPlan, path: musicPath } }; }
-      await deps.db.query("update edit_script_plans set resolved_plan=$2,status='READY',updated_at=now() where id=$1", [planId, resolved]);
+      if (resolved.audioPlan.backgroundMusicMode === 'AUTO' && !resolved.audioPlan.path) { const musicPath = await chooseLocalMusic(resolved.audioPlan.category, Number(row.settings.seed || 1)); if (musicPath) resolved = { ...resolved, audioPlan: { ...resolved.audioPlan, path: musicPath } }; else resolved = { ...resolved, warnings: [...(resolved.warnings || []), 'EDIT_BGM_UNAVAILABLE'] }; }
+      await deps.db.query("update edit_script_plans set resolved_plan=$2,settings=settings || $3::jsonb,status='READY',updated_at=now() where id=$1", [planId, resolved, JSON.stringify({ assets: scannedAssets })]);
       return { planId, status: 'READY' };
     }
     if (!row.resolved_plan) { await deps.db.query("update edit_script_plans set status='FAILED',updated_at=now() where id=$1", [planId]); throw new Error('EDIT_SCRIPT_PLAN_NO_RESOLVED_MEDIA'); }
-    let existingPlan = row.resolved_plan as { audioPlan?: { backgroundMusicMode?: string; path?: string; category?: string; [key: string]: unknown } };
-    if (existingPlan.audioPlan?.backgroundMusicMode === 'AUTO' && !existingPlan.audioPlan.path) { const musicPath = await chooseLocalMusic(existingPlan.audioPlan.category, Number(row.settings.seed || 1)); if (musicPath) { existingPlan = { ...existingPlan, audioPlan: { ...existingPlan.audioPlan, path: musicPath } }; await deps.db.query('update edit_script_plans set resolved_plan=$2 where id=$1', [planId, existingPlan]); } }
+    let existingPlan = row.resolved_plan as { audioPlan?: { backgroundMusicMode?: string; path?: string; category?: string; [key: string]: unknown }; warnings?: string[] };
+    if (existingPlan.audioPlan?.backgroundMusicMode === 'AUTO' && !existingPlan.audioPlan.path) { const musicPath = await chooseLocalMusic(existingPlan.audioPlan.category, Number(row.settings.seed || 1)); existingPlan = musicPath ? { ...existingPlan, audioPlan: { ...existingPlan.audioPlan, path: musicPath } } : { ...existingPlan, warnings: [...(existingPlan.warnings || []), 'EDIT_BGM_UNAVAILABLE'] }; await deps.db.query('update edit_script_plans set resolved_plan=$2 where id=$1', [planId, existingPlan]); }
     await deps.db.query("update edit_script_plans set status='READY',updated_at=now() where id=$1", [planId]);
     return { planId, status: 'READY' };
   };
