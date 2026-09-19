@@ -50,6 +50,8 @@
 
 Current continuation verification: `pnpm typecheck`, `pnpm lint`, `pnpm format`, `pnpm build`, `pnpm --dir apps/web build`, `pnpm test:script-edit-v2` (18/18), `pnpm test:migrations` (9/9), `pnpm test:auto-edit-v1` (27/27), `pnpm test:auto-edit-v15` (19/19), `pnpm test` (275/275), and browser acceptance (4/4) pass on PostgreSQL 16 at `127.0.0.1:55433` with isolated schemas. The Windows Shell picker process was successfully invoked from the running local operator; unattended acceptance deliberately did not select or transmit a user file, while picker cancellation is covered by the route test.
 
+`pnpm doctor` reports the pre-existing pnpm global-bin PATH warning and a registry-connectivity failure in this environment; local version, cache, filesystem and offline install checks pass.
+
 ## GO / NO-GO
 
 NO-GO for final release sign-off only until a user performs the final interactive Windows picker acceptance (select a real media folder, output folder, voice/music file and priority asset, then verify cancel). All automated integrity, migration, FFmpeg, full-suite, browser and build gates are green and the implementation is pushed; this remaining hold is manual acceptance, not an uncommitted-code hold.
