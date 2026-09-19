@@ -3,7 +3,7 @@
 Date: 2026-09-19
 Branch: `codex/hybrid-media-script-editing-v1`
 Review base: `9cf177d216e478c988d87a82d6a36d12b29d1996`
-Final reviewed SHA: `e1a10a6`
+Final reviewed SHA: `5e700a5`
 
 | Closure item | Status | Evidence |
 | --- | --- | --- |
@@ -36,7 +36,7 @@ Final reviewed SHA: `e1a10a6`
 | External unused pool and explicit reuse | FIXED | Resolver filters ranked results against provider identity sets explicitly; reuse is marked only after the unused pool is exhausted. |
 | Provider-missing settings preservation | FIXED | Missing status only disables Pexels; settings hydration is completed before persistence, preserving local roots/output/template. |
 | Health cache bypass | FIXED | Provider health uses a minimal uncached request and never writes search cache; ordinary search cache remains intact. |
-| Full gates | FIXED | Final report records format, lint, typecheck, 267/267 tests, migrations, auto-edit, 3/3 browser flows, dedicated three-mode FFmpeg regression, build and doctor results. |
+| Full gates | FIXED | Final report records format, lint, typecheck, 268/268 tests, migrations, auto-edit, 3/3 browser flows, dedicated three-mode FFmpeg regression, build and doctor results. |
 
 ## Decision
 

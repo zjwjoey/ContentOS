@@ -3,7 +3,7 @@
 Date: 2026-09-19
 Branch: `codex/hybrid-media-script-editing-v1`
 Base SHA: `7961b5e04f99544159d600865622bc16e8f0e248`
-Final SHA: e1a10a6 (final Hybrid Script Editing V1 closure and FFmpeg regression)
+Final SHA: 5e700a5 (final Hybrid Script Editing V1 closure and FFmpeg regression)
 
 ## Delivery status
 
@@ -125,7 +125,7 @@ the suite requires a database:
 - `pnpm format` — 415 files checked
 - `pnpm lint` — 149 TypeScript files passed
 - `pnpm typecheck` — passed
-- `pnpm test` — 267/267 passed
+- `pnpm test` — 268/268 passed
 - `pnpm test:migrations` — 9/9 passed
 - `pnpm test:auto-edit-v1` — 27/27 passed
 - `pnpm test:auto-edit-v15` — 19/19 passed
@@ -139,8 +139,8 @@ the suite requires a database:
   bin directory not being on PATH
 - `git diff --check` — passed
 
-Branch state at final audit: `origin/main...HEAD = 0 33` (behind main: 0;
-ahead of main: 33). The final branch HEAD is `e1a10a6` and is pushed to the
+Branch state at final implementation audit: `origin/main...HEAD = 0 35` (behind main: 0;
+ahead of main: 35). The final implementation HEAD is `5e700a5` and is pushed to the
 remote branch; no GitHub CI workflow is configured for this branch.
 
 There is no GitHub remote CI status configured for this branch; the local gates
