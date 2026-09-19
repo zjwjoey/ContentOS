@@ -31,7 +31,11 @@ async function makeSourceRoots(): Promise<{ first: string; second: string; outpu
   const second = join(fixtureDir!, 'workbench-source-b');
   const output = join(fixtureDir!, 'workbench-output');
   await mkdir(first, { recursive: true }); await mkdir(second, { recursive: true }); await mkdir(output, { recursive: true });
-  await copyFile(fixtureVideos[0]!, join(first, '商品-a.mp4')); await copyFile(fixtureVideos[1]!, join(second, '街景-b.mp4'));
+  await copyFile(fixtureVideos[0]!, join(first, '商品-a.mp4'));
+  // MIX is strict-unique per task: each two-sentence item needs two distinct
+  // source clips in its selected folder.
+  await copyFile(fixtureVideos[1]!, join(first, '商品-b.mp4'));
+  await copyFile(fixtureVideos[1]!, join(second, '街景-b.mp4'));
   return { first, second, output };
 }
 

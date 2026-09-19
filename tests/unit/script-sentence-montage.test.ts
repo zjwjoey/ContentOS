@@ -38,9 +38,18 @@ test('random montage rejects a task that would reuse an asset', () => {
 });
 
 test('script montage randomly selects local folder assets without filename matching', () => {
-  const result = buildScriptMontageManifest({ projectId: 'p', seed: 2, script: '欧洲门店。销售数据。', sentences: [], assets: assets.map((asset) => ({ ...asset, metadata: { sourceType: 'LOCAL_MEDIA' } })) });
+  const result = buildScriptMontageManifest({ projectId: 'p', seed: 2, script: '欧洲门店。销售数据。', sentences: [], assets: assets.map((asset) => ({ ...asset, metadata: { sourceType: 'LOCAL_MEDIA' } })), randomizeLocalMedia: true });
   assert.equal(new Set(result.manifest.timeline.map((clip) => clip.assetId)).size, 2);
   assert.equal(result.decisions.every((decision) => decision.matchingReason.includes('随机匹配')), true);
+});
+
+test('resolved assignments only permit explicitly controlled reuse', () => {
+  const sentences = segmentScriptSentences('第一句。第二句。');
+  const assignment = (allowAssetReuse?: boolean) => ({ segmentIndex: 0, selectedAssetId: 'store', selectedSource: 'LOCAL' as const, selectedRole: 'AUTHENTIC_ENTITY' as const, entityFallback: false, ...(allowAssetReuse === undefined ? {} : { allowAssetReuse }), reason: 'test', visualIntent: 'store', matchedKeywords: [] });
+  assert.throws(() => buildScriptMontageManifest({ projectId: 'p', seed: 1, sentences, assets, resolvedAssignments: [assignment(), { ...assignment(), segmentIndex: 1 }] }), /EDIT_UNIQUE_MEDIA_EXHAUSTED/);
+  const reused = buildScriptMontageManifest({ projectId: 'p', seed: 1, sentences, assets, resolvedAssignments: [assignment(), { ...assignment(true), segmentIndex: 1 }] });
+  assert.deepEqual(reused.manifest.timeline.map((clip) => clip.assetId), ['store', 'store']);
+  assert.equal(reused.manifest.timeline[1]?.matching?.allowAssetReuse, true);
 });
 
 test('voice timing drives content duration and branding offsets subtitles', () => {

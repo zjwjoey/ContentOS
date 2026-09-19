@@ -12,6 +12,15 @@ test('VisualPlan protects named entities and deduplicates external queries', () 
   assert.deepEqual(dedupeExternalQueries(plan), [...new Set(dedupeExternalQueries(plan))]);
 });
 
+test('VisualPlan uses the supplied voice-timed sentence durations', () => {
+  const plan = planVisuals('第一句话。第二句话比较长。第三句。', { minClipDurationMs: 2_000, maxClipDurationMs: 20_000, sentences: [
+    { index: 0, text: '第一句话。', normalizedText: '第一句话', durationMs: 5_000 },
+    { index: 1, text: '第二句话比较长。', normalizedText: '第二句话比较长', durationMs: 17_000 },
+    { index: 2, text: '第三句。', normalizedText: '第三句', durationMs: 8_000 },
+  ] });
+  assert.deepEqual(plan.segments.map((segment) => [segment.segmentIndex, segment.desiredDurationMs]), [[0, 5_000], [1, 17_000], [2, 8_000]]);
+});
+
 test('local ranking prefers entity and penalizes recent usage', () => {
   const plan = planVisuals('MIZAN 门店展示');
   const ranked = rankLocalCandidates(plan.segments[0]!, [

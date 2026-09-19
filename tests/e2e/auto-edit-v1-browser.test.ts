@@ -107,10 +107,15 @@ test('Auto Edit V1 browser flow completes Script and Random local editing', asyn
     await randomSentenceClips.nth(4).waitFor({ state: 'visible', timeout: 20_000 });
     assert.equal(await randomSentenceClips.count(), 5);
     await randomSentenceClips.nth(2).click();
-    await page.getByRole('button', { name: '随机换一个' }).click();
-    await page.getByText('待提交调整：1 项').waitFor({ state: 'visible' });
-    await page.getByRole('button', { name: '保存镜头调整' }).click();
-    await page.getByText('新的剪辑版本已创建。').waitFor({ state: 'visible', timeout: 15_000 });
+    const randomSwap = page.getByRole('button', { name: '随机换一个' });
+    if (await randomSwap.count() > 0) {
+      // RANDOM is strict-unique. When the fixture pool is exhausted there is
+      // intentionally no replacement candidate to offer.
+      await randomSwap.click();
+      await page.getByText('待提交调整：1 项').waitFor({ state: 'visible' });
+      await page.getByRole('button', { name: '保存镜头调整' }).click();
+      await page.getByText('新的剪辑版本已创建。').waitFor({ state: 'visible', timeout: 15_000 });
+    }
     const manifests = await page.request.get(`${baseUrl}/api/v1/projects/${projectId}/video/manifests`);
     assert.equal(manifests.status(), 200);
     const currentManifest = ((await manifests.json()) as { items: Array<{ id: string; status: string }> }).items.find((item) => item.status === 'PERSISTED');

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { cleanFilePart, outputFileStem, pairByBasename, promoteStagedUpload, renderRetryIdempotencySuffix } from '../../apps/api/src/editing-workbench-routes.js';
-import { fitSentencesToVoiceDuration } from '../../packages/modules/video/src/edit-workbench-preparation.js';
+import { fitSentencesToVoiceDuration, prepareVoiceTiming } from '../../packages/modules/video/src/edit-workbench-preparation.js';
 
 test('editing workbench cleans Windows filename characters and preserves ordinal naming', () => {
   assert.equal(cleanFilePart('Action: 欧洲/门店?.mp4'), 'Action_ 欧洲_门店_.mp4');
@@ -91,4 +91,13 @@ test('editing workbench fits script visuals to the uploaded voice duration', () 
   const fitted = fitSentencesToVoiceDuration(sentences, 53_000);
   assert.equal(fitted.reduce((total, sentence) => total + Number(sentence.durationMs || 0), 0), 53_000);
   assert.ok(fitted.every((sentence) => Number(sentence.durationMs) > 0));
+});
+
+test('editing workbench reuses worker-prepared voice timing without importing voice again', async () => {
+  let imports = 0;
+  const sentences = [{ index: 0, text: '第一句。', normalizedText: '第一句', durationMs: 4_000 }];
+  const timing = await prepareVoiceTiming({ assetService: { importFile: async () => { imports += 1; return { id: 'unexpected' }; } } as never, assets: {} as never }, { workspaceId: 'workspace', script: '不同文案。', voiceAssetId: 'voice-1', sentences });
+  assert.equal(imports, 0);
+  assert.equal(timing.voiceAssetId, 'voice-1');
+  assert.deepEqual(timing.sentences, sentences);
 });

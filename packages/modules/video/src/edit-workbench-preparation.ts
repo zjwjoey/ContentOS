@@ -20,6 +20,7 @@ export interface EditingWorkbenchPreparationInput {
   mode: 'SCRIPT' | 'MIX';
   workspaceId: string;
   script: string;
+  sentences?: TimedScriptSentence[];
   voiceAssetId?: string;
   voicePath?: string;
   assets: PlannerAsset[];
@@ -55,6 +56,23 @@ export function fitSentencesToVoiceDuration(sentences: TimedScriptSentence[], to
   });
 }
 
+export async function prepareVoiceTiming(
+  dependencies: Pick<EditingWorkbenchPreparationDependencies, 'assetService' | 'assets'>,
+  input: Pick<EditingWorkbenchPreparationInput, 'workspaceId' | 'script' | 'voiceAssetId' | 'voicePath' | 'sentences'>,
+): Promise<{ voiceAssetId?: string; sentences: TimedScriptSentence[] }> {
+  let voiceAssetId = input.voiceAssetId;
+  if (!voiceAssetId && input.voicePath) {
+    const imported = await dependencies.assetService.importFile({ workspaceId: input.workspaceId, sourcePath: input.voicePath, kind: 'AUDIO', role: 'VOICE' });
+    voiceAssetId = imported.id;
+  }
+  const rawSentences = input.sentences || segmentScriptSentences(input.script);
+  if (input.sentences) return { ...(voiceAssetId ? { voiceAssetId } : {}), sentences: input.sentences };
+  if (!voiceAssetId) return { sentences: rawSentences };
+  const voice = await dependencies.assets.getReadyWorkspaceAsset(input.workspaceId, voiceAssetId, 'AUDIO', 'VOICE');
+  const voiceDurationMs = Number(voice?.metadata.durationMs || 0);
+  return { voiceAssetId, sentences: voiceDurationMs > 0 ? fitSentencesToVoiceDuration(rawSentences, voiceDurationMs) : rawSentences };
+}
+
 /**
  * Performs one durable batch item's preparation. It deliberately creates only
  * the normal VideoService VIDEO_RENDER job; rendering remains owned by the
@@ -68,24 +86,15 @@ export async function prepareEditingWorkbenchItem(
     ? await dependencies.presets?.get(input.templateId) || null
     : await dependencies.presets?.getDefault() || null;
   if (input.templateId && !preset) throw new Error('EDIT_TEMPLATE_NOT_FOUND');
-  let voiceAssetId = input.voiceAssetId;
-  if (!voiceAssetId && input.voicePath) {
-    const imported = await dependencies.assetService.importFile({ workspaceId: input.workspaceId, sourcePath: input.voicePath, kind: 'AUDIO', role: 'VOICE' });
-    voiceAssetId = imported.id;
-  }
-  const rawSentences = segmentScriptSentences(input.script);
-  let sentences = rawSentences;
-  if (voiceAssetId) {
-    const voice = await dependencies.assets.getReadyWorkspaceAsset(input.workspaceId, voiceAssetId, 'AUDIO', 'VOICE');
-    const voiceDurationMs = Number(voice?.metadata.durationMs || 0);
-    if (voiceDurationMs > 0) sentences = fitSentencesToVoiceDuration(rawSentences, voiceDurationMs);
-  }
+  const timing = await prepareVoiceTiming(dependencies, input);
+  const voiceAssetId = timing.voiceAssetId;
+  const sentences = timing.sentences;
   let planned;
   if (input.mode === 'MIX') {
     planned = buildRandomSentenceMontageManifest({ workspaceId: input.workspaceId, sentences, assets: input.assets, seed: input.seed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });
   } else {
     try {
-      planned = buildScriptMontageManifest({ workspaceId: input.workspaceId, script: input.script, sentences, assets: input.assets, seed: input.seed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(input.resolvedAssignments ? { resolvedAssignments: input.resolvedAssignments } : {}), ...(voiceAssetId ? { voiceAssetId } : {}) });
+      planned = buildScriptMontageManifest({ workspaceId: input.workspaceId, script: input.script, sentences, assets: input.assets, seed: input.seed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, randomizeLocalMedia: input.resolvedAssignments ? false : input.assets.length > 0 && input.assets.every((asset) => asset.metadata?.sourceType === 'LOCAL_MEDIA'), ...(input.resolvedAssignments ? { resolvedAssignments: input.resolvedAssignments } : {}), ...(voiceAssetId ? { voiceAssetId } : {}) });
     } catch (error) {
       if (input.assets.length !== 1 || !(error instanceof Error) || !error.message.includes('Adjacent duplicate clips')) throw error;
       planned = buildRandomSentenceMontageManifest({ workspaceId: input.workspaceId, sentences, assets: input.assets, seed: input.seed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });

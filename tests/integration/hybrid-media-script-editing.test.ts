@@ -14,11 +14,14 @@ test('hybrid resolver produces a resolved assignment without real provider calls
   const storage = new LocalStorageProvider(root); const provider = new FakeExternalVideoProvider(fixture);
   let importCount = 0; const assetService = { importFile: async () => ({ id: `asset-external-${++importCount}`, projectId: '', checksum: `sha256:test-${importCount}`, storageKey: `objects/test-${importCount}.mp4`, byteSize: 5, status: 'READY' as const }) };
   const service = new HybridMediaService(assetService as never, storage, provider as ExternalVideoProvider);
-  const result = await service.resolve({ workspaceId: 'workspace-test', script: 'MIZAN 在华沙开设门店。商业合作正在推进。', localAssets: [], usePexels: true });
+  const result = await service.resolve({ workspaceId: 'workspace-test', script: 'MIZAN 在华沙开设门店。商业合作正在推进。', sentences: [{ index: 0, text: 'MIZAN 在华沙开设门店。', normalizedText: 'mizan 在华沙开设门店', durationMs: 3_000 }, { index: 1, text: '商业合作正在推进。', normalizedText: '商业合作正在推进', durationMs: 5_000 }], localAssets: [], usePexels: true });
   assert.equal(result.resolvedPlan.segments.length, planVisuals('MIZAN 在华沙开设门店。商业合作正在推进。').segments.length);
+  assert.deepEqual(result.plan.segments.map((segment) => segment.desiredDurationMs), [3_000, 5_000]);
   assert.equal(result.resolvedAssignments[0]?.selectedSource, 'FAKE_PEXELS');
   assert.ok(provider.searchCount >= 1);
   assert.equal(result.diagnostics.sourceStats.pexels, 2);
+  const manifest = buildScriptMontageManifest({ workspaceId: 'workspace-test', script: 'MIZAN 在华沙开设门店。商业合作正在推进。', sentences: [{ index: 0, text: 'MIZAN 在华沙开设门店。', normalizedText: 'mizan 在华沙开设门店', durationMs: 3_000 }, { index: 1, text: '商业合作正在推进。', normalizedText: '商业合作正在推进', durationMs: 5_000 }], assets: result.assets, resolvedAssignments: result.resolvedAssignments, seed: 1, minClipDurationMs: 2_000, maxClipDurationMs: 10_000 });
+  assert.deepEqual(manifest.manifest.timeline.map((clip) => clip.durationMs), [3_000, 5_000]);
 });
 
 test('resolved assignment order is preserved in the final manifest', () => {
@@ -33,16 +36,17 @@ test('persistent search and provider-identity download caches survive a second r
   const db = await createDatabase(process.env.DATABASE_URL!); await migrateUp(db); const workspaceId = `hybrid-cache-${randomUUID()}`; await db.query("insert into video_workspaces (id,type,project_id) values ($1,'STANDALONE',null)", [workspaceId]);
   const storage = new LocalStorageProvider(join(root, 'storage')); const provider = new FakeExternalVideoProvider(fixture); const assets = new AssetService(db, storage); const service = new HybridMediaService(assets, storage, provider, db);
   try {
-    await service.resolve({ workspaceId, script: '商业合作正在推进。', localAssets: [], usePexels: true });
+    const cacheScript = `商业合作正在推进。${randomUUID()}`;
+    await service.resolve({ workspaceId, script: cacheScript, localAssets: [], usePexels: true });
     const firstSearches = provider.searchCount; const firstDownloads = provider.downloadCount; assert.ok(firstSearches > 0); assert.ok(firstDownloads > 0);
-    await service.resolve({ workspaceId, script: '商业合作正在推进。', localAssets: [], usePexels: true });
+    await service.resolve({ workspaceId, script: cacheScript, localAssets: [], usePexels: true });
     assert.equal(provider.searchCount, firstSearches); assert.equal(provider.downloadCount, firstDownloads);
     const provenance = await db.query<{ provider: string; provider_asset_id: string; provider_file_id: string }>('select provider,provider_asset_id,provider_file_id from external_media_assets where asset_id in (select asset_id from video_workspace_assets where workspace_id=$1)', [workspaceId]);
     assert.ok(provenance.rows.length > 0); assert.equal(provenance.rows[0]?.provider, 'fake-pexels');
   } finally { await db.query('delete from video_workspaces where id=$1', [workspaceId]); await db.end(); await rm(root, { recursive: true, force: true }); }
 });
 
-test('closure resolver never reuses an asset and preserves final manifest assignments', async () => {
+test('closure resolver prefers authentic entities and allows controlled reuse', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-hybrid-closure-')); const fixture = join(root, 'fixture.mp4'); await writeFile(fixture, 'video');
   const storage = new LocalStorageProvider(join(root, 'storage')); const provider = new FakeExternalVideoProvider(fixture); let importCount = 0;
   const assetService = { importFile: async (input: { metadata?: Record<string, unknown> }) => ({ id: `external-${++importCount}`, projectId: '', checksum: `sha256:${importCount}`, storageKey: `objects/external-${importCount}.mp4`, byteSize: 5, status: 'READY' as const, metadata: input.metadata || {} }) };
@@ -57,9 +61,9 @@ test('closure resolver never reuses an asset and preserves final manifest assign
     const resolved = await service.resolve({ workspaceId: 'closure-workspace', script, localAssets: local, usePexels: true, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 });
     assert.equal(resolved.resolvedAssignments[0]?.selectedSource, 'LOCAL'); assert.equal(resolved.resolvedAssignments[0]?.selectedRole, 'AUTHENTIC_ENTITY');
     assert.equal(resolved.resolvedAssignments[1]?.selectedSource, 'FAKE_PEXELS');
-    assert.notEqual(resolved.resolvedAssignments[2]?.selectedAssetId, 'mizan-real'); assert.equal(new Set(resolved.resolvedAssignments.map((assignment) => assignment.selectedAssetId)).size, resolved.resolvedAssignments.length);
+    assert.equal(resolved.resolvedAssignments[2]?.selectedAssetId, 'mizan-real'); assert.equal(resolved.resolvedAssignments[2]?.allowAssetReuse, true);
     const planned = buildScriptMontageManifest({ workspaceId: 'closure-workspace', script, sentences: [], assets: [...local, ...resolved.assets.filter((asset) => !local.some((candidate) => candidate.id === asset.id))], resolvedAssignments: resolved.resolvedAssignments, seed: 1, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 });
-    assert.equal(planned.manifest.timeline[0]?.matching?.selectedRole, 'AUTHENTIC_ENTITY'); assert.equal(planned.manifest.timeline[0]?.matching?.selectedSource, 'LOCAL'); assert.notEqual(planned.manifest.timeline[2]?.assetId, 'mizan-real');
+    assert.equal(planned.manifest.timeline[0]?.matching?.selectedRole, 'AUTHENTIC_ENTITY'); assert.equal(planned.manifest.timeline[0]?.matching?.selectedSource, 'LOCAL'); assert.equal(planned.manifest.timeline[2]?.assetId, 'mizan-real'); assert.equal(planned.manifest.timeline[2]?.matching?.allowAssetReuse, true);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -80,10 +84,10 @@ test('entity integrity keeps place-only local material as a marked fallback', as
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('external retrieval rejects reuse after the candidate pool is exhausted', async () => {
+test('external retrieval allows controlled reuse after the candidate pool is exhausted', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-hybrid-external-reuse-')); const fixture = join(root, 'fixture.mp4'); await writeFile(fixture, 'video');
   const storage = new LocalStorageProvider(join(root, 'storage')); const provider = new FakeExternalVideoProvider(fixture); let index = 0; const service = new HybridMediaService({ importFile: async () => ({ id: `external-${++index}`, projectId: '', checksum: `sha256:${index}`, storageKey: `objects/${index}.mp4`, byteSize: 5, status: 'READY' as const }) } as never, storage, provider);
-  try { await assert.rejects(() => service.resolve({ workspaceId: 'external-reuse-workspace', script: '商业合作正在推进。商业合作正在推进。商业合作正在推进。商业合作正在推进。商业合作正在推进。商业合作正在推进。商业合作正在推进。商业合作正在推进。商业合作正在推进。商业合作正在推进。', localAssets: [], usePexels: true, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 }), /EDIT_UNIQUE_MEDIA_EXHAUSTED/); } finally { await rm(root, { recursive: true, force: true }); }
+  try { const result = await service.resolve({ workspaceId: 'external-reuse-workspace', script: '商业合作正在推进。商业合作正在推进。商业合作正在推进。', localAssets: [], usePexels: true, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 }); assert.equal(result.resolvedAssignments.length, 3); assert.equal(result.resolvedAssignments[0]?.allowAssetReuse, undefined); assert.equal(result.resolvedAssignments[1]?.allowAssetReuse, undefined); assert.equal(result.resolvedAssignments[2]?.allowAssetReuse, true); assert.match(result.resolvedAssignments[2]?.reason || '', /受控复用/u); } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('closure external failure uses a marked generic/entity fallback and counts it once', async () => {

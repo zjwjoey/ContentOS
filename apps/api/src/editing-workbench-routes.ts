@@ -100,6 +100,7 @@ function friendlyEditError(error: unknown): string {
   if (code === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED') return '素材目录未被授权。';
   if (code === 'LOCAL_MEDIA_ROOT_NOT_FOUND') return '素材路径不存在或不是文件夹。';
   if (code.startsWith('EDIT_UNIQUE_MEDIA_EXHAUSTED')) return '当前文案需要的镜头数量超过了可用素材数量；为避免重复使用，请增加素材或减少文案分段。';
+  if (code.startsWith('EDIT_NO_MEDIA_LONG_ENOUGH')) return '当前素材没有足够长的画面覆盖配音片段，请增加更长素材或启用外部素材。';
   if (code === 'ENOENT') return '素材文件已不存在。';
   return '这一条任务准备失败，可修改后复制任务重试。';
 }

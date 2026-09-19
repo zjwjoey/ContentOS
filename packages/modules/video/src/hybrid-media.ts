@@ -5,7 +5,7 @@ import type { Pool } from 'pg';
 import type { AssetService } from '../../asset/src/asset-service.js';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import { segmentScriptSentences } from './sentence-segmenter.js';
-import { calculateSentenceRequiredDurationMs, type PlannerAsset, type ResolvedVisualAssignment } from './planner.js';
+import { calculateSentenceRequiredDurationMs, type PlannerAsset, type ResolvedVisualAssignment, type TimedScriptSentence } from './planner.js';
 
 export type HybridSourcePolicy = 'LOCAL_ONLY' | 'LOCAL_FIRST' | 'HYBRID' | 'EXTERNAL_FIRST';
 export type KnownEntityType = 'BRAND' | 'COMPANY' | 'PERSON' | 'PLACE' | 'PRODUCT';
@@ -52,13 +52,13 @@ export function classifyVisualEntities(text: string, registry: KnownVisualEntity
   return found;
 }
 function keywordQueries(text: string, entities: string[]): string[] { const mapped = Object.entries(WORD_MAP).flatMap(([key, values]) => text.includes(key) ? values : []); const english = text.match(/[A-Za-z][A-Za-z0-9-]{2,}/gu) || []; return unique([...mapped, ...english, ...entities]).slice(0, 10); }
-export function planVisuals(script: string, options: { durationMs?: number; minClipDurationMs?: number; maxClipDurationMs?: number; generatedBy?: 'deterministic-v1' | 'ai'; entityRegistry?: KnownVisualEntity[] } = {}): VisualPlanV1 {
-  const sentences = segmentScriptSentences(script); const scriptHash = `sha256:${hash(script)}`; const defaultDesired = Math.max(2_000, Math.round((options.durationMs || Math.max(2_000, sentences.length * 4_000)) / Math.max(1, sentences.length)));
+export function planVisuals(script: string, options: { durationMs?: number; minClipDurationMs?: number; maxClipDurationMs?: number; generatedBy?: 'deterministic-v1' | 'ai'; entityRegistry?: KnownVisualEntity[]; sentences?: TimedScriptSentence[] } = {}): VisualPlanV1 {
+  const sentences: TimedScriptSentence[] = options.sentences?.length ? options.sentences : segmentScriptSentences(script); const scriptHash = `sha256:${hash(script)}`; const defaultDesired = Math.max(2_000, Math.round((options.durationMs || Math.max(2_000, sentences.length * 4_000)) / Math.max(1, sentences.length)));
   return { schemaVersion: 'VISUAL_PLAN_V1', scriptHash, generatedBy: options.generatedBy || 'deterministic-v1', segments: sentences.map((sentence, index) => {
     const details = classifyVisualEntities(sentence.text, options.entityRegistry || DEFAULT_VISUAL_ENTITIES); const entities = details.map((item) => item.name); const keywords = keywordQueries(sentence.text, entities); const authentic = details.some((item) => item.requiresAuthenticAsset); const places = details.filter((item) => item.type === 'PLACE');
-    const desiredDurationMs = options.minClipDurationMs !== undefined && options.maxClipDurationMs !== undefined ? calculateSentenceRequiredDurationMs(sentence.text, options.minClipDurationMs, options.maxClipDurationMs) : defaultDesired;
+    const desiredDurationMs = options.minClipDurationMs !== undefined && options.maxClipDurationMs !== undefined ? calculateSentenceRequiredDurationMs(sentence, options.minClipDurationMs, options.maxClipDurationMs) : Number.isFinite(sentence.durationMs) && Number(sentence.durationMs) > 0 ? Number(sentence.durationMs) : defaultDesired;
     const intent = keywords.length ? keywords.join(', ') : 'editorial abstract b-roll'; const externalQueries = unique([...(authentic ? keywords.filter((item) => !entities.includes(item)) : keywords), ...(places.length ? places.map((place) => `${place.name} city street`) : []), ...(places.length ? [] : ['cinematic neutral b-roll'])]);
-    return { segmentIndex: index, text: sentence.text, visualIntent: intent, entities, entityDetails: details, keywords, localQueries: unique([...entities, ...keywords]), externalQueries, sourcePolicy: authentic ? 'LOCAL_FIRST' : 'HYBRID', requiresAuthenticEntityVisual: authentic, desiredDurationMs, reason: authentic ? '已识别真实品牌、公司或人物，优先使用本地真实素材' : places.length ? '地点允许使用上下文 B-roll' : '未识别真实实体，使用中性 B-roll' };
+    return { segmentIndex: sentence.index ?? index, text: sentence.text, visualIntent: intent, entities, entityDetails: details, keywords, localQueries: unique([...entities, ...keywords]), externalQueries, sourcePolicy: authentic ? 'LOCAL_FIRST' : 'HYBRID', requiresAuthenticEntityVisual: authentic, desiredDurationMs, reason: authentic ? '已识别真实品牌、公司或人物，优先使用本地真实素材' : places.length ? '地点允许使用上下文 B-roll' : '未识别真实实体，使用中性 B-roll' };
   }) };
 }
 export function dedupeExternalQueries(plan: VisualPlanV1): string[] { return unique(plan.segments.flatMap((segment) => segment.externalQueries.map(normalize))); }
@@ -156,25 +156,101 @@ export class HybridMediaService {
       return { id: imported.id, storageKey: imported.storageKey, sourcePath: this.storage.objectPath(imported.storageKey), durationMs: result.durationMs || file.durationMs, metadata: { external: stableProvenance } };
     } finally { await rm(temp, { force: true }).catch(() => undefined); }
   }
-  async resolve(input: { workspaceId: string; script: string; localAssets: Array<PlannerAsset & { originalName?: string; tags?: string[]; metadata?: Record<string, unknown> }>; usePexels: boolean; minClipDurationMs?: number; maxClipDurationMs?: number; signal?: AbortSignal }): Promise<HybridRetrievalResult> {
-    const minClipDurationMs = input.minClipDurationMs ?? 2_000; const maxClipDurationMs = input.maxClipDurationMs ?? 5_000; const plan = planVisuals(input.script, { minClipDurationMs, maxClipDurationMs }); const chosen: PlannerAsset[] = []; const assignments: ResolvedVisualAssignment[] = []; const resolvedSegments: ResolvedVisualPlanSegmentV1[] = []; let externalCount = 0; const warnings: string[] = []; const usedAssetIds = new Set<string>(); const usedExternalProviderAssets = new Set<string>(); const localUseCount = new Map<string, number>(); const searchResults = new Map<string, ExternalVideoResult[]>();
+  // Hybrid SCRIPT prefers unique media, but authenticity and semantic relevance win; reuse is explicit and controlled.
+  async resolve(input: { workspaceId: string; script: string; sentences?: TimedScriptSentence[]; localAssets: Array<PlannerAsset & { originalName?: string; tags?: string[]; metadata?: Record<string, unknown> }>; usePexels: boolean; minClipDurationMs?: number; maxClipDurationMs?: number; signal?: AbortSignal }): Promise<HybridRetrievalResult> {
+    const minClipDurationMs = input.minClipDurationMs ?? 2_000;
+    const maxClipDurationMs = input.maxClipDurationMs ?? 5_000;
+    const plan = planVisuals(input.script, { minClipDurationMs, maxClipDurationMs, ...(input.sentences ? { sentences: input.sentences } : {}) });
+    const chosen: PlannerAsset[] = [];
+    const assignments: ResolvedVisualAssignment[] = [];
+    const resolvedSegments: ResolvedVisualPlanSegmentV1[] = [];
+    let externalCount = 0;
+    const warnings: string[] = [];
+    const usedAssetIds = new Set<string>();
+    const usedExternalProviderAssets = new Set<string>();
+    const searchResults = new Map<string, ExternalVideoResult[]>();
     for (const segment of plan.segments) {
-      if (input.signal?.aborted) throw new Error('EDIT_PREPARE_CANCELLED'); const ranked = rankLocalCandidates(segment, input.localAssets); const authentic = segment.requiresAuthenticEntityVisual; const durationEligible = ranked.filter((candidate) => candidate.durationMs >= segment.desiredDurationMs); const authenticCandidates = durationEligible.filter((candidate) => candidate.matchedAuthenticEntities.length > 0); const relevantCandidates = durationEligible.filter((candidate) => candidate.semanticScore > 0);
-      const local = authentic ? authenticCandidates.find((candidate) => !usedAssetIds.has(candidate.id)) : relevantCandidates.find((candidate) => !usedAssetIds.has(candidate.id));
-      let asset = local as PlannerAsset | undefined; let source: 'LOCAL' | 'PEXELS' | 'FAKE_PEXELS' = 'LOCAL'; let query: string | undefined; let entityFallback = authentic && !local; let fallback = false; let reuseReason: string | undefined;
+      if (input.signal?.aborted) throw new Error('EDIT_PREPARE_CANCELLED');
+      const ranked = rankLocalCandidates(segment, input.localAssets);
+      const authentic = segment.requiresAuthenticEntityVisual;
+      const durationEligible = ranked.filter((candidate) => candidate.durationMs >= segment.desiredDurationMs);
+      if (durationEligible.length === 0 && !input.usePexels) throw new Error(`EDIT_NO_MEDIA_LONG_ENOUGH:第${segment.segmentIndex + 1}段需要 ${(segment.desiredDurationMs / 1000).toFixed(1)} 秒画面，但当前没有足够长的可用素材。`);
+      const authenticCandidates = durationEligible.filter((candidate) => candidate.matchedAuthenticEntities.length > 0);
+      const relevantCandidates = durationEligible.filter((candidate) => candidate.semanticScore > 0);
+      const unusedAuthentic = authenticCandidates.find((candidate) => !usedAssetIds.has(candidate.id));
+      const reusableAuthentic = authenticCandidates[0];
+      const unusedRelevant = relevantCandidates.find((candidate) => !usedAssetIds.has(candidate.id));
+      const reusableRelevant = relevantCandidates[0];
+      const local = authentic ? unusedAuthentic || reusableAuthentic : unusedRelevant || reusableRelevant;
+      let asset = local as PlannerAsset | undefined;
+      let source: 'LOCAL' | 'PEXELS' | 'FAKE_PEXELS' = 'LOCAL';
+      let query: string | undefined;
+      let entityFallback = authentic && !local;
+      let fallback = false;
+      let allowAssetReuse = Boolean(local && usedAssetIds.has(local.id));
+      let reuseReason = allowAssetReuse ? (authentic ? '真实主体素材优先，为保持主体真实性已受控复用' : '本地相关素材已用尽，已受控复用素材') : undefined;
       if (!asset && input.usePexels && this.provider) {
         for (const candidateQuery of segment.externalQueries) {
-          query = candidateQuery; try { let results = searchResults.get(candidateQuery); if (!results) { results = (await this.searchCached({ query: candidateQuery, orientation: 'portrait', locale: 'zh-CN', perPage: 8, ...(input.signal ? { signal: input.signal } : {}) })).results; searchResults.set(candidateQuery, results); } const rankedExternal = rankExternalCandidates(segment, results, usedExternalProviderAssets); const candidate = rankedExternal.find((result) => !usedExternalProviderAssets.has(externalIdentity(result))); if (!candidate) continue; const imported = await this.importExternal(input.workspaceId, candidate, input.signal); if (usedAssetIds.has(imported.id)) { continue; } asset = imported; source = this.provider.name === 'fake-pexels' ? 'FAKE_PEXELS' : 'PEXELS'; externalCount += 1; usedExternalProviderAssets.add(externalIdentity(candidate)); break; } catch (error) { warnings.push(`${candidateQuery}:${error instanceof Error ? error.message : 'external retrieval failed'}`); }
+          query = candidateQuery;
+          try {
+            let results = searchResults.get(candidateQuery);
+            if (!results) {
+              results = (await this.searchCached({ query: candidateQuery, orientation: 'portrait', locale: 'zh-CN', perPage: 8, ...(input.signal ? { signal: input.signal } : {}) })).results;
+              searchResults.set(candidateQuery, results);
+            }
+            const rankedExternal = rankExternalCandidates(segment, results, usedExternalProviderAssets);
+            const unusedCandidates = rankedExternal.filter((result) => !usedExternalProviderAssets.has(externalIdentity(result)));
+            const candidateChoices = unusedCandidates.length > 0
+              ? unusedCandidates.map((result) => ({ result, reused: false }))
+              : rankedExternal.map((result) => ({ result, reused: true }));
+            let dedupedAsset: PlannerAsset | undefined;
+            for (const choice of candidateChoices) {
+              const imported = await this.importExternal(input.workspaceId, choice.result, input.signal);
+              usedExternalProviderAssets.add(externalIdentity(choice.result));
+              if (usedAssetIds.has(imported.id)) {
+                dedupedAsset ||= imported;
+                continue;
+              }
+              asset = imported;
+              allowAssetReuse = choice.reused;
+              reuseReason = choice.reused ? '外部候选已用尽，已受控复用素材' : undefined;
+              source = this.provider.name === 'fake-pexels' ? 'FAKE_PEXELS' : 'PEXELS';
+              externalCount += 1;
+              break;
+            }
+            if (!asset && dedupedAsset) {
+              asset = dedupedAsset;
+              allowAssetReuse = true;
+              reuseReason = '不同外部素材命中同一媒体内容，已受控复用缓存素材';
+              source = this.provider.name === 'fake-pexels' ? 'FAKE_PEXELS' : 'PEXELS';
+              externalCount += 1;
+            }
+            if (asset) break;
+          } catch (error) {
+            warnings.push(`${candidateQuery}:${error instanceof Error ? error.message : 'external retrieval failed'}`);
+          }
         }
       }
       if (!asset) {
         const generic = durationEligible.find((candidate) => !usedAssetIds.has(candidate.id));
         if (!generic) throw new Error('EDIT_UNIQUE_MEDIA_EXHAUSTED:同一素材不能在同一任务中重复使用');
-        asset = generic; source = 'LOCAL'; fallback = true; entityFallback = authentic;
+        asset = generic;
+        source = 'LOCAL';
+        fallback = true;
+        entityFallback = authentic;
       }
-      const rankedLocal = ranked.find((item) => item.id === asset!.id); const matchedKeywords = rankedLocal?.matchedKeywords || []; const matchScore = entityFallback ? 0 : Math.min(100, rankedLocal?.semanticScore || (source === 'LOCAL' ? 0 : 60)); const resolvedRole = entityFallback ? fallbackRole(segment) : authentic && source === 'LOCAL' ? 'AUTHENTIC_ENTITY' : source === 'LOCAL' ? 'GENERIC_BROLL' : authentic ? fallbackRole(segment) : 'GENERIC_BROLL'; const reason = reuseReason || (fallback ? (entityFallback ? '无真实实体素材，已使用本地 generic fallback' : '无相关素材，已使用本地 generic fallback') : source === 'LOCAL' ? (authentic ? '本地真实实体素材命中' : '本地相关素材命中') : entityFallback ? '外部素材仅作中性补画，不代表真实实体' : '外部素材下载并写入本地缓存');
-      localUseCount.set(asset.id, (localUseCount.get(asset.id) || 0) + 1); usedAssetIds.add(asset.id); chosen.push(asset); assignments.push({ segmentIndex: segment.segmentIndex, selectedAssetId: asset.id, selectedSource: source, selectedRole: resolvedRole, entityFallback, fallback, ...(matchScore !== undefined ? { matchScore } : {}), ...(query ? { searchQuery: query } : {}), reason, visualIntent: segment.visualIntent, matchedKeywords }); resolvedSegments.push({ ...segment, selectedAssetId: asset.id, selectedSource: source, selectedRole: resolvedRole, entityFallback, fallback, matchScore, reason, ...(query ? { query, searchQuery: query } : {}) });
+      const rankedLocal = ranked.find((item) => item.id === asset!.id);
+      const matchedKeywords = rankedLocal?.matchedKeywords || [];
+      const matchScore = entityFallback ? 0 : Math.min(100, rankedLocal?.semanticScore || (source === 'LOCAL' ? 0 : 60));
+      const resolvedRole = entityFallback ? fallbackRole(segment) : authentic && source === 'LOCAL' ? 'AUTHENTIC_ENTITY' : source === 'LOCAL' ? 'GENERIC_BROLL' : authentic ? fallbackRole(segment) : 'GENERIC_BROLL';
+      const reason = reuseReason || (fallback ? (entityFallback ? '无真实实体素材，已使用本地 generic fallback' : '无相关素材，已使用本地 generic fallback') : source === 'LOCAL' ? (authentic ? '本地真实实体素材命中' : '本地相关素材命中') : entityFallback ? '外部素材仅作中性补画，不代表真实实体' : '外部素材下载并写入本地缓存');
+      usedAssetIds.add(asset.id);
+      chosen.push(asset);
+      assignments.push({ segmentIndex: segment.segmentIndex, selectedAssetId: asset.id, selectedSource: source, selectedRole: resolvedRole, entityFallback, fallback, ...(allowAssetReuse ? { allowAssetReuse: true } : {}), matchScore, ...(query ? { searchQuery: query } : {}), reason, visualIntent: segment.visualIntent, matchedKeywords });
+      resolvedSegments.push({ ...segment, selectedAssetId: asset.id, selectedSource: source, selectedRole: resolvedRole, entityFallback, fallback, ...(allowAssetReuse ? { allowAssetReuse: true } : {}), matchScore, reason, ...(query ? { query, searchQuery: query } : {}) });
     }
-    const fallbackCount = resolvedSegments.filter((segment) => segment.entityFallback).length; const genericFallbackCount = resolvedSegments.filter((segment) => segment.fallback && !segment.entityFallback).length; return { assets: chosen, plan, resolvedPlan: { schemaVersion: 'RESOLVED_VISUAL_PLAN_V1', plan, segments: resolvedSegments }, resolvedAssignments: assignments, diagnostics: { localCount: chosen.length - externalCount, externalCount, fallbackCount, genericFallbackCount, queries: dedupeExternalQueries(plan), warnings, sourceStats: { local: chosen.length - externalCount, pexels: externalCount, fallback: fallbackCount, genericFallback: genericFallbackCount } } };
+    const fallbackCount = resolvedSegments.filter((segment) => segment.entityFallback).length;
+    const genericFallbackCount = resolvedSegments.filter((segment) => segment.fallback && !segment.entityFallback).length;
+    return { assets: chosen, plan, resolvedPlan: { schemaVersion: 'RESOLVED_VISUAL_PLAN_V1', plan, segments: resolvedSegments }, resolvedAssignments: assignments, diagnostics: { localCount: chosen.length - externalCount, externalCount, fallbackCount, genericFallbackCount, queries: dedupeExternalQueries(plan), warnings, sourceStats: { local: chosen.length - externalCount, pexels: externalCount, fallback: fallbackCount, genericFallback: genericFallbackCount } } };
   }
 }
