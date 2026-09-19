@@ -4,7 +4,7 @@
 
 - Base SHA: `f318da93be6724fed87822c1ce9de5fe19ffb4a8`
 - Branch: `codex/script-editing-v2-rule-editorial-layer`
-- Implementation commit: pending final commit (working tree verified)
+- Implementation commit: `fab92e6`
 - `origin/main`: `42c9b2f1eb80fddf63bef67dd8932ec448cabcd9`
 - No merge or automatic PR was created.
 
@@ -36,4 +36,4 @@
 
 ## GO / NO-GO
 
-NO-GO for claiming a clean repository-wide release gate until a fresh isolated `contentos_dev` database is provided. V2 implementation, isolated migration gates, focused tests, build, and browser flow are verified; final SHA will be recorded after commit/push.
+NO-GO for claiming a clean repository-wide release gate until a fresh isolated `contentos_dev` database is provided. V2 implementation, isolated migration gates, focused tests, build, and browser flow are verified. Commit `fab92e6` is ready to push.
