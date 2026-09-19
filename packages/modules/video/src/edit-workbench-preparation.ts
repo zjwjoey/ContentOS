@@ -1,7 +1,7 @@
 import type { AssetService } from '../../asset/src/asset-service.js';
 import type { AssetCatalogService } from '../../asset/src/asset-catalog-service.js';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
-import { assembleBrandedTimeline, buildRandomSentenceMontageManifest, buildScriptMontageManifest, type PlannerAsset, type ResolvedVisualAssignment } from './planner.js';
+import { assembleBrandedTimeline, buildRandomSentenceMontageManifest, buildScriptMontageManifest, type PlannerAsset, type ResolvedVisualAssignment, type TimedScriptSentence } from './planner.js';
 import { segmentScriptSentences } from './sentence-segmenter.js';
 import type { VideoAdjustmentService } from './quick-edit-service.js';
 import type { VideoEditPreset, VideoEditPresetService } from './preset-service.js';
@@ -40,6 +40,21 @@ export interface EditingWorkbenchPreparationResult {
   renderJobState: string;
 }
 
+/** Distribute a voice track's measured duration across script sentences. */
+export function fitSentencesToVoiceDuration(sentences: TimedScriptSentence[], totalDurationMs: number): TimedScriptSentence[] {
+  if (!Number.isFinite(totalDurationMs) || totalDurationMs <= 0 || sentences.length === 0) return sentences;
+  const weights = sentences.map((sentence) => Math.max(1, [...sentence.text.replace(/\s+/gu, '')].length));
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  let assigned = 0;
+  return sentences.map((sentence, index) => {
+    const durationMs = index === sentences.length - 1
+      ? Math.max(1, Math.round(totalDurationMs) - assigned)
+      : Math.max(1, Math.round(totalDurationMs * (weights[index] || 1) / totalWeight));
+    assigned += durationMs;
+    return { ...sentence, durationMs };
+  });
+}
+
 /**
  * Performs one durable batch item's preparation. It deliberately creates only
  * the normal VideoService VIDEO_RENDER job; rendering remains owned by the
@@ -58,7 +73,13 @@ export async function prepareEditingWorkbenchItem(
     const imported = await dependencies.assetService.importFile({ workspaceId: input.workspaceId, sourcePath: input.voicePath, kind: 'AUDIO', role: 'VOICE' });
     voiceAssetId = imported.id;
   }
-  const sentences = segmentScriptSentences(input.script);
+  const rawSentences = segmentScriptSentences(input.script);
+  let sentences = rawSentences;
+  if (voiceAssetId) {
+    const voice = await dependencies.assets.getReadyWorkspaceAsset(input.workspaceId, voiceAssetId, 'AUDIO', 'VOICE');
+    const voiceDurationMs = Number(voice?.metadata.durationMs || 0);
+    if (voiceDurationMs > 0) sentences = fitSentencesToVoiceDuration(rawSentences, voiceDurationMs);
+  }
   let planned;
   if (input.mode === 'MIX') {
     planned = buildRandomSentenceMontageManifest({ workspaceId: input.workspaceId, sentences, assets: input.assets, seed: input.seed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });

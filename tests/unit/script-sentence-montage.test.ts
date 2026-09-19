@@ -15,8 +15,9 @@ test('sentence segmentation handles mixed punctuation without decimal or URL spl
 
 test('random sentence montage emits exactly one clip per sentence and is reproducible', () => {
   const sentences = segmentScriptSentences('第一句。第二句。第三句。第四句。');
-  const first = buildRandomSentenceMontageManifest({ projectId: 'p', seed: 8, sentences, assets });
-  const second = buildRandomSentenceMontageManifest({ projectId: 'p', seed: 8, sentences, assets });
+  const pool = [...assets, { ...assets[0]!, id: 'extra' }];
+  const first = buildRandomSentenceMontageManifest({ projectId: 'p', seed: 8, sentences, assets: pool });
+  const second = buildRandomSentenceMontageManifest({ projectId: 'p', seed: 8, sentences, assets: pool });
   assert.deepEqual(first, second);
   assert.equal(first.manifest.timeline.length, 4);
   assert.equal(first.manifest.timeline.every((clip) => clip.sentenceIndex !== undefined && clip.sceneId), true);
@@ -32,15 +33,19 @@ test('script montage records explainable keyword matches and fallback', () => {
   assert.match(result.decisions[1]?.matchingReason || '', /兜底/);
 });
 
-test('random montage permits repeated assets only when the library is insufficient', () => {
-  const result = buildRandomSentenceMontageManifest({ projectId: 'p', seed: 2, sentences: segmentScriptSentences('一。二。三。'), assets: [assets[0]!] });
-  assert.equal(result.manifest.timeline.length, 3);
-  assert.equal(result.decisions.every((decision) => decision.fallback || decision.sentenceIndex === 0), true);
+test('random montage rejects a task that would reuse an asset', () => {
+  assert.throws(() => buildRandomSentenceMontageManifest({ projectId: 'p', seed: 2, sentences: segmentScriptSentences('一。二。三。'), assets: [assets[0]!] }), /EDIT_UNIQUE_MEDIA_EXHAUSTED/);
+});
+
+test('script montage randomly selects local folder assets without filename matching', () => {
+  const result = buildScriptMontageManifest({ projectId: 'p', seed: 2, script: '欧洲门店。销售数据。', sentences: [], assets: assets.map((asset) => ({ ...asset, metadata: { sourceType: 'LOCAL_MEDIA' } })) });
+  assert.equal(new Set(result.manifest.timeline.map((clip) => clip.assetId)).size, 2);
+  assert.equal(result.decisions.every((decision) => decision.matchingReason.includes('随机匹配')), true);
 });
 
 test('voice timing drives content duration and branding offsets subtitles', () => {
   const sentences = [0, 1, 2, 3, 4].map((index) => ({ index, text: `句子${index + 1}`, normalizedText: `句子${index + 1}`, voiceStartMs: index * 2_000, voiceEndMs: index * 2_000 + 1_200 }));
-  const planned = buildScriptMontageManifest({ projectId: 'p', seed: 1, sentences, assets });
+  const planned = buildScriptMontageManifest({ projectId: 'p', seed: 1, sentences, assets: [...assets, { ...assets[0]!, id: 'extra-voice-1' }, { ...assets[1]!, id: 'extra-voice-2' }] });
   assert.deepEqual(planned.manifest.timeline.map((clip) => clip.durationMs), [1_200, 1_200, 1_200, 1_200, 1_200]);
   const branded = assembleBrandedTimeline({ ...planned.manifest, subtitles: [{ text: '句子1', startMs: 0, endMs: 1_200 }] }, { intro: { id: 'intro', storageKey: 'intro.mp4', sourcePath: 'intro.mp4', durationMs: 2_000, role: 'INTRO' }, outro: { id: 'outro', storageKey: 'outro.mp4', sourcePath: 'outro.mp4', durationMs: 3_000, role: 'OUTRO' } });
   assert.equal(branded.timeline.filter((clip) => clip.role === 'CONTENT').length, 5);

@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { cleanFilePart, outputFileStem, pairByBasename, promoteStagedUpload, renderRetryIdempotencySuffix } from '../../apps/api/src/editing-workbench-routes.js';
+import { fitSentencesToVoiceDuration } from '../../packages/modules/video/src/edit-workbench-preparation.js';
 
 test('editing workbench cleans Windows filename characters and preserves ordinal naming', () => {
   assert.equal(cleanFilePart('Action: 欧洲/门店?.mp4'), 'Action_ 欧洲_门店_.mp4');
@@ -79,4 +80,15 @@ test('editing workbench never overwrites an existing upload destination', async 
   await writeFile(destination, 'old-audio');
   await assert.rejects(() => promoteStagedUpload(staged, destination), /EDIT_UPLOAD_DESTINATION_EXISTS/);
   assert.equal(await readFile(destination, 'utf8'), 'old-audio');
+});
+
+test('editing workbench fits script visuals to the uploaded voice duration', () => {
+  const sentences = [
+    { index: 0, text: '第一句文案。', normalizedText: '第一句文案' },
+    { index: 1, text: '第二句文案比较长。', normalizedText: '第二句文案比较长' },
+    { index: 2, text: '第三句。', normalizedText: '第三句' },
+  ];
+  const fitted = fitSentencesToVoiceDuration(sentences, 53_000);
+  assert.equal(fitted.reduce((total, sentence) => total + Number(sentence.durationMs || 0), 0), 53_000);
+  assert.ok(fitted.every((sentence) => Number(sentence.durationMs) > 0));
 });

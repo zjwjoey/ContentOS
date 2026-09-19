@@ -164,6 +164,8 @@ export interface SentenceMontageBaseInput {
   maxClipDurationMs?: number;
   splitSemicolon?: boolean;
   preferUnusedMedia?: boolean;
+  /** When true, local folder assets are selected randomly instead of by filename/tags. */
+  randomizeLocalMedia?: boolean;
 }
 export interface SentenceMontageDecision {
   sentenceIndex: number;
@@ -227,6 +229,10 @@ function assetText(asset: SentenceMontageAsset): string {
   return [asset.originalName || '', ...(asset.tags || []), ...metadata].join(' ');
 }
 
+function isLocalMediaAsset(asset: SentenceMontageAsset): boolean {
+  return asset.metadata?.sourceType === 'LOCAL_MEDIA';
+}
+
 function boundedAssetClip(asset: SentenceMontageAsset, requestedDurationMs: number, random: () => number): { durationMs: number; sourceInMs: number } | null {
   if (requestedDurationMs > Math.floor(asset.durationMs)) return null;
   const durationMs = Math.max(1, requestedDurationMs);
@@ -273,33 +279,36 @@ export function buildScriptMontageManifest(input: ScriptMontageInput): SentenceM
   if (input.assets.some((asset) => !Number.isFinite(asset.durationMs) || asset.durationMs <= 0)) throw new Error('Script montage requires every video asset to have a positive duration');
   const minMs = input.minClipDurationMs ?? 2_000; const maxMs = input.maxClipDurationMs ?? 5_000;
   if (!Number.isInteger(minMs) || !Number.isInteger(maxMs) || minMs <= 0 || maxMs < minMs) throw new Error('Script montage clip bounds are invalid');
-  const random = seededRandom(input.seed); const assets = [...input.assets].sort((a, b) => a.id.localeCompare(b.id)); const timeline: EditManifestV0['timeline'] = []; const decisions: SentenceMontageDecision[] = [];
+  const random = seededRandom(input.seed); const assets = [...input.assets].sort((a, b) => a.id.localeCompare(b.id)); const timeline: EditManifestV0['timeline'] = []; const decisions: SentenceMontageDecision[] = []; const usedAssetIds = new Set<string>(); const randomizeLocalMedia = input.randomizeLocalMedia === true || (input.randomizeLocalMedia === undefined && assets.every(isLocalMediaAsset));
   if (input.resolvedAssignments) {
     const byIndex = new Map(input.resolvedAssignments.map((assignment) => [assignment.segmentIndex, assignment]));
     let visualCursor = 0;
     for (const sentence of sentences) {
       const assignment = byIndex.get(sentence.index); if (!assignment) throw new Error(`VisualPlan assignment missing for segment ${sentence.index}`);
       const asset = input.assets.find((candidate) => candidate.id === assignment.selectedAssetId); if (!asset) throw new Error(`VisualPlan assignment asset missing: ${assignment.selectedAssetId}`);
+      if (usedAssetIds.has(asset.id)) throw new Error('EDIT_UNIQUE_MEDIA_EXHAUSTED:同一素材不能在同一任务中重复使用');
       const requestedDuration = sentenceDurationMs(sentence, minMs, maxMs); const timing = boundedAssetClip(asset, requestedDuration, random); if (!timing) throw new Error(`第${sentence.index + 1}句话需要足够长的画面素材。`);
       const placement = visualTiming(sentences, sentence, sentence.index, visualCursor); visualCursor = placement.endMs; const matching: ClipMatchingV1 = { matchedKeywords: assignment.matchedKeywords, matchScore: assignment.matchScore ?? (assignment.entityFallback ? 0 : 100), fallback: assignment.fallback ?? assignment.entityFallback, matchingReason: assignment.reason, visualIntent: assignment.visualIntent, selectedSource: assignment.selectedSource, selectedRole: assignment.selectedRole, entityFallback: assignment.entityFallback, ...(assignment.allowAssetReuse ? { allowAssetReuse: true } : {}), ...(assignment.searchQuery ? { query: assignment.searchQuery } : {}), reason: assignment.reason };
-      const sceneId = `scene-${String(sentence.index + 1).padStart(3, '0')}`; timeline.push({ assetId: asset.id, sourcePath: asset.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, timelineStartMs: placement.startMs, timelineEndMs: placement.endMs, transition: 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching, role: 'CONTENT', reviewStatus: assignment.entityFallback ? 'REVIEW' : 'GOOD', ...(validVoiceTiming(sentence) ? { voiceStartMs: sentence.voiceStartMs, voiceEndMs: sentence.voiceEndMs } : {}) }); decisions.push({ sentenceIndex: sentence.index, sceneId, assetId: asset.id, durationMs: timing.durationMs, ...matching });
+      const sceneId = `scene-${String(sentence.index + 1).padStart(3, '0')}`; timeline.push({ assetId: asset.id, sourcePath: asset.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, timelineStartMs: placement.startMs, timelineEndMs: placement.endMs, transition: 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching, role: 'CONTENT', reviewStatus: assignment.entityFallback ? 'REVIEW' : 'GOOD', ...(validVoiceTiming(sentence) ? { voiceStartMs: sentence.voiceStartMs, voiceEndMs: sentence.voiceEndMs } : {}) }); decisions.push({ sentenceIndex: sentence.index, sceneId, assetId: asset.id, durationMs: timing.durationMs, ...matching }); usedAssetIds.add(asset.id);
     }
     return { manifest: sentenceManifest(input, sentences, 'SCRIPT', decisions, timeline), decisions, sentences };
   }
   let visualCursor = 0;
   for (let sentenceIndex = 0; sentenceIndex < sentences.length; sentenceIndex += 1) {
     const sentence = sentences[sentenceIndex]!;
-    const required = sentenceTokens(sentence.text); const previous = timeline.at(-1)?.assetId;
+    const required = sentenceTokens(sentence.text);
     const requestedDuration = sentenceDurationMs(sentence, minMs, maxMs);
     const ranked = assets.map((asset) => { const available = sentenceTokens(assetText(asset)); const matchedKeywords = required.filter((token) => available.includes(token)); const matchScore = required.length ? Math.round((matchedKeywords.length / required.length) * 100) : 0; const historyPenalty = input.preferUnusedMedia === false ? 0 : usagePenalty(asset); return { asset, matchedKeywords, matchScore, historyPenalty }; }).sort((a, b) => { const scoreDelta = b.matchScore - a.matchScore; if (Math.abs(scoreDelta) > 5) return scoreDelta; return (b.matchScore - b.historyPenalty) - (a.matchScore - a.historyPenalty) || a.asset.id.localeCompare(b.asset.id); });
-    const eligible = ranked.filter((item) => item.asset.id !== previous && item.asset.durationMs >= requestedDuration);
-    const selected = (eligible[0] || ranked.find((item) => item.asset.durationMs >= requestedDuration) || ranked[0]);
+    const eligible = ranked.filter((item) => !usedAssetIds.has(item.asset.id) && item.asset.durationMs >= requestedDuration);
+    if (eligible.length === 0) throw new Error('EDIT_UNIQUE_MEDIA_EXHAUSTED:同一素材不能在同一任务中重复使用');
+    const selected = randomizeLocalMedia ? eligible[Math.floor(random() * eligible.length)] : eligible[0];
     if (!selected || selected.asset.durationMs < requestedDuration) throw new Error(`第${sentence.index + 1}句话需要${(requestedDuration / 1000).toFixed(1)}秒画面，但当前素材都不足${(requestedDuration / 1000).toFixed(1)}秒。`);
     const timing = boundedAssetClip(selected.asset, requestedDuration, random); if (!timing) throw new Error(`第${sentence.index + 1}句话需要足够长的画面素材。`); const fallback = selected.matchScore === 0;
     const sceneId = `scene-${String(sentence.index + 1).padStart(3, '0')}`;
-    const matching: ClipMatchingV1 = { matchedKeywords: selected.matchedKeywords, matchScore: selected.matchScore, fallback, matchingReason: fallback ? '未找到关键词匹配，已使用规则兜底素材' : `命中关键词：${selected.matchedKeywords.join('、')}` };
+    const matching: ClipMatchingV1 = randomizeLocalMedia ? { matchedKeywords: [], matchScore: 0, fallback: true, matchingReason: '指定文件夹素材随机匹配，不按文件名匹配' } : { matchedKeywords: selected.matchedKeywords, matchScore: selected.matchScore, fallback, matchingReason: fallback ? '未找到关键词匹配，已使用规则兜底素材' : `命中关键词：${selected.matchedKeywords.join('、')}` };
     const placement = visualTiming(sentences, sentence, sentenceIndex, visualCursor); visualCursor = placement.endMs;
-    timeline.push({ assetId: selected.asset.id, sourcePath: selected.asset.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, timelineStartMs: placement.startMs, timelineEndMs: placement.endMs, transition: timeline.length ? 'cut' : 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching, role: 'CONTENT', reviewStatus: fallback || selected.matchScore < 30 ? 'REVIEW' : 'GOOD', ...(validVoiceTiming(sentence) ? { voiceStartMs: sentence.voiceStartMs, voiceEndMs: sentence.voiceEndMs } : {}) });
+    timeline.push({ assetId: selected.asset.id, sourcePath: selected.asset.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, timelineStartMs: placement.startMs, timelineEndMs: placement.endMs, transition: timeline.length ? 'cut' : 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching, role: 'CONTENT', reviewStatus: randomizeLocalMedia || fallback || selected.matchScore < 30 ? 'REVIEW' : 'GOOD', ...(validVoiceTiming(sentence) ? { voiceStartMs: sentence.voiceStartMs, voiceEndMs: sentence.voiceEndMs } : {}) });
+    usedAssetIds.add(selected.asset.id);
     decisions.push({ sentenceIndex: sentence.index, sceneId, assetId: selected.asset.id, durationMs: timing.durationMs, ...matching });
   }
   return { manifest: sentenceManifest(input, sentences, 'SCRIPT', decisions, timeline), decisions, sentences };
@@ -312,14 +321,14 @@ export function buildRandomSentenceMontageManifest(input: RandomSentenceMontageI
   if (input.assets.some((asset) => !Number.isFinite(asset.durationMs) || asset.durationMs <= 0)) throw new Error('Random montage requires every video asset to have a positive duration');
   const minMs = input.minClipDurationMs ?? 2_000; const maxMs = input.maxClipDurationMs ?? 5_000;
   if (!Number.isInteger(minMs) || !Number.isInteger(maxMs) || minMs <= 0 || maxMs < minMs) throw new Error('Random montage clip bounds are invalid');
-  const random = seededRandom(input.seed); const assets = [...input.assets].sort((a, b) => a.id.localeCompare(b.id)); const usage = new Map(assets.map((asset) => [asset.id, 0])); const timeline: EditManifestV0['timeline'] = []; const decisions: SentenceMontageDecision[] = [];
+  const random = seededRandom(input.seed); const assets = [...input.assets].sort((a, b) => a.id.localeCompare(b.id)); const usage = new Map(assets.map((asset) => [asset.id, 0])); const usedAssetIds = new Set<string>(); const timeline: EditManifestV0['timeline'] = []; const decisions: SentenceMontageDecision[] = [];
   let visualCursor = 0;
   for (let sentenceIndex = 0; sentenceIndex < sentences.length; sentenceIndex += 1) {
-    const sentence = sentences[sentenceIndex]!; const previous = timeline.at(-1)?.assetId; const requestedDuration = sentenceDurationMs(sentence, minMs, maxMs);
-    const eligible = assets.filter((asset) => asset.durationMs >= requestedDuration); if (eligible.length === 0) throw new Error(`第${sentence.index + 1}句话需要${(requestedDuration / 1000).toFixed(1)}秒画面，但当前素材都不足${(requestedDuration / 1000).toFixed(1)}秒。`);
-    const ranked = eligible.map((asset) => ({ asset, score: usage.get(asset.id)! * 8 + (input.preferUnusedMedia === false ? 0 : usagePenalty(asset)) })).sort((a, b) => a.score - b.score || a.asset.id.localeCompare(b.asset.id)); const lowest = ranked[0]!.score; const pool = ranked.filter((item) => item.score <= lowest + 1 && (eligible.length === 1 || item.asset.id !== previous)); const selected = (pool[Math.floor(random() * pool.length)]?.asset || ranked.find((item) => item.asset.id !== previous)?.asset || ranked[0]!.asset); const timing = boundedAssetClip(selected, requestedDuration, random)!; const sceneId = `scene-${String(sentence.index + 1).padStart(3, '0')}`; const fallback = eligible.length === 1 && previous === selected.id; const matching: ClipMatchingV1 = { matchedKeywords: [], matchScore: 0, fallback, matchingReason: fallback ? '素材不足，允许重复使用同一素材' : '优先选择近期较少使用的素材' };
+    const sentence = sentences[sentenceIndex]!; const requestedDuration = sentenceDurationMs(sentence, minMs, maxMs);
+    const eligible = assets.filter((asset) => !usedAssetIds.has(asset.id) && asset.durationMs >= requestedDuration); if (eligible.length === 0) throw new Error('EDIT_UNIQUE_MEDIA_EXHAUSTED:同一素材不能在同一任务中重复使用');
+    const ranked = eligible.map((asset) => ({ asset, score: usage.get(asset.id)! * 8 + (input.preferUnusedMedia === false ? 0 : usagePenalty(asset)) })).sort((a, b) => a.score - b.score || a.asset.id.localeCompare(b.asset.id)); const lowest = ranked[0]!.score; const pool = ranked.filter((item) => item.score <= lowest + 1); const selected = (pool[Math.floor(random() * pool.length)]?.asset || ranked[0]!.asset); const timing = boundedAssetClip(selected, requestedDuration, random)!; const sceneId = `scene-${String(sentence.index + 1).padStart(3, '0')}`; const fallback = false; const matching: ClipMatchingV1 = { matchedKeywords: [], matchScore: 0, fallback, matchingReason: '随机选择未使用素材' };
     const placement = visualTiming(sentences, sentence, sentenceIndex, visualCursor); visualCursor = placement.endMs;
-    usage.set(selected.id, (usage.get(selected.id) || 0) + 1); timeline.push({ assetId: selected.id, sourcePath: selected.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, timelineStartMs: placement.startMs, timelineEndMs: placement.endMs, transition: 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching, role: 'CONTENT', reviewStatus: fallback ? 'REVIEW' : 'GOOD', ...(validVoiceTiming(sentence) ? { voiceStartMs: sentence.voiceStartMs, voiceEndMs: sentence.voiceEndMs } : {}) }); decisions.push({ sentenceIndex: sentence.index, sceneId, assetId: selected.id, durationMs: timing.durationMs, ...matching });
+    usage.set(selected.id, (usage.get(selected.id) || 0) + 1); usedAssetIds.add(selected.id); timeline.push({ assetId: selected.id, sourcePath: selected.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, timelineStartMs: placement.startMs, timelineEndMs: placement.endMs, transition: 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching, role: 'CONTENT', reviewStatus: fallback ? 'REVIEW' : 'GOOD', ...(validVoiceTiming(sentence) ? { voiceStartMs: sentence.voiceStartMs, voiceEndMs: sentence.voiceEndMs } : {}) }); decisions.push({ sentenceIndex: sentence.index, sceneId, assetId: selected.id, durationMs: timing.durationMs, ...matching });
   }
   return { manifest: sentenceManifest(input, sentences, 'RANDOM', decisions, timeline), decisions, sentences };
 }

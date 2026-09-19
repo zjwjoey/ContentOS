@@ -269,7 +269,7 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
         if (selectedIds && chosen.length !== selectedIds.size) throw new Error('VIDEO_LOCAL_MEDIA_SELECTION_INVALID');
         for (const file of chosen) {
           const id = `${scan.sourceRootId}:${file.relativePath}`; const index = indexedById.get(id); const usageCount = index?.usageCount || file.usageCount || 0; const recentUsageCount = index?.recentUsageCount || 0; const lastUsedAt = index?.lastUsedAt || file.lastUsedAt;
-          plannerAssets.push({ id, storageKey: id, sourcePath: file.sourcePath, durationMs: file.durationMs, originalName: file.fileName, tags: index?.tags || file.tags || [], usageCount, recentUsageCount, ...(lastUsedAt ? { lastUsedAt } : {}), metadata: { width: file.width, height: file.height, format: file.format, relativePath: file.relativePath, category: index?.category || file.category, usageCount, recentUsageCount, ...(lastUsedAt ? { lastUsedAt } : {}) } });
+          plannerAssets.push({ id, storageKey: id, sourcePath: file.sourcePath, durationMs: file.durationMs, originalName: file.fileName, tags: index?.tags || file.tags || [], usageCount, recentUsageCount, ...(lastUsedAt ? { lastUsedAt } : {}), metadata: { sourceType: 'LOCAL_MEDIA', width: file.width, height: file.height, format: file.format, relativePath: file.relativePath, category: index?.category || file.category, usageCount, recentUsageCount, ...(lastUsedAt ? { lastUsedAt } : {}) } });
         }
         localPoolMeta = { localMediaSourceRootId: scan.sourceRootId, localMediaScanId: scan.id };
       }

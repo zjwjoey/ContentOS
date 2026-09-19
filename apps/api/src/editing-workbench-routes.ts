@@ -99,6 +99,7 @@ function friendlyEditError(error: unknown): string {
   if (code === 'VIDEO_MANIFEST_VOICE_UNAVAILABLE' || code === 'EDIT_VOICE_PATH_UNAUTHORIZED') return '配音文件不可用，请重新选择。';
   if (code === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED') return '素材目录未被授权。';
   if (code === 'LOCAL_MEDIA_ROOT_NOT_FOUND') return '素材路径不存在或不是文件夹。';
+  if (code.startsWith('EDIT_UNIQUE_MEDIA_EXHAUSTED')) return '当前文案需要的镜头数量超过了可用素材数量；为避免重复使用，请增加素材或减少文案分段。';
   if (code === 'ENOENT') return '素材文件已不存在。';
   return '这一条任务准备失败，可修改后复制任务重试。';
 }
@@ -154,7 +155,7 @@ async function scanRoots(localMedia: LocalMediaSourceService, roots: string[], w
     try {
       const scan = await localMedia.scan({ sourceRoot, recursive: true });
       if (scanId) await localMedia.completeScan(scanId, scan);
-      return { ...(scanId ? { scanId } : {}), sourceRoot: scan.sourceRootId, path: sourceRoot, total: scan.totalCount, available: scan.availableCount, unavailable: scan.unavailableCount, files: scan.files.filter((file) => file.available).map((file) => ({ id: `${scan.sourceRootId}:${file.relativePath}`, storageKey: `${scan.sourceRootId}:${file.relativePath}`, sourcePath: file.sourcePath, durationMs: file.durationMs, originalName: file.fileName, tags: file.tags, metadata: { width: file.width, height: file.height, format: file.format, relativePath: file.relativePath } })) };
+      return { ...(scanId ? { scanId } : {}), sourceRoot: scan.sourceRootId, path: sourceRoot, total: scan.totalCount, available: scan.availableCount, unavailable: scan.unavailableCount, files: scan.files.filter((file) => file.available).map((file) => ({ id: `${scan.sourceRootId}:${file.relativePath}`, storageKey: `${scan.sourceRootId}:${file.relativePath}`, sourcePath: file.sourcePath, durationMs: file.durationMs, originalName: file.fileName, tags: file.tags, metadata: { sourceType: 'LOCAL_MEDIA', width: file.width, height: file.height, format: file.format, relativePath: file.relativePath } })) };
     } catch (error) {
       if (scanId) await localMedia.failScan(scanId, error);
       throw error;
