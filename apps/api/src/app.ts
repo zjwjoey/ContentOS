@@ -35,6 +35,10 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { access } from 'node:fs/promises';
 import { probeMedia } from '../../../packages/infrastructure/ffmpeg/src/index.js';
+import { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
+import { UnsupportedNativePathPicker } from '../../../packages/modules/local-path/src/index.js';
+import { WindowsNativePathPicker } from '../../../packages/modules/local-path/src/native-path-picker.js';
+import { registerLocalPathRoutes } from './local-path-routes.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -46,7 +50,7 @@ function directorPlan(projectId: string, input: z.infer<typeof directorInput>): 
   return { schemaVersion: 'DIRECTOR_PLAN_V0', projectId, seed: input.seed, brief: input.brief, storyboard: input.storyboard, provenance: { author: input.provenance.author, source: input.provenance.source, ...(input.provenance.promptVersion ? { promptVersion: input.provenance.promptVersion } : {}), ...(input.provenance.modelProfile ? { modelProfile: input.provenance.modelProfile } : {}) } };
 }
 
-export interface ApiRuntimeDependencies { db: Pool; storage?: LocalStorageProvider; uploadMaxBytes?: number; allowFakePublisherControls?: boolean; }
+export interface ApiRuntimeDependencies { db: Pool; storage?: LocalStorageProvider; uploadMaxBytes?: number; allowFakePublisherControls?: boolean; localPathAccess?: LocalPathAccessService; nativePathPicker?: import('../../../packages/modules/local-path/src/index.js').NativePathPicker; }
 
 export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<FastifyInstance> {
   const db = 'query' in input ? input : input.db;
@@ -65,8 +69,10 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const benchmark = new BenchmarkService(db, jobs);
   const assets = new AssetCatalogService(db);
   const assetService = new AssetService(db, storage, (path) => probeMedia(path, process.env.FFPROBE_PATH || 'ffprobe'));
-  const localMedia = new LocalMediaSourceService({ db, thumbnailRoot: `${storage.root}/thumbnails` });
-  const video = new VideoService(db, storage, jobs, assets);
+  const localPathAccess = runtime.localPathAccess || new LocalPathAccessService({ db });
+  const nativePathPicker = runtime.nativePathPicker || (process.platform === 'win32' ? new WindowsNativePathPicker() : new UnsupportedNativePathPicker());
+  const localMedia = new LocalMediaSourceService({ db, thumbnailRoot: `${storage.root}/thumbnails`, pathAccess: localPathAccess });
+  const video = new VideoService(db, storage, jobs, assets, localPathAccess);
   const videoFromDirector = new DirectorVideoService(directorV1, video, director);
   const quickEdit = new VideoAdjustmentService(db, assets, localMedia);
   const standaloneQuickEdit = new StandaloneQuickEditService(db, assets, quickEdit, video);
@@ -81,8 +87,9 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerDashboardRoutes(app, { projects, center: projectCenter });
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
   registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, assetService, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes, localMedia, presets });
-  registerEditingWorkbenchRoutes(app, { db, localMedia, quickEdit, video, jobs, assets, assetService, storage, maxUploadBytes: uploadMaxBytes, presets });
-  registerScriptEditingV2Routes(app, { db, jobs, video, assets, presets, storage });
+  registerLocalPathRoutes(app, { access: localPathAccess, picker: nativePathPicker });
+  registerEditingWorkbenchRoutes(app, { db, localMedia, localPathAccess, quickEdit, video, jobs, assets, assetService, storage, maxUploadBytes: uploadMaxBytes, presets });
+  registerScriptEditingV2Routes(app, { db, jobs, localPathAccess, video, assets, presets, storage });
   registerMediaProviderRoutes(app, createExternalVideoProvider(), db);
   registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs, allowFakePublisherControls: runtime.allowFakePublisherControls === true, ...(runtime.allowFakePublisherControls ? { fakeSimulations: new FakePublisherSimulationService(db) } : {}) });
   registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher, director: directorV1 });

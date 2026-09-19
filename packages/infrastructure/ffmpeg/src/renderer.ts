@@ -76,10 +76,19 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   if (musicIndex >= 0 && manifest.audio.backgroundMusic?.path) { if (manifest.audio.backgroundMusic.loop !== false) args.push('-stream_loop', '-1'); args.push('-i', manifest.audio.backgroundMusic.path); }
   const filters: string[] = [];
   const outputFps = Math.max(1, Number(manifest.canvas.fps || 30));
+  const visualDurations = manifest.timeline.map((clip) => clip.timelineStartMs !== undefined && clip.timelineEndMs !== undefined ? Math.max(clip.durationMs, clip.timelineEndMs - clip.timelineStartMs) : clip.durationMs);
+  let visualCursorMs = 0;
+  const firstStart = manifest.timeline[0]?.timelineStartMs;
+  if (firstStart !== undefined && firstStart > 0 && visualDurations.length > 0) visualDurations[0] = visualDurations[0]! + firstStart;
+  for (let index = 1; index < manifest.timeline.length; index += 1) {
+    const start = manifest.timeline[index]!.timelineStartMs;
+    if (start !== undefined && start > visualCursorMs) visualDurations[index - 1] = Math.max(visualDurations[index - 1]!, visualDurations[index - 1]! + (start - visualCursorMs));
+    visualCursorMs += visualDurations[index - 1]!;
+  }
   let globalOffsetMs = 0;
   for (let i = 0; i < manifest.timeline.length; i += 1) {
     const clip = manifest.timeline[i]!;
-    const visualDurationMs = clip.timelineStartMs !== undefined && clip.timelineEndMs !== undefined ? Math.max(clip.durationMs, clip.timelineEndMs - clip.timelineStartMs) : clip.durationMs;
+    const visualDurationMs = visualDurations[i]!;
     const padMs = Math.max(0, visualDurationMs - clip.durationMs);
     let overlays = '';
     if (options.fontFile) {
@@ -107,7 +116,7 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   }
   if (manifest.timeline.length === 1) filters.push('[v0]null[vout]');
   else filters.push(`${manifest.timeline.map((_, i) => `[v${i}]`).join('')}concat=n=${manifest.timeline.length}:v=1:a=0[vout]`);
-  const videoDurationMs = manifest.timeline.reduce((total, clip) => { const visual = clip.timelineStartMs !== undefined && clip.timelineEndMs !== undefined ? Math.max(clip.durationMs, clip.timelineEndMs - clip.timelineStartMs) : clip.durationMs; return total + visual; }, 0);
+  const videoDurationMs = visualDurations.reduce((total, duration) => total + duration, 0);
   if (voiceIndex >= 0) {
     const offsetMs = Math.max(0, Number(manifest.metadata?.audioOffsetMs || 0));
     filters.push(`[${voiceIndex}:a]adelay=${offsetMs}:all=1,volume=${manifest.audio.volume ?? 1},apad[voice]`);

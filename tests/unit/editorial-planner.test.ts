@@ -60,3 +60,61 @@ test('editorial resolver treats duplicate file paths as one material', () => {
   const selected = resolved.scenes.flatMap((scene) => scene.clipSlots.map((slot) => slot.asset?.path));
   assert.equal(new Set(selected).size, selected.length);
 });
+
+test('editorial resolver keeps entity truth separate from related place context', () => {
+  const plan = planEditorialScript({ sentences: [{ index: 0, text: 'MIZAN正在波兰发展。', normalizedText: 'mizan正在波兰发展', voiceStartMs: 0, voiceEndMs: 6_000 }], knownEntities: ['MIZAN'] });
+  const resolved = resolveEditorialPlan(plan, [{ id: 'street', path: 'Poland-street.mp4', durationMs: 8_000, source: 'LOCAL', tags: ['Poland', 'street'] }]);
+  const slot = resolved.scenes[0]!.clipSlots[0]!;
+  assert.equal(slot.entityRequirement, 'MIZAN');
+  assert.equal(slot.entityFallback, true);
+  assert.notEqual(slot.asset?.entity, 'MIZAN');
+  const manifest = compileEditorialManifest(resolved, { workspaceId: 'w', seed: 1 });
+  assert.equal(manifest.timeline[0]?.matching?.selectedRole, 'NEUTRAL_BROLL');
+  assert.equal(manifest.timeline[0]?.matching?.entityFallback, true);
+});
+
+test('editorial resolver hard-filters short assets for every source and priority mode', () => {
+  const plan = planEditorialScript({ sentences: [{ index: 0, text: '重点镜头', normalizedText: '重点镜头', voiceStartMs: 0, voiceEndMs: 6_000 }], pace: 'SLOW', shotDensity: 'LOW' });
+  const resolved = resolveEditorialPlan(plan, [
+    { id: 'short', path: 'short.mp4', durationMs: 2_000, source: 'LOCAL' },
+    { id: 'long', path: 'long.mp4', durationMs: 8_000, source: 'PEXELS' },
+  ]);
+  assert.equal(resolved.scenes[0]!.clipSlots[0]!.selectedAssetId, 'long');
+  assert.throws(() => resolveEditorialPlan(plan, [{ id: 'must-short', path: 'must-short.mp4', durationMs: 2_000, source: 'LOCAL' }], 1, { priorityAssets: [{ assetId: 'must-short', mode: 'MUST_USE' }] }), /EDIT_PRIORITY_ASSET_TOO_SHORT|EDIT_NO_MEDIA_LONG_ENOUGH/);
+});
+
+test('editorial manifest preserves voice gaps and shifts intro audio, subtitle and content together', () => {
+  const plan = planEditorialScript({ sentences: [
+    { index: 0, text: '第一句', normalizedText: '第一句', voiceStartMs: 0, voiceEndMs: 2_000 },
+    { index: 1, text: '第二句', normalizedText: '第二句', voiceStartMs: 3_000, voiceEndMs: 5_000 },
+  ], heroText: true });
+  const resolved = resolveEditorialPlan(plan, [
+    { id: 'a', path: 'a.mp4', durationMs: 8_000, source: 'LOCAL' },
+    { id: 'b', path: 'b.mp4', durationMs: 8_000, source: 'LOCAL' },
+  ]);
+  const manifest = compileEditorialManifest(resolved, { workspaceId: 'w', seed: 1, voicePath: 'voice.wav', intro: { id: 'intro', path: 'intro.mp4', durationMs: 1_500, source: 'LOCAL' } });
+  assert.equal(manifest.metadata?.audioOffsetMs, 1_500);
+  assert.equal(manifest.timeline.find((clip) => clip.role === 'INTRO')?.timelineStartMs, 0);
+  const content = manifest.timeline.filter((clip) => clip.role === 'CONTENT');
+  assert.equal(content.find((clip) => clip.sentenceIndex === 0)?.timelineStartMs, 1_500);
+  assert.equal(content.find((clip) => clip.sentenceIndex === 1)?.timelineStartMs, 4_500);
+  assert.equal(manifest.subtitles?.[1]?.startMs, 4_500);
+  assert.equal(manifest.metadata?.sentences?.[0]?.voiceStartMs, 1_500);
+});
+
+test('editorial reroll reuses full entity and duration resolver constraints', () => {
+  const plan = planEditorialScript({ sentences: [{ index: 0, text: 'MIZAN门店', normalizedText: 'mizan门店', voiceStartMs: 0, voiceEndMs: 6_000 }], knownEntities: ['MIZAN'] });
+  const assets = [
+    { id: 'a', path: 'a.mp4', durationMs: 8_000, source: 'LOCAL' as const, entity: 'MIZAN' },
+    { id: 'b', path: 'b.mp4', durationMs: 8_000, source: 'LOCAL' as const, entity: 'MIZAN' },
+    { id: 'c', path: 'c.mp4', durationMs: 2_000, source: 'LOCAL' as const, tags: ['Poland'] },
+  ];
+  const resolved = resolveEditorialPlan(plan, assets, 1);
+  const current = resolved.scenes[0]!.clipSlots[0]!.selectedAssetId;
+  const rerolled = rerollEditorialClip(resolved, assets, resolved.scenes[0]!.clipSlots[0]!.id, { localOnly: true });
+  const slot = rerolled.scenes[0]!.clipSlots[0]!;
+  assert.notEqual(slot.selectedAssetId, current);
+  assert.ok(slot.selectedAssetId === 'a' || slot.selectedAssetId === 'b');
+  assert.equal(slot.entityFallback, false);
+  assert.ok((slot.asset?.durationMs || 0) >= slot.durationMs);
+});

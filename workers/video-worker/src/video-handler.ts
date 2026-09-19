@@ -4,11 +4,12 @@ import { copyFile, mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/pr
 import type { Pool } from 'pg';
 import { AssetCatalogService, type AssetService, type LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { JobLeaseCancellationHandler, JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
-import { planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoJobPayload, type VideoService } from '../../../packages/modules/video/src/index.js';
+import { planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, rerollEditorialClip, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoJobPayload, type VideoService } from '../../../packages/modules/video/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
+import type { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
 import { renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 
-export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; localMedia?: LocalMediaSourceService; mediaProvider?: ExternalVideoProvider; }
+export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; localMedia?: LocalMediaSourceService; localPathAccess?: LocalPathAccessService; mediaProvider?: ExternalVideoProvider; }
 
 async function chooseLocalMusic(category: string | undefined, seed: number): Promise<string | undefined> {
   const roots = (process.env.CONTENTOS_MUSIC_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean); const files: string[] = []; const wanted = category?.toLocaleLowerCase();
@@ -23,14 +24,26 @@ export function createScriptPlanJobHandler(deps: VideoHandlerDeps): (job: JobRec
     try {
     if (job.type !== 'EDIT_SCRIPT_PLAN') throw new Error('EDIT_SCRIPT_PLAN_JOB_TYPE_INVALID');
     if (signal.aborted) throw new Error('EDIT_SCRIPT_PLAN_CANCELLED');
-    const planId = (job.payload as { planId?: string }).planId;
+    const payload = job.payload as { planId?: string; operation?: string; clipId?: string; localOnly?: boolean };
+    const planId = payload.planId;
     if (!planId) throw new Error('EDIT_SCRIPT_PLAN_PAYLOAD_INVALID');
     const row = (await deps.db.query('select id, resolved_plan, editorial_plan, settings, source_roots, script, voice_asset_id from edit_script_plans where id=$1', [planId])).rows[0] as { id: string; resolved_plan: unknown; editorial_plan: unknown; settings: Record<string, unknown>; source_roots: unknown; script: string; voice_asset_id?: string | null } | undefined;
     if (!row) throw new Error('EDIT_SCRIPT_PLAN_NOT_FOUND');
     await deps.db.query("update edit_script_plans set status='PLANNING',updated_at=now() where id=$1", [planId]);
+    if (payload.operation === 'REROLL_CLIP') {
+      if (!row.resolved_plan) throw new Error('SCRIPT_PLAN_NOT_READY');
+      const assets = Array.isArray(row.settings?.assets) ? row.settings.assets as EditorialAssetV1[] : [];
+      const priorityAssets = Array.isArray(row.settings?.priorityAssets) ? row.settings.priorityAssets as Array<{ assetId: string; mode: 'PREFER' | 'MUST_USE'; path?: string }> : [];
+      let rerolled = row.resolved_plan as import('../../../packages/modules/video/src/index.js').ResolvedEditorialPlanV1;
+      const options = { localOnly: payload.localOnly === true, priorityAssets, allowControlledReuse: true, seed: Number(row.settings?.seed || 1) };
+      if (payload.clipId) rerolled = rerollEditorialClip(rerolled, assets, payload.clipId, options);
+      else for (const slot of rerolled.scenes.flatMap((scene) => scene.clipSlots).filter((candidate) => !candidate.locked)) rerolled = rerollEditorialClip(rerolled, assets, slot.id, options);
+      await deps.db.query("update edit_script_plans set resolved_plan=$2,settings=settings - 'pendingReroll',status='READY',updated_at=now() where id=$1", [planId, rerolled]);
+      return { planId, status: 'READY', operation: 'REROLL_CLIP' };
+    }
     let editorial = row.editorial_plan as import('../../../packages/modules/video/src/index.js').EditorialPlanV1 | null;
     if (editorial) {
-      const voicePath = typeof row.settings?.voicePath === 'string' ? await authorizedVoicePath(row.settings.voicePath) : undefined;
+      const voicePath = typeof row.settings?.voicePath === 'string' ? await authorizedVoicePath(row.settings.voicePath, deps.localPathAccess) : undefined;
       const hasExplicitVoiceTiming = editorial.sentences.length > 0 && editorial.sentences.every((sentence) => sentence.voiceStartMs !== undefined && sentence.voiceEndMs !== undefined);
       const voiceTiming = await prepareVoiceTiming({ assetService: deps.assets, assets: new AssetCatalogService(deps.db) }, { workspaceId: job.workspaceId || 'workspace-local', script: row.script, ...(hasExplicitVoiceTiming ? { sentences: editorial.sentences } : {}), ...(row.voice_asset_id ? { voiceAssetId: String(row.voice_asset_id) } : {}), ...(voicePath ? { voicePath } : {}) });
       if (voiceTiming.voiceAssetId && voiceTiming.voiceAssetId !== row.voice_asset_id) {
@@ -108,7 +121,8 @@ async function syncEditBatchForItem(db: Pool, itemId: string): Promise<void> {
   if (row) await syncEditBatch(db, row.batch_id);
 }
 
-async function authorizedVoicePath(input: string): Promise<string> {
+async function authorizedVoicePath(input: string, accessService?: LocalPathAccessService): Promise<string> {
+  if (accessService) return accessService.authorize(input, 'VOICE_FILE');
   const roots = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean);
   const candidate = await realpath(input).catch(() => null);
   if (!candidate || !(await stat(candidate).then((value) => value.isFile()).catch(() => false))) throw new Error('EDIT_VOICE_PATH_UNAUTHORIZED');
@@ -118,8 +132,15 @@ async function authorizedVoicePath(input: string): Promise<string> {
   return candidate;
 }
 
-async function authorizedOutputPath(outputPath: string, outputRoot: string): Promise<void> {
+async function authorizedOutputPath(outputPath: string, outputRoot: string, accessService?: LocalPathAccessService): Promise<void> {
   if (!outputPath || !outputRoot || outputPath.includes('\0') || outputRoot.includes('\0')) throw new Error('EDIT_OUTPUT_ROOT_INVALID');
+  if (accessService) {
+    const authorizedRoot = await accessService.authorize(outputRoot, 'OUTPUT_ROOT');
+    const target = resolve(outputPath);
+    const prefix = authorizedRoot.endsWith(sep) ? authorizedRoot : `${authorizedRoot}${sep}`;
+    if (target.toLocaleLowerCase() !== authorizedRoot.toLocaleLowerCase() && !target.toLocaleLowerCase().startsWith(prefix.toLocaleLowerCase())) throw new Error('EDIT_OUTPUT_ROOT_UNAUTHORIZED');
+    return;
+  }
   const roots = (process.env.CONTENTOS_OUTPUT_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean);
   const [configured, actualRoot, parent, rootStat] = await Promise.all([Promise.all(roots.map((root) => realpath(root).catch(() => null))), realpath(outputRoot).catch(() => null), realpath(dirname(outputPath)).catch(() => null), stat(outputRoot).catch(() => null)]);
   if (!actualRoot || !parent || !rootStat?.isDirectory() || !configured.some((root) => root && (actualRoot.toLowerCase() === root.toLowerCase() || actualRoot.toLowerCase().startsWith(`${root}${sep}`.toLowerCase())))) throw new Error('EDIT_OUTPUT_ROOT_UNAUTHORIZED');
@@ -139,7 +160,7 @@ export function createEditPrepareJobHandler(deps: VideoHandlerDeps): (job: JobRe
       const settings = row.settings && typeof row.settings === 'object' && !Array.isArray(row.settings) ? row.settings as Record<string, unknown> : {};
       const itemSettings = row.settings_snapshot && typeof row.settings_snapshot === 'object' && !Array.isArray(row.settings_snapshot) ? row.settings_snapshot as Record<string, unknown> : {};
       const scanAssets = Array.isArray(settings.scanAssets) ? settings.scanAssets : [];
-      const voicePath = row.voice_path ? await authorizedVoicePath(String(row.voice_path)) : undefined;
+      const voicePath = row.voice_path ? await authorizedVoicePath(String(row.voice_path), deps.localPathAccess) : undefined;
       let plannedAssets = scanAssets as PlannerAsset[];
       let hybridDiagnostics: Record<string, unknown> | undefined;
       const catalog = new AssetCatalogService(deps.db);
@@ -179,7 +200,7 @@ export function createEditExportJobHandler(deps: VideoHandlerDeps): (job: JobRec
     const temp = `${payload.outputPath}.${job.id}.part`;
     const lockPath = `${payload.outputPath}.lock`;
     try {
-      await authorizedOutputPath(payload.outputPath, payload.outputRoot);
+      await authorizedOutputPath(payload.outputPath, payload.outputRoot, deps.localPathAccess);
       if (await stat(payload.outputPath).then(() => true).catch(() => false)) throw new Error('EDIT_EXPORT_DESTINATION_EXISTS');
       await mkdir(lockPath);
       const catalog = new AssetCatalogService(deps.db);
@@ -228,7 +249,7 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
     try {
       const rendered = await renderEditManifest({ manifest: planned.manifest, outputPath, ffmpegPath: deps.ffmpegPath, ffprobePath: deps.ffprobePath, signal, ...(deps.fontFile ? { fontFile: deps.fontFile } : {}) });
       if (payload.outputPath && payload.outputRoot) {
-        await authorizedOutputPath(payload.outputPath, payload.outputRoot);
+        await authorizedOutputPath(payload.outputPath, payload.outputRoot, deps.localPathAccess);
         const destinationExists = await stat(payload.outputPath).then(() => true).catch(() => false);
         if (!destinationExists) {
           const destinationPart = `${payload.outputPath}.${job.id}.part`;

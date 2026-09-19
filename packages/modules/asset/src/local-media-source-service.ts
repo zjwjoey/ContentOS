@@ -5,6 +5,7 @@ import { access as accessFile } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve, sep } from 'node:path';
 import { generateVideoThumbnail, probeMedia, type ProbeResult } from '../../../infrastructure/ffmpeg/src/index.js';
 import type { Pool } from 'pg';
+import type { LocalPathAccessService } from '../../local-path/src/index.js';
 
 export const LOCAL_VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi']);
 
@@ -49,6 +50,7 @@ export interface LocalMediaSourceOptions {
   probe?: (path: string) => Promise<ProbeResult>;
   db?: Pool;
   thumbnailRoot?: string;
+  pathAccess?: LocalPathAccessService;
 }
 
 function normalizedRoots(roots: string[]): string[] { return [...new Set(roots.map((root) => resolve(root.trim())).filter(Boolean))]; }
@@ -70,6 +72,7 @@ export class LocalMediaSourceService {
   private readonly probe: (path: string) => Promise<ProbeResult>;
   private readonly db: Pool | undefined;
   private readonly thumbnailRoot: string;
+  private readonly pathAccess: LocalPathAccessService | undefined;
 
   constructor(options: LocalMediaSourceOptions = {}) {
     this.roots = normalizedRoots(options.allowedRoots ?? (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').filter(Boolean));
@@ -77,6 +80,7 @@ export class LocalMediaSourceService {
     this.probe = options.probe || ((path) => probeMedia(path, this.ffprobePath));
     this.db = options.db;
     this.thumbnailRoot = resolve(options.thumbnailRoot || join(process.env.STORAGE_ROOT || 'storage', 'thumbnails'));
+    this.pathAccess = options.pathAccess;
   }
 
   authorizeRoot(input: string): { root: string; sourceRootId: string } {
@@ -88,7 +92,8 @@ export class LocalMediaSourceService {
   }
 
   async scan(input: { sourceRoot: string; recursive?: boolean; onProgress?: (progress: { discovered: number; analyzed: number }) => Promise<void> | void; signal?: AbortSignal }): Promise<LocalMediaScanResult> {
-    const { root, sourceRootId } = this.authorizeRoot(input.sourceRoot);
+    const authorized = this.pathAccess ? { root: await this.pathAccess.authorize(input.sourceRoot, 'MEDIA_ROOT'), sourceRootId: publicRootId(await this.pathAccess.canonicalize(input.sourceRoot)) } : this.authorizeRoot(input.sourceRoot);
+    const { root, sourceRootId } = authorized;
     const rootStat = await stat(root).catch(() => null);
     if (!rootStat?.isDirectory()) throw new Error('LOCAL_MEDIA_ROOT_NOT_FOUND');
     const files: LocalMediaAsset[] = [];
@@ -122,7 +127,7 @@ export class LocalMediaSourceService {
   async createScan(input: { id: string; projectId?: string; workspaceId?: string; sourceRoot: string; recursive: boolean; sourceRootId?: string }): Promise<void> {
     if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED');
     if ((input.projectId ? 1 : 0) + (input.workspaceId ? 1 : 0) !== 1) throw new Error('LOCAL_MEDIA_OWNER_REQUIRED');
-    const authorized = this.authorizeRoot(input.sourceRoot);
+    const authorized = this.pathAccess ? { root: await this.pathAccess.authorize(input.sourceRoot, 'MEDIA_ROOT'), sourceRootId: publicRootId(await this.pathAccess.canonicalize(input.sourceRoot)) } : this.authorizeRoot(input.sourceRoot);
     await this.db.query('insert into local_media_scans (id, project_id, workspace_id, source_root, source_root_id, recursive, status) values ($1, $2, $3, $4, $5, $6, $7)', [input.id, input.projectId || null, input.workspaceId || null, authorized.root, input.sourceRootId || authorized.sourceRootId, input.recursive, 'QUEUED']);
   }
 

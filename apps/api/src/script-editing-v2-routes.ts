@@ -12,9 +12,11 @@ import type { AssetCatalogService } from '../../../packages/modules/asset/src/in
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import type { VideoEditPresetService } from '../../../packages/modules/video/src/index.js';
 import { generateVideoThumbnail } from '../../../packages/infrastructure/ffmpeg/src/index.js';
+import type { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
 
 const inputSchema = z.object({ workspaceId: z.string().min(1), projectId: z.string().min(1).optional(), script: z.string().min(1), sentences: z.array(z.object({ index: z.number().int().nonnegative(), text: z.string().min(1), normalizedText: z.string().min(1), voiceStartMs: z.number().nonnegative().optional(), voiceEndMs: z.number().positive().optional(), durationMs: z.number().positive().optional() })).optional(), assets: z.array(z.object({ id: z.string().min(1), path: z.string().min(1), durationMs: z.number().positive(), source: z.enum(['LOCAL', 'PEXELS', 'FAKE_PEXELS']), entity: z.string().optional(), keywords: z.array(z.string()).optional(), originalName: z.string().optional(), tags: z.array(z.string()).optional(), sourceInMs: z.number().nonnegative().optional(), author: z.string().optional(), thumbnailUrl: z.string().min(1).optional() })).default([]), sourceRoots: z.array(z.string().min(1)).default([]), usePexels: z.boolean().default(false), priorityAssets: z.array(z.object({ assetId: z.string().min(1), mode: z.enum(['PREFER', 'MUST_USE']), path: z.string().optional() })).default([]), knownEntities: z.array(z.string()).default([]), manualKeywords: z.array(z.string()).default([]), template: z.enum(['COMMERCIAL_OPINION', 'NEWS', 'STORE_PROMOTION', 'PRODUCT_INTRO']).default('COMMERCIAL_OPINION'), pace: z.enum(['SLOW', 'NORMAL', 'FAST']).optional(), shotDensity: z.union([z.enum(['LOW', 'MEDIUM', 'HIGH']), z.number().min(.5).max(2)]).optional(), subtitleStyle: z.enum(['simple', 'commercial', 'emphasis', 'news']).optional(), heroText: z.boolean().default(true), heroTextPolicy: z.array(z.enum(['HOOK', 'ENDING', 'EVIDENCE'])).optional(), seed: z.number().int().default(1), voiceAssetId: z.string().optional(), voicePath: z.string().optional(), backgroundMusicMode: z.enum(['NONE', 'AUTO', 'SPECIFIED']).default('NONE'), backgroundMusicCategory: z.string().optional(), backgroundMusic: z.object({ assetId: z.string().optional(), path: z.string().min(1), volume: z.number().min(0).max(1).default(.12), loop: z.boolean().default(true), category: z.string().optional(), ducking: z.object({ enabled: z.boolean(), voiceVolume: z.number().min(0).max(1).optional(), musicVolume: z.number().min(0).max(1).optional() }).optional() }).optional(), introEnabled: z.boolean().optional(), outroEnabled: z.boolean().optional(), brandingPresetId: z.string().optional(), outputRoot: z.string().trim().min(1).optional() });
-async function authorizeMusicPath(path: string): Promise<string> {
+async function authorizeMusicPath(path: string, accessService?: LocalPathAccessService): Promise<string> {
+  if (accessService) return accessService.authorize(path, 'MUSIC_FILE');
   const candidate = await realpath(path).catch(() => null);
   if (!candidate || !(await stat(candidate).then((value) => value.isFile()).catch(() => false))) throw new Error('MUSIC_PATH_INVALID');
   const roots = (process.env.CONTENTOS_MUSIC_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean);
@@ -22,7 +24,8 @@ async function authorizeMusicPath(path: string): Promise<string> {
   if (!authorized.some((root) => root && (candidate.toLowerCase() === root.toLowerCase() || candidate.toLowerCase().startsWith(`${root}${sep}`.toLowerCase())))) throw new Error('MUSIC_PATH_UNAUTHORIZED');
   return candidate;
 }
-async function authorizeLocalFile(path: string): Promise<string> {
+async function authorizeLocalFile(path: string, accessService?: LocalPathAccessService, purpose: 'VOICE_FILE' | 'PRIORITY_ASSET' = 'VOICE_FILE'): Promise<string> {
+  if (accessService) return accessService.authorize(path, purpose);
   const candidate = await realpath(path).catch(() => null); if (!candidate || !(await stat(candidate).then((value) => value.isFile()).catch(() => false))) throw new Error('LOCAL_MEDIA_FILE_NOT_FOUND');
   const roots = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean);
   const authorized = await Promise.all(roots.map((root) => realpath(resolve(root)).catch(() => null)));
@@ -31,7 +34,9 @@ async function authorizeLocalFile(path: string): Promise<string> {
 }
 function allowedOutputRoots(): string[] { return (process.env.CONTENTOS_OUTPUT_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean).map((value) => resolve(value)); }
 function contained(root: string, candidate: string): boolean { const normalized = root.endsWith(sep) ? root : `${root}${sep}`; return candidate.toLowerCase() === root.toLowerCase() || candidate.toLowerCase().startsWith(normalized.toLowerCase()); }
-async function authorizeOutputRoot(path: string): Promise<string> {
+function localPathMessage(code: string): string { return code === 'LOCAL_PATH_NOT_READABLE' ? 'Windows 当前用户没有读取该路径的权限。' : code === 'LOCAL_PATH_NOT_WRITABLE' ? 'Windows 当前用户无法写入该文件夹。' : code === 'LOCAL_PATH_NOT_GRANTED' || code === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' || code === 'EDIT_OUTPUT_ROOT_UNAUTHORIZED' ? '请使用系统选择器选择可用路径。' : code === 'LOCAL_PATH_NOT_FOUND' ? '路径不存在或已不可用。' : '本地路径不可用，请重新选择。'; }
+async function authorizeOutputRoot(path: string, accessService?: LocalPathAccessService): Promise<string> {
+  if (accessService) return accessService.authorize(path, 'OUTPUT_ROOT');
   if (!path || path.includes('\0')) throw new Error('EDIT_OUTPUT_ROOT_INVALID');
   const candidate = await realpath(resolve(path)).catch(() => null); if (!candidate) throw new Error('EDIT_OUTPUT_ROOT_NOT_FOUND');
   const roots = await Promise.all(allowedOutputRoots().map((root) => realpath(root).catch(() => null)));
@@ -41,7 +46,7 @@ async function authorizeOutputRoot(path: string): Promise<string> {
   return candidate;
 }
 
-export function registerScriptEditingV2Routes(app: FastifyInstance, dependencies: { db: Pool; jobs: JobService; video?: VideoService; assets?: AssetCatalogService; presets?: VideoEditPresetService; storage?: LocalStorageProvider }): void {
+export function registerScriptEditingV2Routes(app: FastifyInstance, dependencies: { db: Pool; jobs: JobService; localPathAccess?: LocalPathAccessService; video?: VideoService; assets?: AssetCatalogService; presets?: VideoEditPresetService; storage?: LocalStorageProvider }): void {
   app.get('/api/v1/video/workspace-assets/:assetId/thumbnail', async (request, reply) => {
     if (!dependencies.assets || !dependencies.storage) return reply.code(503).send({ error: { code: 'VIDEO_ASSET_SERVICE_UNAVAILABLE' } });
     const workspaceId = String((request.query as { workspaceId?: string } | undefined)?.workspaceId || '').trim();
@@ -62,8 +67,8 @@ export function registerScriptEditingV2Routes(app: FastifyInstance, dependencies
     const parsed = inputSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', details: parsed.error.issues } });
     const input = parsed.data;
-    try { if (input.backgroundMusic) input.backgroundMusic.path = await authorizeMusicPath(input.backgroundMusic.path); if (input.voicePath) input.voicePath = await authorizeLocalFile(input.voicePath); if (input.outputRoot) input.outputRoot = await authorizeOutputRoot(input.outputRoot); for (const priority of input.priorityAssets) if (priority.path) priority.path = await authorizeLocalFile(priority.path); }
-    catch (error) { return reply.code(422).send({ error: { code: error instanceof Error ? error.message : 'MUSIC_PATH_UNAUTHORIZED' } }); }
+    try { if (input.backgroundMusic) input.backgroundMusic.path = await authorizeMusicPath(input.backgroundMusic.path, dependencies.localPathAccess); if (input.voicePath) input.voicePath = await authorizeLocalFile(input.voicePath, dependencies.localPathAccess, 'VOICE_FILE'); if (input.outputRoot) input.outputRoot = await authorizeOutputRoot(input.outputRoot, dependencies.localPathAccess); input.sourceRoots = await Promise.all(input.sourceRoots.map((root) => dependencies.localPathAccess ? dependencies.localPathAccess.authorize(root, 'MEDIA_ROOT') : root)); for (const priority of input.priorityAssets) if (priority.path) priority.path = await authorizeLocalFile(priority.path, dependencies.localPathAccess, 'PRIORITY_ASSET'); }
+    catch (error) { const code = error instanceof Error ? error.message : 'MUSIC_PATH_UNAUTHORIZED'; return reply.code(422).send({ error: { code, message: localPathMessage(code) } }); }
     const sentences = (input.sentences ?? segmentScriptSentences(input.script)).map((sentence) => {
       const value = sentence as { index: number; text: string; normalizedText: string; voiceStartMs?: number; voiceEndMs?: number; durationMs?: number };
       return { index: value.index, text: value.text, normalizedText: value.normalizedText, ...(typeof value.voiceStartMs === 'number' ? { voiceStartMs: value.voiceStartMs } : {}), ...(typeof value.voiceEndMs === 'number' ? { voiceEndMs: value.voiceEndMs } : {}), ...(typeof value.durationMs === 'number' ? { durationMs: value.durationMs } : {}) };
@@ -123,14 +128,19 @@ export function registerScriptEditingV2Routes(app: FastifyInstance, dependencies
     return { id: params.id, revision, status: 'READY', resolvedPlan: plan };
   });
   app.post('/api/v1/edit/script-plans/:id/reroll', async (request, reply) => {
-    const params = request.params as { id: string }; const result = await dependencies.db.query('select resolved_plan, settings, revision, workspace_id from edit_script_plans where id=$1', [params.id]); const row = result.rows[0] as { resolved_plan?: Record<string, unknown>; settings?: Record<string, unknown>; revision: number; workspace_id: string } | undefined;
+    const params = request.params as { id: string }; const result = await dependencies.db.query('select resolved_plan, settings, revision, workspace_id, status from edit_script_plans where id=$1', [params.id]); const row = result.rows[0] as { resolved_plan?: Record<string, unknown>; settings?: Record<string, unknown>; revision: number; workspace_id: string; status?: string } | undefined;
     if (!row?.resolved_plan) return reply.code(409).send({ error: { code: 'SCRIPT_PLAN_NOT_READY' } });
-    const settings = row.settings ?? {}; const assets = Array.isArray(settings.assets) ? settings.assets as EditorialAssetV1[] : []; const clipId = (request.body as { clipId?: string } | undefined)?.clipId; let plan = row.resolved_plan as Parameters<typeof rerollEditorialClip>[0];
-    if (clipId) plan = rerollEditorialClip(plan, assets, clipId, { localOnly: Boolean((request.body as { localOnly?: boolean } | undefined)?.localOnly) });
-    else for (const slot of plan.scenes.flatMap((scene) => scene.clipSlots).filter((slot) => !slot.locked)) { try { plan = rerollEditorialClip(plan, assets, slot.id); } catch { break; } }
-    const revision = Number(row.revision) + 1; await dependencies.db.query("update edit_script_plans set resolved_plan=$2,revision=$3,status='QUEUED',updated_at=now() where id=$1", [params.id, plan, revision]);
-    const job = await dependencies.jobs.createIdempotent({ id: `job-reroll-${params.id}-${revision}`, type: 'EDIT_SCRIPT_PLAN', projectId: null, workspaceId: row.workspace_id, payload: { schemaVersion: 'EDIT_SCRIPT_PLAN_V1', planId: params.id, operation: 'REROLL_CLIP', clipId }, idempotencyKey: `edit-script-plan:${params.id}:revision:${revision}`, maxAttempts: 3 });
-    return { id: params.id, revision, status: 'QUEUED', resolvedPlan: plan };
+    if (row.status === 'PLANNING' || row.status === 'QUEUED') return reply.code(409).send({ error: { code: 'SCRIPT_PLAN_BUSY' } });
+    const body = (request.body || {}) as { clipId?: string; localOnly?: boolean };
+    const target = body.clipId ? (row.resolved_plan as Parameters<typeof rerollEditorialClip>[0]).scenes.flatMap((scene) => scene.clipSlots).find((slot) => slot.id === body.clipId) : undefined;
+    if (body.clipId && !target) return reply.code(404).send({ error: { code: 'SCRIPT_CLIP_NOT_FOUND' } });
+    if (target?.locked) return reply.code(409).send({ error: { code: 'SCRIPT_CLIP_LOCKED' } });
+    const revision = Number(row.revision) + 1;
+    const pending = { clipId: body.clipId || null, localOnly: body.localOnly === true };
+    await dependencies.db.query("update edit_script_plans set revision=$2,status='QUEUED',settings=settings || $3::jsonb,updated_at=now() where id=$1", [params.id, revision, JSON.stringify({ pendingReroll: pending })]);
+    const job = await dependencies.jobs.createIdempotent({ id: `job-reroll-${params.id}-${revision}`, type: 'EDIT_SCRIPT_PLAN', projectId: null, workspaceId: row.workspace_id, payload: { schemaVersion: 'EDIT_SCRIPT_PLAN_V1', planId: params.id, operation: 'REROLL_CLIP', clipId: body.clipId, localOnly: body.localOnly === true }, idempotencyKey: `edit-script-plan:${params.id}:revision:${revision}`, maxAttempts: 3 });
+    await dependencies.db.query('update edit_script_plans set job_id=$2 where id=$1', [params.id, job.id]);
+    return reply.code(202).send({ id: params.id, revision, status: 'QUEUED' });
   });
   app.post('/api/v1/edit/script-plans/:id/render', async (request, reply) => {
     const result = await dependencies.db.query('select * from edit_script_plans where id = $1', [(request.params as { id: string }).id]); const row = result.rows[0] as Record<string, unknown> | undefined;
@@ -164,8 +174,8 @@ export function registerScriptEditingV2Routes(app: FastifyInstance, dependencies
     let outputPath: string | undefined;
     if (configuredOutputRoot) {
       let root: string;
-      try { root = await authorizeOutputRoot(configuredOutputRoot); }
-      catch (error) { return reply.code(422).send({ error: { code: error instanceof Error ? error.message : 'EDIT_OUTPUT_ROOT_UNAUTHORIZED' } }); }
+      try { root = await authorizeOutputRoot(configuredOutputRoot, dependencies.localPathAccess); }
+      catch (error) { const code = error instanceof Error ? error.message : 'EDIT_OUTPUT_ROOT_UNAUTHORIZED'; return reply.code(422).send({ error: { code, message: localPathMessage(code) } }); }
       outputRoot = root;
       outputPath = join(root, `contentos-${String(row.id)}-v${Number(row.revision)}.mp4`);
       await dependencies.db.query('update edit_script_plans set settings=settings || $2::jsonb,updated_at=now() where id=$1', [String(row.id), JSON.stringify({ outputRoot: root, outputPath })]);

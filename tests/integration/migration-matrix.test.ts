@@ -9,7 +9,7 @@ import { createDatabase, migrateDown, migrateUp, resolveMigrationsDirectory } fr
 
 const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test';
 const migrationDirectory = resolveMigrationsDirectory();
-const migrationNames = Array.from({ length: 29 }, (_, index) => String(index + 1).padStart(4, '0'));
+const migrationNames = Array.from({ length: 30 }, (_, index) => String(index + 1).padStart(4, '0'));
 
 function schemaUrl(name: string): string {
   const url = new URL(adminUrl);

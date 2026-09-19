@@ -9,6 +9,7 @@ import { LocalStorageProvider } from '../../../packages/infrastructure/storage/s
 import { probeMedia } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 import { createDatabase } from '../../../packages/database/src/index.js';
 import { loadConfig } from '../../../packages/config/src/index.js';
+import { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
 import { createEditExportJobHandler, createEditPrepareJobHandler, createLocalMediaScanJobHandler, createScriptPlanJobHandler, createVideoJobHandler, createVideoLeaseCancellationHandler, type VideoHandlerDeps } from './video-handler.js';
 
 export interface VideoWorkerOptions extends VideoHandlerDeps { workerId?: string; reconcileIntervalMs?: number; pollIntervalMs?: number; concurrency?: number; }
@@ -190,9 +191,10 @@ if (basename(process.argv[1] ?? '') === 'main.ts') {
   const db = await createDatabase(config.databaseUrl);
   const storage = new LocalStorageProvider(config.storageRoot);
   const jobs = new JobService(db);
+  const localPathAccess = new LocalPathAccessService({ db });
   const assets = new AssetService(db, storage, (path) => probeMedia(path, config.ffprobePath));
-  const video = new VideoService(db, storage, jobs, new AssetCatalogService(db));
-  const worker = createVideoWorker({ db, storage, jobs, assets, video, mediaProvider: createExternalVideoProvider(), localMedia: new LocalMediaSourceService({ db, thumbnailRoot: `${storage.root}/thumbnails` }), ffmpegPath: config.ffmpegPath, ffprobePath: config.ffprobePath, fontFile: config.ffmpegFontFile, concurrency: config.videoWorkerConcurrency });
+  const video = new VideoService(db, storage, jobs, new AssetCatalogService(db), localPathAccess);
+  const worker = createVideoWorker({ db, storage, jobs, assets, video, localPathAccess, mediaProvider: createExternalVideoProvider(), localMedia: new LocalMediaSourceService({ db, thumbnailRoot: `${storage.root}/thumbnails`, pathAccess: localPathAccess }), ffmpegPath: config.ffmpegPath, ffprobePath: config.ffprobePath, fontFile: config.ffmpegFontFile, concurrency: config.videoWorkerConcurrency });
   const stop = async (signal: string): Promise<void> => { await worker.shutdown(signal); await db.end(); };
   process.once('SIGINT', () => void stop('SIGINT'));
   process.once('SIGTERM', () => void stop('SIGTERM'));

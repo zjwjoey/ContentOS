@@ -120,6 +120,29 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       setRootStatuses((current) => ({ ...current, [index]: { state: 'error', message: error instanceof Error ? error.message : '素材目录扫描失败。' } }));
     }
   };
+  const pickFolder = async (purpose: 'MEDIA_ROOT' | 'OUTPUT_ROOT', index?: number) => {
+    const response = await fetch('/api/v1/local-paths/pick-folder', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ purpose }) });
+    const data = await response.json() as { cancelled?: boolean; path?: string; error?: { message?: string } };
+    if (data.cancelled) return;
+    if (!response.ok || !data.path) { setMessage(data.error?.message || '无法选择本地文件夹。'); return; }
+    if (purpose === 'OUTPUT_ROOT') { setOutputRoot(data.path); return; }
+    const next = data.path;
+    setRoots((current) => [...current.filter(Boolean), next]);
+    const newIndex = roots.filter(Boolean).length;
+    setRootStatuses((current) => ({ ...current, [newIndex]: { state: 'scanning' } }));
+    const scan = await fetch('/api/v1/edit/sources/scan', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sourceRoots: [next] }) });
+    const scanned = await scan.json() as { items?: Array<{ available: number; unavailable: number }>; error?: { message?: string } };
+    if (!scan.ok) setRootStatuses((current) => ({ ...current, [newIndex]: { state: 'error', message: scanned.error?.message || '素材目录扫描失败。' } }));
+    else { const item = scanned.items?.[0]; setRootStatuses((current) => ({ ...current, [newIndex]: { state: 'ready', available: item?.available || 0, unavailable: item?.unavailable || 0 } })); }
+    void index;
+  };
+  const pickVoiceFile = async (onReady: (path: string, name: string) => void) => {
+    const response = await fetch('/api/v1/local-paths/pick-file', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ purpose: 'VOICE_FILE' }) });
+    const data = await response.json() as { cancelled?: boolean; path?: string; error?: { message?: string } };
+    if (data.cancelled) return;
+    if (!response.ok || !data.path) { setMessage(data.error?.message || '无法选择配音文件。'); return; }
+    onReady(data.path, data.path.split(/[\\/]/u).pop() || data.path);
+  };
   const pairFiles = async () => {
     const textList = textFiles.split(/[\r\n,，]+/u).map((value) => value.trim()).filter(Boolean);
     const audioList = audioFiles.split(/[\r\n,，]+/u).map((value) => value.trim()).filter(Boolean);
@@ -193,7 +216,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       <label>任务名称（可选）<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={mode === 'MIX' ? '例如：门店宣传混剪' : '例如：Action 研究视频'} /></label>
       {mode === 'SCRIPT' ? <>
         <label>输入视频文案<textarea value={script} onChange={(event) => setScript(event.target.value)} placeholder="把要表达的内容粘贴到这里……" required /></label>
-        <label>配音文件（可选）<span className="upload-control">选择/上传音频<input aria-label="脚本配音文件" type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAudio(file, (path, name) => { setVoicePath(path); setVoiceName(name); }); event.target.value = ''; }} disabled={uploadingVoice} /></span></label>
+        <label>配音文件（可选）<span className="upload-control">选择/上传音频<input aria-label="脚本配音文件" type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAudio(file, (path, name) => { setVoicePath(path); setVoiceName(name); }); event.target.value = ''; }} disabled={uploadingVoice} /></span><button type="button" onClick={() => void pickVoiceFile((path, name) => { setVoicePath(path); setVoiceName(name); })}>选择本地配音</button></label>
       {voiceName && <p className="selected-file">已选择：{voiceName}</p>}
         <label className="path-fallback">本地音频路径（可选）<input value={voicePath} onChange={(event) => { setVoicePath(event.target.value); setVoiceName(event.target.value.split(/[\\/]/u).pop() || ''); }} placeholder="也可以填写服务端授权目录中的路径" /></label>
         <p className="muted">支持上传 mp3、wav、m4a、aac、flac 或 ogg；未填写时会按文案时长剪辑。</p>
@@ -201,7 +224,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
         {items.map((item, index) => <div className="batch-row" key={index}>
           <label>任务 {index + 1} 标题<input value={item.title} onChange={(event) => updateItem(index, { title: event.target.value })} placeholder="可选" /></label>
           <label>文案<textarea value={item.script} onChange={(event) => updateItem(index, { script: event.target.value })} placeholder="输入这一条视频的文案" required /></label>
-          <label>配音文件（可选）<span className="upload-control">选择/上传音频<input aria-label={`任务 ${index + 1} 配音文件`} type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAudio(file, (path, name) => updateItem(index, { voicePath: path, voiceName: name })); event.target.value = ''; }} disabled={uploadingVoice} /></span></label>
+          <label>配音文件（可选）<span className="upload-control">选择/上传音频<input aria-label={`任务 ${index + 1} 配音文件`} type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAudio(file, (path, name) => updateItem(index, { voicePath: path, voiceName: name })); event.target.value = ''; }} disabled={uploadingVoice} /></span><button type="button" onClick={() => void pickVoiceFile((path, name) => updateItem(index, { voicePath: path, voiceName: name }))}>选择本地配音</button></label>
           {item.voiceName && <p className="selected-file">已选择：{item.voiceName}</p>}
           <label className="path-fallback">本地音频路径（可选）<input value={item.voicePath} onChange={(event) => updateItem(index, { voicePath: event.target.value, voiceName: event.target.value.split(/[\\/]/u).pop() || '' })} placeholder="也可以填写服务端授权目录中的路径" /></label>
           {items.length > 1 && <button type="button" onClick={() => setItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>删除这条</button>}
@@ -218,14 +241,14 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
         <span className={`folder-status ${rootStatuses[index]?.state || 'idle'}`}>{statusText(rootStatuses[index])}</span>
         {roots.length > 1 && <button type="button" onClick={() => removeRoot(index)}>删除</button>}
       </div>)}
-      <button type="button" className="secondary-action" onClick={addRoot}>+ 添加素材文件夹</button>
+      <button type="button" className="secondary-action" onClick={() => void pickFolder('MEDIA_ROOT')}>+ 选择素材文件夹</button><button type="button" className="secondary-action" onClick={addRoot}>高级模式：手动添加路径</button>
       {mode === 'SCRIPT' && <div className="source-provider"><strong>素材来源</strong><label className="inline-check"><input type="checkbox" checked={usePexels} disabled={pexelsStatus === 'missing'} onChange={(event) => setUsePexels(event.target.checked)} />本地素材优先，Pexels 作为缺口兜底</label>{pexelsStatus === 'ready' && <p className="muted">Pexels {pexelsHealth === true ? '● 已连接' : '● 已配置（尚未测试）'}</p>}{pexelsStatus === 'missing' && <p className="muted">Pexels ○ 未配置，<Link href="/settings">前往设置</Link> 后可启用。</p>}{pexelsStatus === 'unknown' && <p className="muted">正在读取服务状态；未配置时该选项会自动禁用。</p>}<p className="muted">本地真实素材优先，缺少通用画面时自动补充网络素材。</p></div>}
       <p className="muted">目录离开输入框后会自动验证和扫描，结果会保存在本次剪辑的来源快照中。</p>
     </section>
     <section className="card">
       <div className="section-title"><h2>3. 输出位置</h2><span>开始前必须确认</span></div>
-      <label>输出文件夹<input value={outputRoot} onChange={(event) => setOutputRoot(event.target.value)} placeholder="例如：F:\\ContentOS输出\\2026-09-18" required /></label>
-      <p className="muted">目录必须已存在、可写，并位于服务端允许范围内；权限仅作只读校验，完成后可直接导出成片。</p>
+      <label>输出文件夹<div className="inline-field"><input value={outputRoot} onChange={(event) => setOutputRoot(event.target.value)} placeholder="高级模式：手动填写路径" required /><button type="button" onClick={() => void pickFolder('OUTPUT_ROOT')}>选择输出文件夹</button></div></label>
+      <p className="muted">选择后会检查 Windows 当前用户的写权限；也可在高级模式手动填写服务端路径。</p>
     </section>
     <details className="card advanced-settings"><summary>4. 高级设置</summary>
       <div className="grid"><label>剪辑模板<select value={templateId} onChange={handleTemplateChange}>{presets.length === 0 ? <option value="">默认短视频</option> : presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select></label><label>素材选择策略<select value={preferUnusedMedia ? 'RECOMMENDED' : 'RANDOM'} onChange={(event) => setPreferUnusedMedia(event.target.value === 'RECOMMENDED')}><option value="RECOMMENDED">优先较少使用</option><option value="RANDOM">随机</option></select></label><label>镜头最短时长（秒）<input type="number" min={0.5} step={0.5} value={minClipDurationMs / 1000} onChange={(event) => setMinClipDurationMs(Math.round((Number(event.target.value) || 0.5) * 1000))} /></label><label>镜头最长时长（秒）<input type="number" min={0.5} step={0.5} value={maxClipDurationMs / 1000} onChange={(event) => setMaxClipDurationMs(Math.round((Number(event.target.value) || 0.5) * 1000))} /></label><label>视频帧率<select value={fps} onChange={(event) => setFps(Number(event.target.value))}><option value={24}>24 帧/秒</option><option value={25}>25 帧/秒</option><option value={30}>30 帧/秒</option><option value={50}>50 帧/秒</option><option value={60}>60 帧/秒</option></select></label>{mode === 'MIX' && <label>每条生成版本数<select value={variants} onChange={(event) => setVariants(Number(event.target.value))}><option value={1}>1</option><option value={3}>3</option><option value={5}>5</option></select></label>}</div>

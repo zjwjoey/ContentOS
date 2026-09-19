@@ -66,12 +66,12 @@ test('Script Editing V2 browser flows cover local, hybrid, reroll, BGM and histo
     if (another) {
       const rerollResponse = await page.request.post(`${process.env.CONTENTOS_API_URL || baseUrl}/api/v1/edit/script-plans/${localPlan.id}/reroll`, { data: { clipId: another.id, localOnly: true } });
       const rerollBody = await rerollResponse.text();
-      assert.equal(rerollResponse.status(), 200, rerollBody);
+      assert.equal(rerollResponse.status(), 202, rerollBody);
+      await waitForPlan(page, localPlan.id!, 'READY');
       const rerolled = await page.request.get(`${process.env.CONTENTOS_API_URL || baseUrl}/api/v1/edit/script-plans/${localPlan.id}`);
       const rerolledBody = await rerolled.json() as { resolvedPlan: typeof ready.resolvedPlan };
       const retained = (rerolledBody.resolvedPlan as typeof resolved).scenes.flatMap((scene) => scene.clipSlots).find((clip) => clip.id === first.id);
       assert.equal(retained?.asset?.path, beforeLockPath, 'locked V2 clip must survive a reroll');
-      await waitForPlan(page, localPlan.id!, 'READY');
     }
     await page.goto(`${baseUrl}/edit/script/v2`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('heading', { name: '剪辑方案' }).waitFor({ state: 'visible', timeout: 15_000 });

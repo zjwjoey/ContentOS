@@ -4,6 +4,7 @@ import { resolve, sep } from 'node:path';
 import type { Pool } from 'pg';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import type { AssetCatalogService } from '../../asset/src/index.js';
+import type { LocalPathAccessService } from '../../local-path/src/index.js';
 import { JobService, type JobAttemptScope, type JobRecord } from '../../job/src/index.js';
 import { buildStoryboardVideoManifest, buildVideoManifest, type PlannerAsset } from './planner.js';
 import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
@@ -14,7 +15,8 @@ export interface VideoJobPayload extends Omit<CreateVideoJobInput, 'projectId'> 
 export interface VideoPlanResult { manifestId: string; renderId: string; manifest: ReturnType<typeof buildVideoManifest>; renderStatus: string; outputAssetId: string | null; }
 
 function projectWorkspaceId(projectId: string): string { return `workspace-project-${projectId}`; }
-async function authorizedLocalSource(sourcePath: string): Promise<boolean> {
+async function authorizedLocalSource(sourcePath: string, pathAccess?: LocalPathAccessService): Promise<boolean> {
+  if (pathAccess) { try { await pathAccess.authorize(sourcePath, 'PRIORITY_ASSET'); return true; } catch { return false; } }
   const roots = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((root) => root.trim()).filter(Boolean).map((root) => resolve(root));
   if (!sourcePath || sourcePath.includes('\0') || roots.length === 0) return false;
   const candidate = await realpath(resolve(sourcePath)).catch(() => null);
@@ -28,13 +30,15 @@ export class VideoService {
   private readonly storage: LocalStorageProvider | null;
   private readonly jobs: JobService;
   private readonly assets: AssetCatalogService | null;
-  constructor(db: Pool, storage: LocalStorageProvider, jobs: JobService, assets?: AssetCatalogService);
-  constructor(db: Pool, jobs: JobService, assets?: AssetCatalogService);
-  constructor(db: Pool, storageOrJobs: LocalStorageProvider | JobService, maybeJobs?: JobService | AssetCatalogService, maybeAssets?: AssetCatalogService) {
+  private readonly pathAccess: LocalPathAccessService | undefined;
+  constructor(db: Pool, storage: LocalStorageProvider, jobs: JobService, assets?: AssetCatalogService, pathAccess?: LocalPathAccessService);
+  constructor(db: Pool, jobs: JobService, assets?: AssetCatalogService, pathAccess?: LocalPathAccessService);
+  constructor(db: Pool, storageOrJobs: LocalStorageProvider | JobService, maybeJobs?: JobService | AssetCatalogService, maybeAssets?: AssetCatalogService | LocalPathAccessService, maybePathAccess?: LocalPathAccessService) {
     this.db = db;
     this.storage = maybeJobs && 'create' in maybeJobs ? storageOrJobs as LocalStorageProvider : null;
     this.jobs = (maybeJobs && 'create' in maybeJobs ? maybeJobs : storageOrJobs) as JobService;
-    this.assets = (maybeJobs && !('create' in maybeJobs) ? maybeJobs : maybeAssets) || null;
+    this.assets = (maybeJobs && !('create' in maybeJobs) ? maybeJobs : (maybeAssets && !('authorize' in maybeAssets) ? maybeAssets as AssetCatalogService : undefined)) || null;
+    this.pathAccess = (maybeJobs && !('create' in maybeJobs) ? maybeAssets as LocalPathAccessService | undefined : maybePathAccess) || (maybeAssets && 'authorize' in maybeAssets ? maybeAssets as LocalPathAccessService : undefined);
   }
 
   async ensureProjectWorkspace(projectId: string): Promise<void> {
@@ -163,7 +167,7 @@ export class VideoService {
       const rootId = localId.split(':', 1)[0] || '';
       const result = await this.db.query<{ source_path: string; duration_ms: number; available: boolean }>("select f.source_path, f.duration_ms, f.available from local_media_scan_files f join local_media_scans s on s.id = f.scan_id where s.project_id = $1 and s.source_root_id = $2 and f.file_id = $3 and s.status = 'SUCCEEDED' order by s.scanned_at desc nulls last limit 1", [job.projectId, rootId, localId]);
       const row = result.rows[0];
-      if (!row?.available || !row.source_path || !(await authorizedLocalSource(row.source_path))) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${localId}`);
+       if (!row?.available || !row.source_path || !(await authorizedLocalSource(row.source_path, this.pathAccess))) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${localId}`);
       try { await access(row.source_path); } catch { throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${localId}`); }
       localById.set(localId, { sourcePath: row.source_path, durationMs: Number(row.duration_ms) });
     }
@@ -211,7 +215,7 @@ export class VideoService {
     manifest.timeline = await Promise.all(manifest.timeline.map(async (clip) => {
       if (clip.assetId.startsWith('local-')) {
         const candidate = clip.sourcePath;
-        if (!(await authorizedLocalSource(candidate))) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`);
+         if (!(await authorizedLocalSource(candidate, this.pathAccess))) throw new Error(`VIDEO_MANIFEST_SOURCE_UNAVAILABLE: ${clip.assetId}`);
         return { ...clip, sourcePath: candidate };
       }
       const source = byId.get(clip.assetId);

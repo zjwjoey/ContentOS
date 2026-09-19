@@ -9,16 +9,18 @@ import type { VideoAdjustmentService, VideoEditPresetService, VideoService } fro
 import type { JobService } from '../../../packages/modules/job/src/index.js';
 import type { AssetCatalogService, LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
+import type { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
 
 const itemInput = z.object({ title: z.string().trim().max(200).optional(), script: z.string().trim().min(1).max(100_000), voiceAssetId: z.string().trim().min(1).optional(), voicePath: z.string().trim().min(1).optional() });
 const pairInput = z.object({ textFiles: z.array(z.string().trim().min(1)).max(500), audioFiles: z.array(z.string().trim().min(1)).max(500), includeContent: z.boolean().default(false) });
 const sessionInput = z.object({ mode: z.enum(['SCRIPT', 'MIX']), title: z.string().trim().max(200).optional(), script: z.string().trim().max(100_000).optional(), voicePath: z.string().trim().min(1).optional(), items: z.array(itemInput).min(1).max(100).optional(), testOnly: z.boolean().default(false), sourceRoots: z.array(z.string().trim().min(1)).max(16).default([]), outputRoot: z.string().trim().min(1).optional(), templateId: z.string().trim().min(1).optional(), seed: z.number().int().optional(), variants: z.number().int().refine((value) => value === 1 || value === 3 || value === 5, '版本数只能是 1、3 或 5。').default(1), fps: z.number().int().min(1).max(120).default(30), minClipDurationMs: z.number().int().positive().default(2_000), maxClipDurationMs: z.number().int().positive().default(5_000), preferUnusedMedia: z.boolean().default(true), usePexels: z.boolean().default(false) }).superRefine((value, ctx) => { if (value.mode === 'SCRIPT' && !value.script?.trim() && !value.items?.[0]?.script) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['script'], message: '请输入文案。' }); if (value.mode === 'MIX' && (!value.items || value.items.length === 0)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items'], message: '请至少添加一条文案。' }); if (value.mode === 'MIX' && value.usePexels) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['usePexels'], message: 'Pexels 混合素材暂只支持脚本剪辑。' }); if (!value.outputRoot) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['outputRoot'], message: '请填写输出文件夹。' }); if (value.maxClipDurationMs < value.minClipDurationMs) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['maxClipDurationMs'], message: '最长镜头不能短于最短镜头。' }); });
 
-export interface EditingWorkbenchRouteDependencies { db: Pool; localMedia: LocalMediaSourceService; quickEdit: VideoAdjustmentService; video: VideoService; jobs: JobService; assets: AssetCatalogService; assetService: import('../../../packages/modules/asset/src/index.js').AssetService; storage: LocalStorageProvider; maxUploadBytes?: number; presets?: VideoEditPresetService; }
+export interface EditingWorkbenchRouteDependencies { db: Pool; localMedia: LocalMediaSourceService; localPathAccess?: LocalPathAccessService; quickEdit: VideoAdjustmentService; video: VideoService; jobs: JobService; assets: AssetCatalogService; assetService: import('../../../packages/modules/asset/src/index.js').AssetService; storage: LocalStorageProvider; maxUploadBytes?: number; presets?: VideoEditPresetService; }
 
 function allowedOutputRoots(): string[] { return (process.env.CONTENTOS_OUTPUT_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean).map((value) => resolve(value)); }
 function contained(root: string, candidate: string): boolean { const normalized = root.endsWith(sep) ? root : `${root}${sep}`; return candidate.toLowerCase() === root.toLowerCase() || candidate.toLowerCase().startsWith(normalized.toLowerCase()); }
-async function authorizeOutputRoot(input: string): Promise<string> {
+async function authorizeOutputRoot(input: string, accessService?: LocalPathAccessService): Promise<string> {
+  if (accessService) return accessService.authorize(input, 'OUTPUT_ROOT');
   if (!input || input.includes('\0')) throw new Error('EDIT_OUTPUT_ROOT_INVALID');
   const root = resolve(input);
   const allowed = allowedOutputRoots();
@@ -97,7 +99,9 @@ function friendlyEditError(error: unknown): string {
   const code = error instanceof Error ? error.message : String(error);
   if (code === 'VIDEO_SOURCE_ASSET_INVALID' || code === 'EDIT_NO_VIDEO_ASSETS') return '没有找到可用于剪辑的视频素材。';
   if (code === 'VIDEO_MANIFEST_VOICE_UNAVAILABLE' || code === 'EDIT_VOICE_PATH_UNAUTHORIZED') return '配音文件不可用，请重新选择。';
-  if (code === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED') return '素材目录未被授权。';
+  if (code === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' || code === 'LOCAL_PATH_NOT_GRANTED') return '请使用“选择素材文件夹”选择可用目录。';
+  if (code === 'LOCAL_PATH_NOT_READABLE') return 'Windows 当前用户没有读取该文件夹的权限。';
+  if (code === 'LOCAL_PATH_NOT_WRITABLE') return 'Windows 当前用户无法写入该文件夹。';
   if (code === 'LOCAL_MEDIA_ROOT_NOT_FOUND') return '素材路径不存在或不是文件夹。';
   if (code.startsWith('EDIT_UNIQUE_MEDIA_EXHAUSTED')) return '当前文案需要的镜头数量超过了可用素材数量；为避免重复使用，请增加素材或减少文案分段。';
   if (code.startsWith('EDIT_NO_MEDIA_LONG_ENOUGH')) return '当前素材没有足够长的画面覆盖配音片段，请增加更长素材或启用外部素材。';
@@ -124,7 +128,8 @@ function effectiveItemState(row: Record<string, unknown>, jobState?: unknown): E
   return ['QUEUED', 'PREPARING', 'RENDERING', 'SUCCEEDED', 'FAILED', 'CANCELLED'].includes(persisted) ? persisted as EffectiveItemState : 'QUEUED';
 }
 
-async function assertSafeSourceRoot(sourceRoot: string): Promise<void> {
+async function assertSafeSourceRoot(sourceRoot: string, accessService?: LocalPathAccessService): Promise<void> {
+  if (accessService) { await accessService.authorize(sourceRoot, 'MEDIA_ROOT'); return; }
   const configured = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean).map((value) => resolve(value));
   if (configured.length === 0) throw new Error('LOCAL_MEDIA_ROOT_UNAUTHORIZED');
   const candidate = await realpath(resolve(sourceRoot)).catch(() => null);
@@ -135,7 +140,8 @@ async function assertSafeSourceRoot(sourceRoot: string): Promise<void> {
   if (!details?.isDirectory()) throw new Error('LOCAL_MEDIA_ROOT_NOT_FOUND');
 }
 
-async function assertSafeSourceFile(sourceFile: string): Promise<void> {
+async function assertSafeSourceFile(sourceFile: string, accessService?: LocalPathAccessService, purpose: 'VOICE_FILE' | 'MUSIC_FILE' | 'PRIORITY_ASSET' = 'VOICE_FILE'): Promise<void> {
+  if (accessService) { await accessService.authorize(sourceFile, purpose); return; }
   const configured = (process.env.CONTENTOS_LOCAL_MEDIA_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean).map((value) => resolve(value));
   if (configured.length === 0) throw new Error('LOCAL_MEDIA_ROOT_UNAUTHORIZED');
   const candidate = await realpath(resolve(sourceFile)).catch(() => null);
@@ -146,10 +152,10 @@ async function assertSafeSourceFile(sourceFile: string): Promise<void> {
   if (!details?.isFile()) throw new Error('LOCAL_MEDIA_ROOT_NOT_FOUND');
 }
 
-async function scanRoots(localMedia: LocalMediaSourceService, roots: string[], workspaceId?: string) {
+async function scanRoots(localMedia: LocalMediaSourceService, roots: string[], workspaceId?: string, accessService?: LocalPathAccessService) {
   const uniqueRoots = [...new Set(roots.map((root) => resolve(root.trim())))];
   const scans = await Promise.all(uniqueRoots.map(async (sourceRoot) => {
-    await assertSafeSourceRoot(sourceRoot);
+    await assertSafeSourceRoot(sourceRoot, accessService);
     const scanId = workspaceId ? `edit-scan-${randomUUID()}` : undefined;
     if (scanId && workspaceId) await localMedia.createScan({ id: scanId, workspaceId, sourceRoot, recursive: true });
     if (scanId) await localMedia.markScanRunning(scanId);
@@ -218,12 +224,12 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     if (!parsed.success) return reply.code(422).send({ error: { code: 'EDIT_INPUT_INVALID', message: '请检查文案、素材目录和剪辑参数。', details: parsed.error.issues } });
     try {
       const input = parsed.data;
-      const outputRoot = input.outputRoot ? await authorizeOutputRoot(input.outputRoot) : null;
+      const outputRoot = input.outputRoot ? await authorizeOutputRoot(input.outputRoot, dependencies.localPathAccess) : null;
       if (input.usePexels && !process.env.PEXELS_API_KEY && process.env.CONTENTOS_FAKE_PEXELS !== '1') throw new Error('PEXELS_NOT_CONFIGURED');
       const sessionId = `edit-session-${randomUUID()}`;
       const sourceWorkspaceId = `workspace-edit-source-${randomUUID()}`;
       await dependencies.db.query("insert into video_workspaces (id, type, project_id) values ($1, 'STANDALONE', null)", [sourceWorkspaceId]);
-      const scanned = input.sourceRoots.length ? await scanRoots(dependencies.localMedia, input.sourceRoots, sourceWorkspaceId) : { scans: [], assets: [] };
+      const scanned = input.sourceRoots.length ? await scanRoots(dependencies.localMedia, input.sourceRoots, sourceWorkspaceId, dependencies.localPathAccess) : { scans: [], assets: [] };
       if (scanned.assets.length === 0 && !input.usePexels) throw new Error('EDIT_NO_VIDEO_ASSETS');
       const batchId = `edit-batch-${randomUUID()}`;
       const title = cleanFilePart(input.title || (input.mode === 'SCRIPT' ? '脚本剪辑' : '批量混剪'));
@@ -255,7 +261,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
       return reply.code(201).send({ id: sessionId, batchId, mode: input.mode, title, testOnly: input.testOnly, variants: input.variants, sources: scanned.scans.map(({ files: _files, ...scan }) => scan), outputRoot, items: resultItems });
     } catch (error) {
       const code = error instanceof Error ? error.message : 'EDIT_SESSION_CREATE_FAILED';
-      const message = code === 'PEXELS_NOT_CONFIGURED' ? '服务端尚未配置 PEXELS_API_KEY，请到部署环境设置。' : code === 'EDIT_OUTPUT_ROOT_UNAUTHORIZED' ? '输出目录未被授权，请配置允许的输出根目录。' : code === 'EDIT_OUTPUT_ROOT_NOT_FOUND' ? '输出目录不存在，请先创建目录。' : code === 'EDIT_OUTPUT_ROOT_NOT_WRITABLE' ? '输出目录不可写，请检查权限。' : code === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? '素材目录未被授权，请检查本地素材根目录配置。' : code === 'EDIT_NO_VIDEO_ASSETS' ? '没有找到可用于剪辑的视频素材。' : code === 'EDIT_TEMPLATE_NOT_FOUND' ? '剪辑模板不存在，请重新选择。' : '剪辑任务创建失败，请检查路径和素材。';
+       const message = code === 'PEXELS_NOT_CONFIGURED' ? '服务端尚未配置 PEXELS_API_KEY，请到部署环境设置。' : code === 'EDIT_OUTPUT_ROOT_UNAUTHORIZED' || code === 'LOCAL_PATH_NOT_GRANTED' ? '请使用选择器选择可用目录。' : code === 'EDIT_OUTPUT_ROOT_NOT_FOUND' || code === 'LOCAL_PATH_NOT_FOUND' ? '输出目录不存在，请先选择有效目录。' : code === 'EDIT_OUTPUT_ROOT_NOT_WRITABLE' || code === 'LOCAL_PATH_NOT_WRITABLE' ? 'Windows 当前用户无法写入该目录。' : code === 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' ? '请使用“选择素材文件夹”选择可用目录。' : code === 'LOCAL_PATH_NOT_READABLE' ? 'Windows 当前用户没有读取该文件夹的权限。' : code === 'EDIT_NO_VIDEO_ASSETS' ? '没有找到可用于剪辑的视频素材。' : code === 'EDIT_TEMPLATE_NOT_FOUND' ? '剪辑模板不存在，请重新选择。' : '剪辑任务创建失败，请检查路径和素材。';
       return reply.code(code.includes('UNAUTHORIZED') ? 403 : 422).send({ error: { code, message, details: [] } });
     }
   });
@@ -264,7 +270,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     const parsed = z.object({ sourceRoots: z.array(z.string().trim().min(1)).min(1).max(16) }).safeParse(request.body || {});
     if (!parsed.success) return reply.code(422).send({ error: { code: 'EDIT_SOURCE_SCAN_INVALID', message: '素材目录信息不正确。', details: parsed.error.issues } });
     try {
-      const scanned = await scanRoots(dependencies.localMedia, parsed.data.sourceRoots);
+      const scanned = await scanRoots(dependencies.localMedia, parsed.data.sourceRoots, undefined, dependencies.localPathAccess);
       return { items: scanned.scans.map(({ files: _files, ...scan }) => scan) };
     } catch (error) {
       const code = error instanceof Error ? error.message : 'EDIT_SOURCE_SCAN_FAILED';
@@ -330,7 +336,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     const row = (await dependencies.db.query('select i.output_path, s.output_root from edit_batch_items i join edit_batches b on b.id = i.batch_id join edit_workbench_sessions s on s.id = b.session_id where i.id = $1 and i.batch_id = $2 and i.state = \'SUCCEEDED\'', [itemId, batchId])).rows[0] as { output_path?: string; output_root?: string | null } | undefined;
     if (!row?.output_path || !row.output_root) return reply.code(404).send({ error: { code: 'EDIT_OUTPUT_NOT_FOUND', message: '成片尚未导出。', details: [] } });
     try {
-      const outputRoot = await authorizeOutputRoot(row.output_root);
+      const outputRoot = await authorizeOutputRoot(row.output_root, dependencies.localPathAccess);
       const target = await realpath(row.output_path);
       if (!contained(outputRoot, target)) throw new Error('EDIT_OUTPUT_ROOT_UNAUTHORIZED');
       const details = await stat(target);
@@ -380,7 +386,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     const batch = (await dependencies.db.query('select b.*, s.title, s.output_root, s.settings from edit_batches b join edit_workbench_sessions s on s.id = b.session_id where b.id = $1', [batchId])).rows[0] as Record<string, unknown> | undefined;
     if (!batch) return reply.code(404).send({ error: { code: 'EDIT_BATCH_NOT_FOUND', message: '剪辑记录不存在。', details: [] } });
     let outputRoot: string;
-    try { outputRoot = await authorizeOutputRoot(String(requested.data.outputRoot || batch.output_root || '')); }
+    try { outputRoot = await authorizeOutputRoot(String(requested.data.outputRoot || batch.output_root || ''), dependencies.localPathAccess); }
     catch (error) {
       const code = error instanceof Error ? error.message : 'EDIT_OUTPUT_ROOT_INVALID';
       const message = code === 'EDIT_OUTPUT_ROOT_NOT_FOUND' ? '输出目录不存在，请先创建目录。' : code === 'EDIT_OUTPUT_ROOT_NOT_WRITABLE' ? '输出目录不可写，请检查权限。' : '输出目录未被授权，请配置允许的输出根目录。';
@@ -425,7 +431,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     if (String(row.status) !== 'FAILED') return reply.code(409).send({ error: { code: 'EDIT_EXPORT_NOT_RETRYABLE', message: '当前导出任务不需要重试。', details: [] } });
     let outputRoot: string;
     try {
-      outputRoot = await authorizeOutputRoot(String(row.output_root || ''));
+      outputRoot = await authorizeOutputRoot(String(row.output_root || ''), dependencies.localPathAccess);
       const destinationParent = await realpath(dirname(String(row.output_path))).catch(() => null);
       if (!destinationParent || !contained(outputRoot, destinationParent)) throw new Error('EDIT_OUTPUT_ROOT_UNAUTHORIZED');
       if (await stat(String(row.output_path)).then(() => true).catch(() => false)) throw new Error('EDIT_EXPORT_DESTINATION_EXISTS');

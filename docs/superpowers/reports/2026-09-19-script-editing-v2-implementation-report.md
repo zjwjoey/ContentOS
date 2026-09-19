@@ -38,6 +38,17 @@
 - `pnpm doctor` reports one pre-existing warning because pnpm's global bin directory is not on PATH; all doctor connectivity and runtime checks pass.
 - Real Pexels is never used by tests; the external-media flow uses the deterministic FakeExternalVideoProvider. Logo overlay remains an optional P2 enhancement; existing Intro/Outro branding assets are supported.
 
+## Final Integrity Closure + Native Full-Computer Path Picker (current continuation)
+
+- Entity integrity is enforced at resolver and manifest layers: `AUTHENTIC_ENTITY` requires exact entity equality; non-authentic matches are explicitly marked `entityFallback` with `NEUTRAL_BROLL` or `PLACE_CONTEXT`.
+- Duration integrity is a hard resolver constraint for local, Pexels/Fake Pexels, priority and `MUST_USE` assets; short assets fail before planning.
+- Absolute voice timing is preserved through visual gaps, intro offsets, subtitles, Hero Text and manifest metadata (`audioOffsetMs`); FFmpeg pads visual gaps instead of collapsing them.
+- Reroll is now queued as a durable `EDIT_SCRIPT_PLAN` worker job and re-enters the resolver constraints; the API no longer mutates a resolved plan synchronously.
+- Native local path selection is available through Windows Shell dialogs for media roots, output roots, voice/music files and priority assets. Canonical persisted grants are stored by migration `0030`, support folder children and exact files, and retain environment roots as deployment fallback. Picker cancellation returns `{ cancelled: true }`.
+- V1, MIX and workbench forms expose the same picker path while retaining manual paths as an advanced fallback; picked media is scanned immediately.
+
+Current continuation verification: `pnpm typecheck`, `pnpm lint`, `pnpm format`, `pnpm build`, `pnpm --dir apps/web build`, and `pnpm test:script-edit-v2` (18/18) pass. Migration/browser/full-suite gates require a running PostgreSQL/Windows interactive acceptance environment; this machine currently has no PostgreSQL listener on `127.0.0.1:5432`, so those gates must be rerun before release sign-off.
+
 ## GO / NO-GO
 
 GO / READY FOR REVIEW. V2 P0/P1 requirements, V1/MIX compatibility, full test matrix, builds, browser flow and remote branch are green. Commit `942730e` closes the authorized output path, external thumbnail, FFmpeg matrix and user-facing history wording gates.
