@@ -9,6 +9,20 @@ import { renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/
 
 export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; localMedia?: LocalMediaSourceService; mediaProvider?: ExternalVideoProvider; }
 
+export function createScriptPlanJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
+  return async (job, _attemptId, signal) => {
+    if (job.type !== 'EDIT_SCRIPT_PLAN') throw new Error('EDIT_SCRIPT_PLAN_JOB_TYPE_INVALID');
+    if (signal.aborted) throw new Error('EDIT_SCRIPT_PLAN_CANCELLED');
+    const planId = (job.payload as { planId?: string }).planId;
+    if (!planId) throw new Error('EDIT_SCRIPT_PLAN_PAYLOAD_INVALID');
+    const row = (await deps.db.query('select id, resolved_plan from edit_script_plans where id=$1', [planId])).rows[0] as { id: string; resolved_plan: unknown } | undefined;
+    if (!row) throw new Error('EDIT_SCRIPT_PLAN_NOT_FOUND');
+    if (!row.resolved_plan) { await deps.db.query("update edit_script_plans set status='FAILED',updated_at=now() where id=$1", [planId]); throw new Error('EDIT_SCRIPT_PLAN_NO_RESOLVED_MEDIA'); }
+    await deps.db.query("update edit_script_plans set status='READY',updated_at=now() where id=$1", [planId]);
+    return { planId, status: 'READY' };
+  };
+}
+
 async function syncEditBatch(db: Pool, batchId: string): Promise<void> {
   const row = (await db.query<{ expected: number; actual: number; succeeded: number; failed: number; active: number }>(`select b.total_count as expected, count(i.id)::int as actual,
     count(*) filter (where i.state='SUCCEEDED')::int as succeeded,

@@ -68,26 +68,51 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   for (const clip of manifest.timeline) args.push('-ss', String(clip.sourceInMs / 1000), '-t', String(clip.durationMs / 1000), '-i', clip.sourcePath);
   const voiceIndex = manifest.audio.voicePath ? manifest.timeline.length : -1;
   if (manifest.audio.voicePath) args.push('-i', manifest.audio.voicePath);
+  const musicIndex = manifest.audio.backgroundMusic?.path ? manifest.timeline.length + (voiceIndex >= 0 ? 1 : 0) : -1;
+  if (musicIndex >= 0 && manifest.audio.backgroundMusic?.path) args.push('-stream_loop', '-1', '-i', manifest.audio.backgroundMusic.path);
   const filters: string[] = [];
   const outputFps = Math.max(1, Number(manifest.canvas.fps || 30));
+  let globalOffsetMs = 0;
   for (let i = 0; i < manifest.timeline.length; i += 1) {
     const clip = manifest.timeline[i]!;
     const visualDurationMs = clip.timelineStartMs !== undefined && clip.timelineEndMs !== undefined ? Math.max(clip.durationMs, clip.timelineEndMs - clip.timelineStartMs) : clip.durationMs;
     const padMs = Math.max(0, visualDurationMs - clip.durationMs);
-    const subtitle = i === 0 && manifest.subtitles?.[0] && options.fontFile ? `,drawtext=fontfile='${escapeFilterText(options.fontFile)}':text='${escapeFilterText(manifest.subtitles[0].text)}':fontcolor=white:fontsize=48:x=(w-text_w)/2:y=h-180:box=1:boxcolor=black@0.45` : '';
+    let overlays = '';
+    if (options.fontFile) {
+      const localStart = globalOffsetMs;
+      const draw = (item: { text: string; startMs: number; endMs: number; style?: string; fontSize?: number; position?: string }, kind: 'subtitle' | 'hero') => {
+        const start = Math.max(0, (item.startMs - localStart) / 1000); const end = Math.max(start + 0.001, (item.endMs - localStart) / 1000);
+        if (end <= 0 || start >= visualDurationMs / 1000) return '';
+        const y = item.position === 'top' ? '180' : item.position === 'center' ? '(h-text_h)/2' : 'h-220';
+        const color = kind === 'hero' || item.style === 'emphasis' ? 'white' : item.style === 'commercial' ? '0xEAF4FF' : 'white';
+        const size = item.fontSize ?? (kind === 'hero' ? 64 : 48);
+        return `,drawtext=fontfile='${escapeFilterText(options.fontFile!)}':text='${escapeFilterText(item.text)}':fontcolor=${color}:fontsize=${size}:x=(w-text_w)/2:y=${y}:box=1:boxcolor=black@0.45:enable='between(t,${start.toFixed(3)},${end.toFixed(3)})'`;
+      };
+      for (const item of manifest.subtitles ?? []) overlays += draw(item, 'subtitle');
+      for (const item of manifest.textOverlays ?? []) overlays += draw(item, 'hero');
+    }
     const pad = padMs > 0 ? `,tpad=stop_mode=clone:stop_duration=${padMs / 1000}` : '';
     const clipDurationSeconds = Math.max(0.001, clip.durationMs / 1000).toFixed(6);
-    filters.push(`[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,format=yuv420p,fps=${outputFps}:round=up,trim=duration=${clipDurationSeconds},setpts=PTS-STARTPTS${subtitle}${pad},fps=${outputFps}:round=up,setpts=PTS-STARTPTS[v${i}]`);
+    filters.push(`[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,format=yuv420p,fps=${outputFps}:round=up,trim=duration=${clipDurationSeconds},setpts=PTS-STARTPTS${overlays}${pad},fps=${outputFps}:round=up,setpts=PTS-STARTPTS[v${i}]`);
+    globalOffsetMs += visualDurationMs;
   }
   if (manifest.timeline.length === 1) filters.push('[v0]null[vout]');
   else filters.push(`${manifest.timeline.map((_, i) => `[v${i}]`).join('')}concat=n=${manifest.timeline.length}:v=1:a=0[vout]`);
   const videoDurationMs = manifest.timeline.reduce((total, clip) => { const visual = clip.timelineStartMs !== undefined && clip.timelineEndMs !== undefined ? Math.max(clip.durationMs, clip.timelineEndMs - clip.timelineStartMs) : clip.durationMs; return total + visual; }, 0);
   if (voiceIndex >= 0) {
     const offsetMs = Math.max(0, Number(manifest.metadata?.audioOffsetMs || 0));
-    filters.push(`[${voiceIndex}:a]adelay=${offsetMs}:all=1,apad[aout]`);
+    filters.push(`[${voiceIndex}:a]adelay=${offsetMs}:all=1,volume=${manifest.audio.volume ?? 1},apad[voice]`);
   }
   args.push('-filter_complex', filters.join(';'), '-map', '[vout]');
-  if (voiceIndex >= 0) args.push('-map', '[aout]', '-c:a', 'aac', '-strict', '-2', '-t', String(videoDurationMs / 1000));
+  if (musicIndex >= 0) {
+    const musicVolume = manifest.audio.backgroundMusic?.ducking?.musicVolume ?? manifest.audio.backgroundMusic?.volume ?? 0.12;
+    filters.push(`[${musicIndex}:a]volume=${musicVolume},atrim=duration=${(videoDurationMs / 1000).toFixed(3)},asetpts=PTS-STARTPTS[music]`);
+    if (voiceIndex >= 0) filters.push(`[voice][music]amix=inputs=2:duration=first:dropout_transition=0[aout]`);
+    else filters.push('[music]apad[aout]');
+    // filter_complex was appended above; replace it with the complete filter graph.
+    args[args.indexOf('-filter_complex') + 1] = filters.join(';');
+    args.push('-map', '[aout]', '-c:a', 'aac', '-strict', '-2', '-t', String(videoDurationMs / 1000));
+  } else if (voiceIndex >= 0) args.push('-map', '[voice]', '-c:a', 'aac', '-strict', '-2', '-t', String(videoDurationMs / 1000));
   else args.push('-an');
   const videoEncoder = manifest.output.videoCodec === 'h264' ? 'libx264' : 'mpeg4';
   args.push('-c:v', videoEncoder, '-pix_fmt', 'yuv420p', '-r', String(outputFps));

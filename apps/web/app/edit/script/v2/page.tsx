@@ -1,0 +1,7 @@
+'use client';
+import { useState } from 'react';
+export default function ScriptEditingV2Page() {
+  const [script, setScript] = useState(''); const [status, setStatus] = useState(''); const [plan, setPlan] = useState<unknown>(null);
+  async function createPlan() { setStatus('正在生成剪辑方案…'); const response = await fetch('/api/v1/edit/script-plans', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspaceId: 'workspace-local', script, assets: [], template: 'COMMERCIAL_OPINION', pace: 'NORMAL', shotDensity: 1 }) }); const data = await response.json() as { editorialPlan?: unknown; status?: string; error?: { code?: string } }; setPlan(data.editorialPlan ?? data); setStatus(response.ok ? `方案状态：${data.status || 'READY'}` : `生成失败：${data.error?.code || '未知错误'}`); }
+  return <main className="shell"><header className="page-header"><p className="eyebrow">剪辑 / 规则方案 V2</p><h1>生成剪辑方案</h1><p className="muted">先规划镜头、字幕和文字，再进入渲染。</p></header><section className="panel"><label htmlFor="v2-script">文案与配音</label><textarea id="v2-script" value={script} onChange={(event) => setScript(event.target.value)} placeholder="输入脚本，每句将生成一个场景" rows={10} /><div className="form-actions"><button type="button" onClick={() => void createPlan()} disabled={!script.trim()}>生成剪辑方案</button><span className="muted">{status}</span></div>{plan ? <pre className="code-block">{JSON.stringify(plan, null, 2)}</pre> : null}</section></main>;
+}

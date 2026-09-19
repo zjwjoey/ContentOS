@@ -54,8 +54,9 @@ export interface EditManifestV0 {
   seed: number;
   canvas: { width: 1080; height: 1920; aspectRatio: '9:16'; fps: number };
   timeline: ManifestClip[];
-  audio: { voiceAssetId?: string; voicePath?: string; volume: number };
-  subtitles?: Array<{ text: string; startMs: number; endMs: number }>;
+  audio: { voiceAssetId?: string; voicePath?: string; volume: number; backgroundMusic?: { assetId?: string; path: string; volume: number; ducking?: { enabled: boolean; voiceVolume?: number; musicVolume?: number } } };
+  subtitles?: Array<{ text: string; startMs: number; endMs: number; style?: 'simple' | 'commercial' | 'emphasis'; fontSize?: number; position?: 'top' | 'center' | 'bottom'; maxLines?: number }>;
+  textOverlays?: Array<{ text: string; startMs: number; endMs: number; kind?: 'HERO' | 'EVIDENCE'; style?: 'simple' | 'commercial' | 'emphasis'; fontSize?: number; position?: 'top' | 'center' | 'bottom' }>;
   metadata?: {
     briefId?: string;
     scriptRevisionId?: string;
