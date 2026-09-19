@@ -222,9 +222,9 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
   });
   app.get('/api/v1/video/local-media/thumbnails/:fileId', async (request, reply) => {
     if (!dependencies.localMedia) return reply.code(403).send({ error: { code: 'LOCAL_MEDIA_ROOT_UNAUTHORIZED', message: '服务端尚未配置本地素材授权根目录。', details: [] } });
-    const query = request.query as { projectId?: string };
-    if (!query.projectId) return reply.code(422).send({ error: { code: 'PROJECT_REQUIRED', message: '缺少项目标识。', details: [] } });
-    const result = await dependencies.localMedia.getThumbnail((request.params as { fileId: string }).fileId, query.projectId);
+    const query = request.query as { projectId?: string; workspaceId?: string };
+    if (!query.projectId && !query.workspaceId) return reply.code(422).send({ error: { code: 'MEDIA_OWNER_REQUIRED', message: '缺少项目或工作区标识。', details: [] } });
+    const result = await dependencies.localMedia.getThumbnail((request.params as { fileId: string }).fileId, query.projectId, query.workspaceId);
     if (!result) return reply.code(404).send({ error: { code: 'THUMBNAIL_NOT_FOUND', message: '缩略图尚未生成。', details: [] } });
     reply.header('content-type', 'image/jpeg').header('cache-control', 'public, max-age=31536000, immutable');
     return reply.send(createReadStream(result.path));

@@ -1,4 +1,5 @@
 import { dirname, extname, join, resolve, sep } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
 import type { Pool } from 'pg';
 import { AssetCatalogService, type AssetService, type LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
@@ -19,6 +20,7 @@ async function chooseLocalMusic(category: string | undefined, seed: number): Pro
 
 export function createScriptPlanJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
   return async (job, _attemptId, signal) => {
+    try {
     if (job.type !== 'EDIT_SCRIPT_PLAN') throw new Error('EDIT_SCRIPT_PLAN_JOB_TYPE_INVALID');
     if (signal.aborted) throw new Error('EDIT_SCRIPT_PLAN_CANCELLED');
     const planId = (job.payload as { planId?: string }).planId;
@@ -45,9 +47,20 @@ export function createScriptPlanJobHandler(deps: VideoHandlerDeps): (job: JobRec
       const sourceRoots = Array.isArray(row.source_roots) ? row.source_roots : [];
       const knownEntities = Array.isArray(row.settings?.knownEntities) ? row.settings.knownEntities.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())) : [];
       if (deps.localMedia && sourceRoots.length) {
-        for (const root of sourceRoots.filter((item): item is string => typeof item === 'string')) {
+        for (const root of [...new Set(sourceRoots.filter((item): item is string => typeof item === 'string'))]) {
+          // V2 plans belong to a workspace, so persist the scan there as well as
+          // returning the in-memory candidates. This makes the existing secure
+          // thumbnail endpoint usable by the Scene Card preview.
+          const scanId = `edit-v2-scan-${randomUUID()}`;
+          await deps.localMedia.createScan({ id: scanId, workspaceId: job.workspaceId || 'workspace-local', sourceRoot: root, recursive: true });
+          await deps.localMedia.markScanRunning(scanId);
           const scan = await deps.localMedia.scan({ sourceRoot: root, recursive: true, signal });
-          scannedAssets.push(...scan.files.filter((file) => file.available).map((file) => { const terms = `${file.fileName} ${(file.tags || []).join(' ')}`.toLocaleLowerCase(); const entity = knownEntities.find((candidate) => terms.includes(candidate.toLocaleLowerCase())); return { id: `${scan.sourceRootId}:${file.relativePath}`, path: file.sourcePath, durationMs: file.durationMs, source: 'LOCAL' as const, originalName: file.fileName, keywords: file.tags, tags: file.tags, ...(entity ? { entity } : {}) }; }));
+          await deps.localMedia.completeScan(scanId, scan);
+          for (const file of scan.files.filter((item) => item.available)) {
+            if (signal.aborted) throw new Error('EDIT_SCRIPT_PLAN_CANCELLED');
+            try { await deps.localMedia.generateThumbnail(`${scan.sourceRootId}:${file.relativePath}`, deps.ffmpegPath); } catch { /* preview can still use metadata if a thumbnail fails */ }
+          }
+          scannedAssets.push(...scan.files.filter((file) => file.available).map((file) => { const id = `${scan.sourceRootId}:${file.relativePath}`; const terms = `${file.fileName} ${(file.tags || []).join(' ')}`.toLocaleLowerCase(); const entity = knownEntities.find((candidate) => terms.includes(candidate.toLocaleLowerCase())); return { id, path: file.sourcePath, durationMs: file.durationMs, source: 'LOCAL' as const, originalName: file.fileName, keywords: file.tags, tags: file.tags, thumbnailUrl: `/api/v1/video/local-media/thumbnails/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(job.workspaceId || 'workspace-local')}`, ...(entity ? { entity } : {}) }; }));
         }
       }
       if (row.settings?.usePexels === true && deps.mediaProvider) {
@@ -67,6 +80,10 @@ export function createScriptPlanJobHandler(deps: VideoHandlerDeps): (job: JobRec
     if (existingPlan.audioPlan?.backgroundMusicMode === 'AUTO' && !existingPlan.audioPlan.path) { const musicPath = await chooseLocalMusic(existingPlan.audioPlan.category, Number(row.settings.seed || 1)); existingPlan = musicPath ? { ...existingPlan, audioPlan: { ...existingPlan.audioPlan, path: musicPath } } : { ...existingPlan, warnings: [...(existingPlan.warnings || []), 'EDIT_BGM_UNAVAILABLE'] }; await deps.db.query('update edit_script_plans set resolved_plan=$2 where id=$1', [planId, existingPlan]); }
     await deps.db.query("update edit_script_plans set status='READY',updated_at=now() where id=$1", [planId]);
     return { planId, status: 'READY' };
+    } catch (error) {
+      await deps.db.query("update edit_script_plans set status='FAILED',updated_at=now() where id=$1 and status in ('QUEUED','PLANNING')", [((job.payload as { planId?: string }).planId || '')]).catch(() => undefined);
+      throw error;
+    }
   };
 }
 

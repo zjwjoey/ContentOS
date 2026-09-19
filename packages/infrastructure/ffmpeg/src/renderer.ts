@@ -62,6 +62,7 @@ export async function probeMedia(path: string, ffprobePath: string, signal?: Abo
 export async function renderEditManifest(options: RenderOptions, fixture?: { generateFixtureInput?: boolean; fixturePath?: string }): Promise<RenderResult> {
   const { manifest, outputPath, ffmpegPath, ffprobePath } = options;
   options.signal?.throwIfAborted();
+  if ((manifest.subtitles?.length || manifest.textOverlays?.length) && !options.fontFile) throw new Error('RENDER_SUBTITLE_FONT_UNAVAILABLE');
   if (fixture?.generateFixtureInput && fixture.fixturePath) await generateFixtureVideo(fixture.fixturePath, ffmpegPath);
   await mkdir(dirname(outputPath), { recursive: true });
   const tempOutput = `${outputPath}.${randomUUID()}.part.mp4`;

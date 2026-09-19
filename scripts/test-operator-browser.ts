@@ -139,13 +139,14 @@ async function main(): Promise<void> {
       CONTENTOS_FAKE_PEXELS: '1',
       CONTENTOS_FAKE_PEXELS_FIXTURE: fixtureVideos[1]!,
       CONTENTOS_LOCAL_MEDIA_ROOTS: temporaryRoot,
+      CONTENTOS_MUSIC_ROOTS: temporaryRoot,
       CONTENTOS_OUTPUT_ROOTS: temporaryRoot,
     };
     operator = spawnPnpm(['dev:operator'], environment);
     await waitForHealth(apiUrl);
     const testArgs = ['tsx', '--test', '--test-concurrency=1'];
     if (process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN) testArgs.push('--test-name-pattern', process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN);
-      const browserTests = (process.env.CONTENTOS_BROWSER_TEST_FILES || 'tests/e2e/auto-edit-v1-browser.test.ts;tests/e2e/editing-workbench-browser.test.ts;tests/e2e/hybrid-script-edit-browser.test.ts').split(';').map((file) => file.trim()).filter(Boolean);
+      const browserTests = (process.env.CONTENTOS_BROWSER_TEST_FILES || 'tests/e2e/auto-edit-v1-browser.test.ts;tests/e2e/editing-workbench-browser.test.ts;tests/e2e/hybrid-script-edit-browser.test.ts;tests/e2e/script-editing-v2-browser.test.ts').split(';').map((file) => file.trim()).filter(Boolean);
     testArgs.push(...browserTests);
     const invocation = pnpmInvocation(testArgs);
     await run(invocation.command, invocation.args, {

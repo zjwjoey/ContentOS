@@ -51,6 +51,14 @@ test('FFmpeg renderer honors an aborted render signal', async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('FFmpeg renderer fails loudly when text is enabled without a font', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-render-font-test-')); const output = join(root, 'output.mp4');
+  try {
+    const manifest = { ...buildVideoManifest({ projectId: 'project-render-font-test', seed: 10, assets: [{ id: 'source-1', storageKey: 'objects/source-1', sourcePath: join(root, 'clip.mp4'), durationMs: 1200 } satisfies PlannerAsset], targetDurationMs: 1000 }), subtitles: [{ text: '字幕', startMs: 0, endMs: 500 }] };
+    await assert.rejects(renderEditManifest({ manifest, outputPath: output, ffmpegPath: ffmpeg, ffprobePath: ffprobe }), /RENDER_SUBTITLE_FONT_UNAVAILABLE/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('FFmpeg renderer terminates active work and removes partial output on abort', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-render-active-cancel-test-'));
   const clip = join(root, 'clip.mp4');

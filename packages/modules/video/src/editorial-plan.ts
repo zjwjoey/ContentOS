@@ -21,7 +21,7 @@ export const EDITORIAL_TEMPLATES: Record<EditorialTemplateV1, EditorialTemplateC
   PRODUCT_INTRO: { id: 'PRODUCT_INTRO', version: '1.0.0', templateName: '产品介绍', pace: 'NORMAL', shotDensity: 'MEDIUM', subtitleStyle: 'emphasis', heroTextEnabled: true, heroTextPolicy: ['HOOK', 'EVIDENCE', 'ENDING'], backgroundMusicMode: 'AUTO', backgroundMusicCategory: '科技', backgroundMusicVolume: 0.12, duckingEnabled: true, introEnabled: false, outroEnabled: false, assetReusePolicy: 'PREFER_UNIQUE', pexelsEnabledDefault: true },
 };
 
-export interface EditorialAssetV1 { id: string; path: string; durationMs: number; source: 'LOCAL' | 'PEXELS' | 'FAKE_PEXELS'; entity?: string; keywords?: string[]; originalName?: string; tags?: string[]; sourceInMs?: number; author?: string; }
+export interface EditorialAssetV1 { id: string; path: string; durationMs: number; source: 'LOCAL' | 'PEXELS' | 'FAKE_PEXELS'; entity?: string; keywords?: string[]; originalName?: string; tags?: string[]; sourceInMs?: number; author?: string; thumbnailUrl?: string; }
 export interface PriorityAssetV1 { assetId: string; mode: 'PREFER' | 'MUST_USE'; path?: string; }
 export interface ClipSlotV1 {
   id: string; sceneId: string; index: number; clipIndex?: number; startMs: number; endMs: number; durationMs: number; keywords: string[]; role: NarrativeRoleV1; visualIntent: string;

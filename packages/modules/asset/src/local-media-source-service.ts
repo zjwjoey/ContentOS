@@ -216,9 +216,10 @@ export class LocalMediaSourceService {
     try { await generateVideoThumbnail(row.source_path, path, ffmpegPath, Number(row.duration_ms)); await this.db.query('update local_media_index set thumbnail_key = $2, thumbnail_status = \'READY\', updated_at = now() where file_id = $1', [fileId, key]); return { key, path }; }
     catch (error) { await this.db.query('update local_media_index set thumbnail_status = \'FAILED\', updated_at = now() where file_id = $1', [fileId]); throw error; }
   }
-  async getThumbnail(fileId: string, projectId: string): Promise<{ path: string; key: string } | null> {
+  async getThumbnail(fileId: string, projectId?: string, workspaceId?: string): Promise<{ path: string; key: string } | null> {
     if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED');
-    const row = (await this.db.query<{ thumbnail_key: string | null; thumbnail_status: string }>('select i.thumbnail_key, i.thumbnail_status from local_media_index i join local_media_scan_files f on f.file_id = i.file_id join local_media_scans s on s.id = f.scan_id where i.file_id = $1 and s.project_id = $2 and s.status = \'SUCCEEDED\' order by s.scanned_at desc nulls last limit 1', [fileId, projectId])).rows[0];
+    if (!projectId && !workspaceId) return null;
+    const row = (await this.db.query<{ thumbnail_key: string | null; thumbnail_status: string }>('select i.thumbnail_key, i.thumbnail_status from local_media_index i join local_media_scan_files f on f.file_id = i.file_id join local_media_scans s on s.id = f.scan_id where i.file_id = $1 and (($2::text is null and $3::text is null) or s.project_id = $2 or s.workspace_id = $3) and s.status = \'SUCCEEDED\' order by s.scanned_at desc nulls last limit 1', [fileId, projectId || null, workspaceId || null])).rows[0];
     if (!row?.thumbnail_key || row.thumbnail_status !== 'READY') return null;
     const path = join(this.thumbnailRoot, row.thumbnail_key); if (!contains(this.thumbnailRoot, resolve(path))) return null;
     try { await accessFile(path); return { path, key: row.thumbnail_key }; } catch { return null; }
