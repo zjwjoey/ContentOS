@@ -51,4 +51,4 @@ Current continuation verification: `pnpm typecheck`, `pnpm lint`, `pnpm format`,
 
 ## GO / NO-GO
 
-GO / READY FOR REVIEW. V2 P0/P1 requirements, V1/MIX compatibility, full test matrix, builds, browser flow and remote branch are green. Commit `942730e` closes the authorized output path, external thumbnail, FFmpeg matrix and user-facing history wording gates.
+NO-GO for final release sign-off until the migration matrix, full PostgreSQL-backed suites and real Windows native-picker acceptance are rerun in their required environments. The implementation is pushed and the focused integrity/build gates are green; this is an environment-gate hold, not an uncommitted-code hold.
