@@ -4,6 +4,7 @@ Date: 2026-09-19
 Branch: `codex/hybrid-media-script-editing-v1`
 Base SHA: `7961b5e04f99544159d600865622bc16e8f0e248`
 Final SHA: 5e700a5 (final Hybrid Script Editing V1 closure and FFmpeg regression)
+Final HEAD at code audit: `5e700a5` (subsequent commits only update this report)
 
 ## Delivery status
 
