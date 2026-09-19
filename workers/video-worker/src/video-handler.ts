@@ -3,11 +3,11 @@ import { copyFile, mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/pr
 import type { Pool } from 'pg';
 import { AssetCatalogService, type AssetService, type LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { JobLeaseCancellationHandler, JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
-import { prepareEditingWorkbenchItem, VideoAdjustmentService, VideoEditPresetService, type PlannerAsset, type VideoService } from '../../../packages/modules/video/src/index.js';
+import { prepareEditingWorkbenchItem, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type ExternalVideoProvider, type PlannerAsset, type VideoService } from '../../../packages/modules/video/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import { renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 
-export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; localMedia?: LocalMediaSourceService; }
+export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; localMedia?: LocalMediaSourceService; mediaProvider?: ExternalVideoProvider; }
 
 async function syncEditBatch(db: Pool, batchId: string): Promise<void> {
   const row = (await db.query<{ expected: number; actual: number; succeeded: number; failed: number; active: number }>(`select b.total_count as expected, count(i.id)::int as actual,
@@ -58,12 +58,21 @@ export function createEditPrepareJobHandler(deps: VideoHandlerDeps): (job: JobRe
       const itemSettings = row.settings_snapshot && typeof row.settings_snapshot === 'object' && !Array.isArray(row.settings_snapshot) ? row.settings_snapshot as Record<string, unknown> : {};
       const scanAssets = Array.isArray(settings.scanAssets) ? settings.scanAssets : [];
       const voicePath = row.voice_path ? await authorizedVoicePath(String(row.voice_path)) : undefined;
+      let plannedAssets = scanAssets as PlannerAsset[];
+      let hybridDiagnostics: Record<string, unknown> | undefined;
+      if (String(row.mode) === 'SCRIPT' && settings.usePexels === true) {
+        await deps.db.query("update edit_batch_items set settings_snapshot=settings_snapshot || $2::jsonb,updated_at=now() where id=$1", [payload.itemId, JSON.stringify({ phase: 'VISUAL_PLANNING' })]);
+        const hybrid = await new HybridMediaService(deps.assets, deps.storage, deps.mediaProvider).resolve({ workspaceId: payload.workspaceId, script: String(row.script), localAssets: scanAssets as Array<PlannerAsset & { originalName?: string; tags?: string[]; metadata?: Record<string, unknown> }>, usePexels: true, signal });
+        plannedAssets = hybrid.assets;
+        hybridDiagnostics = { ...hybrid.diagnostics, visualPlan: hybrid.plan };
+        await deps.db.query("update edit_batch_items set settings_snapshot=settings_snapshot || $2::jsonb,updated_at=now() where id=$1", [payload.itemId, JSON.stringify({ phase: 'MANIFEST_BUILDING', hybridDiagnostics })]);
+      }
       const catalog = new AssetCatalogService(deps.db);
       const quickEdit = new VideoAdjustmentService(deps.db, catalog, deps.localMedia);
       const result = await prepareEditingWorkbenchItem({ assetService: deps.assets, assets: catalog, quickEdit, storage: deps.storage, video: deps.video, presets: new VideoEditPresetService(deps.db) }, {
-        mode: String(row.mode) as 'SCRIPT' | 'MIX', workspaceId: payload.workspaceId, script: String(row.script), ...(row.voice_asset_id ? { voiceAssetId: String(row.voice_asset_id) } : {}), ...(voicePath ? { voicePath } : {}), assets: scanAssets as PlannerAsset[], seed: Number(itemSettings.seed || 1), minClipDurationMs: Number(itemSettings.minClipDurationMs || 2_000), maxClipDurationMs: Number(itemSettings.maxClipDurationMs || 5_000), preferUnusedMedia: itemSettings.preferUnusedMedia !== false, fps: Number(itemSettings.fps || 30), ...(typeof itemSettings.templateId === 'string' && itemSettings.templateId ? { templateId: itemSettings.templateId } : {}), renderIdempotencySuffix: `edit-item-${payload.itemId}`
+        mode: String(row.mode) as 'SCRIPT' | 'MIX', workspaceId: payload.workspaceId, script: String(row.script), ...(row.voice_asset_id ? { voiceAssetId: String(row.voice_asset_id) } : {}), ...(voicePath ? { voicePath } : {}), assets: plannedAssets, seed: Number(itemSettings.seed || 1), minClipDurationMs: Number(itemSettings.minClipDurationMs || 2_000), maxClipDurationMs: Number(itemSettings.maxClipDurationMs || 5_000), preferUnusedMedia: itemSettings.preferUnusedMedia !== false, fps: Number(itemSettings.fps || 30), ...(typeof itemSettings.templateId === 'string' && itemSettings.templateId ? { templateId: itemSettings.templateId } : {}), renderIdempotencySuffix: `edit-item-${payload.itemId}`
       });
-      await deps.db.query("update edit_batch_items set voice_asset_id=$2,manifest_id=$3,job_id=$4,state='RENDERING',error=null,updated_at=now() where id=$1", [payload.itemId, result.voiceAssetId || row.voice_asset_id || null, result.manifestId, result.renderJobId]);
+      await deps.db.query("update edit_batch_items set voice_asset_id=$2,manifest_id=$3,job_id=$4,state='RENDERING',error=null,settings_snapshot=settings_snapshot || $5::jsonb,updated_at=now() where id=$1", [payload.itemId, result.voiceAssetId || row.voice_asset_id || null, result.manifestId, result.renderJobId, JSON.stringify({ phase: 'RENDERING', ...(hybridDiagnostics ? { hybridDiagnostics } : {}) })]);
       await syncEditBatchForItem(deps.db, payload.itemId);
       return result;
     } catch (error) {

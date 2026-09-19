@@ -4,12 +4,12 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useState } from 'react';
 
-type BatchItem = { id: string; ordinal: number; title: string; script: string; state: string; outputPath?: string; error?: { message?: string }; exportId?: string; exportStatus?: string; exportError?: { message?: string } };
+type BatchItem = { id: string; ordinal: number; title: string; script: string; state: string; phase?: string; sourceStats?: { localCount: number; externalCount: number; fallbackCount: number }; outputPath?: string; error?: { message?: string }; exportId?: string; exportStatus?: string; exportError?: { message?: string } };
 type Batch = { id: string; title: string; mode: string; testOnly?: boolean; status: string; totalCount: number; succeededCount: number; failedCount: number; exportedCount: number; exportQueuedCount: number; exportFailedCount: number; page: number; pageSize: number; outputRoot?: string | null; items: BatchItem[] };
 type History = { id: string; title: string; mode: string; testOnly?: boolean; status: string; totalCount: number; succeededCount: number; failedCount: number; createdAt: string; outputRoot?: string | null };
 
 function statusLabel(status: string, item?: { succeededCount: number; failedCount: number }): string { if (status === 'SUCCEEDED') return '已完成'; if (status === 'PARTIAL') return `${item?.succeededCount || 0} 成功 / ${item?.failedCount || 0} 失败`; if (status === 'FAILED') return '剪辑失败'; if (status === 'RUNNING') return '正在剪辑'; if (status === 'QUEUED') return '等待中'; return '处理中'; }
-function itemStateLabel(state: string, error?: { message?: string }, exportStatus?: string, exportError?: { message?: string }): string { if (exportStatus === 'FAILED') return `导出失败：${exportError?.message || '请重试导出'}`; if (exportStatus === 'QUEUED' || exportStatus === 'RUNNING') return '正在导出'; if (state === 'SUCCEEDED') return '已完成'; if (state === 'FAILED') return `失败：${error?.message || '渲染失败'}`; if (state === 'PREPARING') return '正在准备素材'; if (state === 'RENDERING' || state === 'RUNNING') return '正在渲染'; return '排队中'; }
+function itemStateLabel(state: string, error?: { message?: string }, exportStatus?: string, exportError?: { message?: string }, phase?: string): string { if (exportStatus === 'FAILED') return `导出失败：${exportError?.message || '请重试导出'}`; if (exportStatus === 'QUEUED' || exportStatus === 'RUNNING') return '正在导出'; if (state === 'SUCCEEDED') return '已完成'; if (state === 'FAILED') return `失败：${error?.message || '渲染失败'}`; if (phase === 'VISUAL_PLANNING') return '正在规划画面'; if (phase === 'MANIFEST_BUILDING') return '正在生成时间线'; if (state === 'PREPARING') return '正在准备素材'; if (state === 'RENDERING' || state === 'RUNNING') return '正在渲染'; return '排队中'; }
 
 function EditHistoryContent() {
   const search = useSearchParams();

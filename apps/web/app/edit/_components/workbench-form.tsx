@@ -47,13 +47,15 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [templateId, setTemplateId] = useState('');
   const [preferUnusedMedia, setPreferUnusedMedia] = useState(true);
+  const [usePexels, setUsePexels] = useState(false);
+  const [pexelsStatus, setPexelsStatus] = useState<'unknown' | 'ready' | 'missing'>('unknown');
   const [busy, setBusy] = useState(false);
   const [uploadingVoice, setUploadingVoice] = useState(false);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
     try {
-      const saved = JSON.parse(window.localStorage.getItem(`contentos-edit-settings-${mode}`) || '{}') as { roots?: string[]; outputRoot?: string; minClipDurationMs?: number; maxClipDurationMs?: number; seed?: number; variants?: number; fps?: number; preferUnusedMedia?: boolean; templateId?: string };
+      const saved = JSON.parse(window.localStorage.getItem(`contentos-edit-settings-${mode}`) || '{}') as { roots?: string[]; outputRoot?: string; minClipDurationMs?: number; maxClipDurationMs?: number; seed?: number; variants?: number; fps?: number; preferUnusedMedia?: boolean; templateId?: string; usePexels?: boolean };
       if (saved.roots?.length) setRoots(saved.roots);
       if (saved.outputRoot) setOutputRoot(saved.outputRoot);
       if (saved.minClipDurationMs) setMinClipDurationMs(saved.minClipDurationMs);
@@ -63,6 +65,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       if (saved.fps) setFps(saved.fps);
       if (saved.preferUnusedMedia !== undefined) setPreferUnusedMedia(saved.preferUnusedMedia);
       if (saved.templateId) setTemplateId(saved.templateId);
+      if (saved.usePexels !== undefined) setUsePexels(saved.usePexels);
     } catch { /* ignore malformed local preferences */ }
   }, [mode]);
 
@@ -87,8 +90,10 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
   }, [copyId, mode]);
 
   useEffect(() => {
-    window.localStorage.setItem(`contentos-edit-settings-${mode}`, JSON.stringify({ roots, outputRoot, minClipDurationMs, maxClipDurationMs, seed, variants, fps, preferUnusedMedia, templateId }));
-  }, [mode, roots, outputRoot, minClipDurationMs, maxClipDurationMs, seed, variants, fps, preferUnusedMedia, templateId]);
+    window.localStorage.setItem(`contentos-edit-settings-${mode}`, JSON.stringify({ roots, outputRoot, minClipDurationMs, maxClipDurationMs, seed, variants, fps, preferUnusedMedia, templateId, usePexels }));
+  }, [mode, roots, outputRoot, minClipDurationMs, maxClipDurationMs, seed, variants, fps, preferUnusedMedia, templateId, usePexels]);
+
+  useEffect(() => { if (mode !== 'SCRIPT') return; void fetch('/api/v1/media-providers').then(async (response) => response.ok ? await response.json() as { items?: Array<{ id: string; configured: boolean }> } : { items: [] }).then((data) => setPexelsStatus(data.items?.find((item) => item.id === 'pexels' || item.id === 'fake-pexels')?.configured ? 'ready' : 'missing')).catch(() => setPexelsStatus('unknown')); }, [mode]);
 
   const updateItem = (index: number, patch: Partial<Item>) => setItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
   const addRoot = () => setRoots((current) => [...current, '']);
@@ -167,6 +172,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
         fps,
         ...(templateId ? { templateId } : {}),
         preferUnusedMedia,
+        ...(mode === 'SCRIPT' ? { usePexels } : {}),
       };
       const response = await fetch('/api/v1/edit/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await response.json() as { batchId?: string; error?: { message?: string } };
@@ -183,7 +189,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       {mode === 'SCRIPT' ? <>
         <label>输入视频文案<textarea value={script} onChange={(event) => setScript(event.target.value)} placeholder="把要表达的内容粘贴到这里……" required /></label>
         <label>配音文件（可选）<span className="upload-control">选择/上传音频<input aria-label="脚本配音文件" type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAudio(file, (path, name) => { setVoicePath(path); setVoiceName(name); }); event.target.value = ''; }} disabled={uploadingVoice} /></span></label>
-        {voiceName && <p className="selected-file">已选择：{voiceName}</p>}
+      {voiceName && <p className="selected-file">已选择：{voiceName}</p>}
         <label className="path-fallback">本地音频路径（可选）<input value={voicePath} onChange={(event) => { setVoicePath(event.target.value); setVoiceName(event.target.value.split(/[\\/]/u).pop() || ''); }} placeholder="也可以填写服务端授权目录中的路径" /></label>
         <p className="muted">支持上传 mp3、wav、m4a、aac、flac 或 ogg；未填写时会按文案时长剪辑。</p>
       </> : <>
@@ -203,7 +209,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
     <section className="card">
       <div className="section-title"><h2>2. 素材文件夹</h2><span>支持多个目录</span></div>
       {roots.map((root, index) => <div className="folder-row" key={index}>
-        <label><span>素材目录 {index + 1}</span><input value={root} onChange={(event) => { setRoots((current) => current.map((value, rootIndex) => rootIndex === index ? event.target.value : value)); setRootStatuses((current) => ({ ...current, [index]: { state: 'idle' } })); }} onBlur={() => void scanRoot(index)} placeholder="例如：F:\\素材\\商品" required /></label>
+        <label><span>素材目录 {index + 1}</span><input value={root} onChange={(event) => { setRoots((current) => current.map((value, rootIndex) => rootIndex === index ? event.target.value : value)); setRootStatuses((current) => ({ ...current, [index]: { state: 'idle' } })); }} onBlur={() => void scanRoot(index)} placeholder="例如：F:\\素材\\商品" required={!(mode === 'SCRIPT' && usePexels)} /></label>
         <span className={`folder-status ${rootStatuses[index]?.state || 'idle'}`}>{statusText(rootStatuses[index])}</span>
         {roots.length > 1 && <button type="button" onClick={() => removeRoot(index)}>删除</button>}
       </div>)}
@@ -218,6 +224,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
     <details className="card advanced-settings"><summary>4. 高级设置</summary>
       <div className="grid"><label>剪辑模板<select value={templateId} onChange={handleTemplateChange}>{presets.length === 0 ? <option value="">默认短视频</option> : presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select></label><label>素材选择策略<select value={preferUnusedMedia ? 'RECOMMENDED' : 'RANDOM'} onChange={(event) => setPreferUnusedMedia(event.target.value === 'RECOMMENDED')}><option value="RECOMMENDED">优先较少使用</option><option value="RANDOM">随机</option></select></label><label>镜头最短时长（秒）<input type="number" min={0.5} step={0.5} value={minClipDurationMs / 1000} onChange={(event) => setMinClipDurationMs(Math.round((Number(event.target.value) || 0.5) * 1000))} /></label><label>镜头最长时长（秒）<input type="number" min={0.5} step={0.5} value={maxClipDurationMs / 1000} onChange={(event) => setMaxClipDurationMs(Math.round((Number(event.target.value) || 0.5) * 1000))} /></label><label>视频帧率<select value={fps} onChange={(event) => setFps(Number(event.target.value))}><option value={24}>24 fps</option><option value={25}>25 fps</option><option value={30}>30 fps</option><option value={50}>50 fps</option><option value={60}>60 fps</option></select></label>{mode === 'MIX' && <label>每条生成版本数<select value={variants} onChange={(event) => setVariants(Number(event.target.value))}><option value={1}>1</option><option value={3}>3</option><option value={5}>5</option></select></label>}</div>
       <p className="muted">片头、片尾和品牌素材继续沿用现有模板配置，不会混入普通素材候选。</p>
+      {mode === 'SCRIPT' && <label className="inline-check"><input type="checkbox" checked={usePexels} onChange={(event) => setUsePexels(event.target.checked)} />本地素材优先，Pexels 作为缺口兜底{pexelsStatus === 'missing' && <small>（服务端未配置 PEXELS_API_KEY）</small>}</label>}
     </details>
     {message && <p className="form-error">{message}</p>}
     {mode === 'MIX' && <button type="button" className="secondary-action" onClick={() => void submit(undefined, true)} disabled={busy}>生成 1 条测试</button>}
