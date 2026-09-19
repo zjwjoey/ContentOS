@@ -3,7 +3,7 @@
 Date: 2026-09-19
 Branch: `codex/hybrid-media-script-editing-v1`
 Base SHA: `7961b5e04f99544159d600865622bc16e8f0e248`
-Final SHA: 70a1454 (Final Entity Integrity Closure commit)
+Final SHA: d023d21 (Hybrid Script Editing V1 closure implementation)
 
 ## Delivery status
 
@@ -50,6 +50,14 @@ montage manifest. No merge to `main` was performed.
 - **Browser acceptance:** the operator browser harness runs the Hybrid flow with
   the deterministic fake provider, including external-only retrieval and local
   plus external source statistics.
+- **Unique media policy:** MIX/RANDOM montage planning is strict-unique and fails
+  with a stable exhaustion error instead of repeating a source. Normal SCRIPT
+  matching keeps its existing fallback semantics; Hybrid SCRIPT prefers unused
+  media, then permits only resolver-marked controlled reuse.
+- **Voice timing handoff:** the worker resolves/imports voice once before Hybrid
+  planning, then passes the same `TimedScriptSentence[]` into visual planning,
+  preparation and final manifest construction. Candidate duration eligibility is
+  checked against the resolved voice segment before selection.
 
 ## Final Closure
 
@@ -97,19 +105,33 @@ montage manifest. No merge to `main` was performed.
   authentic reuse, duration eligibility, relevance threshold, fallback counts,
   download timeout, missing-provider UI, and final manifest binding.
 
+### Final Script Editing Closure
+
+- `allowAssetReuse` is consumed by manifest construction, so controlled Hybrid
+  reuse is explicit and ordinary resolved assignments cannot duplicate media.
+- Authentic entity candidates outrank generic semantic matches; when the unused
+  authentic pool is exhausted, reuse is recorded with an explicit reason.
+- Asset/checksum dedupe and external provider identity exhaustion are handled
+  independently, preventing accidental duplicate imports while preserving the
+  authentic source when it is the only correct match.
+- Workbench local-folder matching can randomize candidates explicitly while the
+  project SCRIPT path retains semantic matching behavior.
+
 ## Verification gates
 
 All gates below were run locally against PostgreSQL on `127.0.0.1:55433` where
 the suite requires a database:
 
-- `pnpm format` — 334 files checked
-- `pnpm lint` — 138 TypeScript files passed
+- `pnpm format` — 415 files checked
+- `pnpm lint` — 149 TypeScript files passed
 - `pnpm typecheck` — passed
-- `pnpm test` — 263/263 passed
+- `pnpm test` — 266/266 passed
 - `pnpm test:migrations` — 9/9 passed
-- `pnpm test:auto-edit-v1` — 25/25 passed
+- `pnpm test:auto-edit-v1` — 27/27 passed
 - `pnpm test:auto-edit-v15` — 19/19 passed
-- `pnpm test:browser` — 3/3 passed (Auto Edit, Editing Workbench, Hybrid, including settings preservation)
+- `pnpm test:browser` — 3/3 passed (Auto Edit, Editing Workbench, Hybrid)
+- FFmpeg regression (`video-renderer` + `auto-edit-v15`) — 15/15 passed,
+  including playable H.264/AAC vertical MP4, `yuv420p`, duration and abort cleanup
 - `pnpm build` — passed
 - `pnpm --dir apps/web build` — passed, 13/13 routes generated
 - `pnpm doctor` — passed with one non-blocking warning about the global pnpm

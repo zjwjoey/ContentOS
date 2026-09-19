@@ -3,6 +3,7 @@
 Date: 2026-09-19
 Branch: `codex/hybrid-media-script-editing-v1`
 Review base: `9cf177d216e478c988d87a82d6a36d12b29d1996`
+Final reviewed SHA: `d023d21`
 
 | Closure item | Status | Evidence |
 | --- | --- | --- |
@@ -23,6 +24,11 @@ Review base: `9cf177d216e478c988d87a82d6a36d12b29d1996`
 | Reliable phase labels | FIXED | Worker reports coarse analysis/matching and manifest phases; it no longer claims separate search/download phases without callbacks. |
 | Pure Local Script Editing | FIXED | Hybrid resolver runs only when Script `usePexels` is enabled; existing planner path remains unchanged. |
 | MIX behavior | FIXED | MIX bypasses HybridMediaService and retains Random Sentence Montage. |
+| MIX/RANDOM strict unique | FIXED | Every source Asset ID is consumed at most once per task; exhaustion returns `EDIT_UNIQUE_MEDIA_EXHAUSTED`. |
+| Normal SCRIPT semantics | FIXED | Existing semantic matching and controlled fallback remain unchanged unless the caller explicitly requests local randomization. |
+| Hybrid SCRIPT controlled reuse | FIXED | Hybrid prefers unused media and sets `allowAssetReuse` only for authentic or exhausted external candidates. |
+| Shared voice timing | FIXED | Worker resolves voice duration once and passes the same timed sentence array through resolver, preparation and manifest. |
+| Voice import duplication | FIXED | A supplied voice asset/timing is reused; the worker does not import the same voice twice. |
 | Final manifest regression | FIXED | Integration asserts resolved assignments and final manifest matching/source/role. |
 | Browser acceptance | FIXED | Hybrid, external-only and missing-provider UI flows use the fake provider. |
 | Authentic entity exact match | FIXED | Local ranking exposes matched authentic/place entities separately; `AUTHENTIC_ENTITY` requires a direct authentic match. |
@@ -30,7 +36,7 @@ Review base: `9cf177d216e478c988d87a82d6a36d12b29d1996`
 | External unused pool and explicit reuse | FIXED | Resolver filters ranked results against provider identity sets explicitly; reuse is marked only after the unused pool is exhausted. |
 | Provider-missing settings preservation | FIXED | Missing status only disables Pexels; settings hydration is completed before persistence, preserving local roots/output/template. |
 | Health cache bypass | FIXED | Provider health uses a minimal uncached request and never writes search cache; ordinary search cache remains intact. |
-| Full gates | FIXED | Final report records format, lint, typecheck, tests, migrations, auto-edit, browser, build and doctor results. |
+| Full gates | FIXED | Final report records format, lint, typecheck, 266/266 tests, migrations, auto-edit, 3/3 browser flows, FFmpeg regression, build and doctor results. |
 
 ## Decision
 
