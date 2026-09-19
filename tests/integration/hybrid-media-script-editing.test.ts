@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createDatabase, migrateUp } from '../../packages/database/src/index.js';
 import { AssetService } from '../../packages/modules/asset/src/index.js';
-import { FakeExternalVideoProvider, HybridMediaService, buildScriptMontageManifest, planVisuals, type ExternalVideoProvider } from '../../packages/modules/video/src/index.js';
+import { FakeExternalVideoProvider, HybridMediaService, buildRandomSentenceMontageManifest, buildScriptMontageManifest, planVisuals, type ExternalVideoProvider } from '../../packages/modules/video/src/index.js';
 import { LocalStorageProvider } from '../../packages/infrastructure/storage/src/index.js';
+import { generateFixtureAudio, generateFixtureVideo, probeMedia, renderEditManifest } from '../../packages/infrastructure/ffmpeg/src/index.js';
 
 test('hybrid resolver produces a resolved assignment without real provider calls', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-hybrid-integration-')); const fixture = join(root, 'fixture.mp4'); await writeFile(fixture, 'video');
@@ -94,4 +95,39 @@ test('closure external failure uses a marked generic/entity fallback and counts 
   const root = await mkdtemp(join(tmpdir(), 'contentos-hybrid-fallback-')); const fixture = join(root, 'fixture.mp4'); await writeFile(fixture, 'video'); const previous = process.env.CONTENTOS_FAKE_PEXELS_FAILURE; process.env.CONTENTOS_FAKE_PEXELS_FAILURE = '1';
   const storage = new LocalStorageProvider(join(root, 'storage')); const provider = new FakeExternalVideoProvider(fixture); const service = new HybridMediaService({ importFile: async () => ({ id: 'never', projectId: '', checksum: 'sha256:never', storageKey: 'never', byteSize: 5, status: 'READY' as const }) } as never, storage, provider);
   try { const result = await service.resolve({ workspaceId: 'fallback-workspace', script: 'MIZAN正在波兰拓展业务。', localAssets: [{ id: 'generic', storageKey: 'generic', sourcePath: 'generic.mp4', durationMs: 12_000, tags: ['无关'] }], usePexels: true }); assert.equal(result.resolvedAssignments[0]?.entityFallback, true); assert.equal(result.diagnostics.fallbackCount, 1); assert.ok(result.diagnostics.warnings.length > 0); } finally { if (previous === undefined) delete process.env.CONTENTOS_FAKE_PEXELS_FAILURE; else process.env.CONTENTOS_FAKE_PEXELS_FAILURE = previous; await rm(root, { recursive: true, force: true }); }
+});
+
+test('final FFmpeg regression renders SCRIPT voice, MIX and Hybrid fake Pexels manifests', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-hybrid-ffmpeg-regression-'));
+  const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg'; const ffprobePath = process.env.FFPROBE_PATH || 'ffprobe';
+  try {
+    const sourceA = join(root, 'source-a.mp4'); const sourceB = join(root, 'source-b.mp4'); const voice = join(root, 'voice.wav');
+    await generateFixtureVideo(sourceA, ffmpegPath, 'blue', 8); await generateFixtureVideo(sourceB, ffmpegPath, 'green', 8); await generateFixtureAudio(voice, ffmpegPath);
+    const sentences = [{ index: 0, text: '第一句。', normalizedText: '第一句', durationMs: 2_500 }, { index: 1, text: '第二句。', normalizedText: '第二句', durationMs: 2_500 }];
+    const assets = [
+      { id: 'script-a', storageKey: 'script-a', sourcePath: sourceA, durationMs: 8_000 },
+      { id: 'script-b', storageKey: 'script-b', sourcePath: sourceB, durationMs: 8_000 },
+    ];
+    const scriptManifest = buildScriptMontageManifest({ projectId: 'ffmpeg-script', script: '第一句。第二句。', sentences, assets, voicePath: voice, seed: 1, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 }).manifest;
+    const mixManifest = buildRandomSentenceMontageManifest({ projectId: 'ffmpeg-mix', sentences, assets, seed: 2, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 }).manifest;
+    const hybridStorage = new LocalStorageProvider(join(root, 'hybrid-storage')); const hybridObjectKey = 'objects/hybrid.mp4';
+    const provider = new FakeExternalVideoProvider(sourceA);
+    const hybridAssets = { importFile: async (input: { sourcePath: string }) => { await mkdir(join(hybridStorage.root, 'objects'), { recursive: true }); await copyFile(input.sourcePath, hybridStorage.objectPath(hybridObjectKey)); return { id: 'hybrid-external', storageKey: hybridObjectKey, status: 'READY' as const }; } };
+    const hybrid = new HybridMediaService(hybridAssets as never, hybridStorage, provider);
+    const hybridSentences = [{ index: 0, text: '商业合作正在推进。', normalizedText: '商业合作正在推进', durationMs: 2_500 }];
+    const resolved = await hybrid.resolve({ workspaceId: 'ffmpeg-hybrid', script: hybridSentences[0]!.text, sentences: hybridSentences, localAssets: [], usePexels: true, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 });
+    assert.equal(resolved.resolvedAssignments[0]?.selectedSource, 'FAKE_PEXELS');
+    const hybridManifest = buildScriptMontageManifest({ workspaceId: 'ffmpeg-hybrid', script: hybridSentences[0]!.text, sentences: hybridSentences, assets: resolved.assets, resolvedAssignments: resolved.resolvedAssignments, voicePath: voice, seed: 3, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 }).manifest;
+    const cases = [
+      { name: 'script', manifest: scriptManifest, hasAudio: true, expectedDurationMs: 5_000 },
+      { name: 'mix', manifest: mixManifest, hasAudio: false, expectedDurationMs: 5_000 },
+      { name: 'hybrid', manifest: hybridManifest, hasAudio: true, expectedDurationMs: 2_500 },
+    ];
+    for (const item of cases) {
+      const output = join(root, `${item.name}.mp4`); await renderEditManifest({ manifest: item.manifest, outputPath: output, ffmpegPath, ffprobePath });
+      const probe = await probeMedia(output, ffprobePath);
+      assert.equal(probe.width, 1_080); assert.equal(probe.height, 1_920); assert.equal(probe.videoCodec, 'h264'); assert.equal(probe.pixelFormat, 'yuv420p'); assert.ok(Math.abs((probe.fps || 0) - item.manifest.canvas.fps) < 0.1);
+      assert.equal(probe.audio, item.hasAudio); if (item.hasAudio) assert.equal(probe.audioCodec, 'aac'); assert.ok(Math.abs(probe.durationMs - item.expectedDurationMs) <= 250, `${item.name} duration ${probe.durationMs}ms`);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

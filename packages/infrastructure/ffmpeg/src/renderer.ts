@@ -6,7 +6,7 @@ import type { EditManifestV0 } from '../../../contracts/src/index.js';
 
 export interface RenderOptions { manifest: EditManifestV0; outputPath: string; ffmpegPath: string; ffprobePath: string; fontFile?: string; signal?: AbortSignal; }
 export interface RenderResult { outputPath: string; durationMs: number; width: number; height: number; format: string; audio: boolean; checksum?: string; }
-export interface ProbeResult { format: string; durationMs: number; width: number; height: number; audio: boolean; videoCodec?: string; audioCodec?: string; }
+export interface ProbeResult { format: string; durationMs: number; width: number; height: number; audio: boolean; videoCodec?: string; audioCodec?: string; pixelFormat?: string; fps?: number; }
 export async function generateVideoThumbnail(inputPath: string, outputPath: string, ffmpegPath: string, durationMs: number, signal?: AbortSignal): Promise<void> {
   await mkdir(dirname(outputPath), { recursive: true });
   const seekMs = Math.min(1_000, Math.max(0, Math.round(durationMs * 0.25)));
@@ -46,13 +46,16 @@ export async function generateFixtureAudio(path: string, ffmpegPath: string): Pr
 }
 
 export async function probeMedia(path: string, ffprobePath: string, signal?: AbortSignal): Promise<ProbeResult> {
-  const result = await run(ffprobePath, ['-v', 'error', '-show_entries', 'format=format_name,duration:stream=width,height,codec_type,codec_name', '-of', 'json', path], signal);
-  const parsed = JSON.parse(result.stdout) as { format?: { format_name?: string; duration?: string }; streams?: Array<{ codec_type?: string; codec_name?: string; width?: number; height?: number }> };
+  const result = await run(ffprobePath, ['-v', 'error', '-show_entries', 'format=format_name,duration:stream=width,height,codec_type,codec_name,pix_fmt,r_frame_rate', '-of', 'json', path], signal);
+  const parsed = JSON.parse(result.stdout) as { format?: { format_name?: string; duration?: string }; streams?: Array<{ codec_type?: string; codec_name?: string; width?: number; height?: number; pix_fmt?: string; r_frame_rate?: string }> };
   const video = parsed.streams?.find((stream) => stream.codec_type === 'video');
   const audioStream = parsed.streams?.find((stream) => stream.codec_type === 'audio');
   const audio = Boolean(audioStream);
   const formats = parsed.format?.format_name || '';
-  return { format: formats.includes('mp4') ? 'mp4' : (formats.split(',')[0] || 'unknown'), durationMs: Math.round(Number(parsed.format?.duration || 0) * 1000), width: Number(video?.width || 0), height: Number(video?.height || 0), audio, ...(video?.codec_name ? { videoCodec: video.codec_name } : {}), ...(audioStream?.codec_name ? { audioCodec: audioStream.codec_name } : {}) };
+  const fpsParts = String(video?.r_frame_rate || '').split('/');
+  const fpsNumerator = Number(fpsParts[0]); const fpsDenominator = Number(fpsParts[1]);
+  const fps = Number.isFinite(fpsNumerator) && Number.isFinite(fpsDenominator) && fpsDenominator > 0 ? fpsNumerator / fpsDenominator : undefined;
+  return { format: formats.includes('mp4') ? 'mp4' : (formats.split(',')[0] || 'unknown'), durationMs: Math.round(Number(parsed.format?.duration || 0) * 1000), width: Number(video?.width || 0), height: Number(video?.height || 0), audio, ...(video?.codec_name ? { videoCodec: video.codec_name } : {}), ...(audioStream?.codec_name ? { audioCodec: audioStream.codec_name } : {}), ...(video?.pix_fmt ? { pixelFormat: video.pix_fmt } : {}), ...(fps !== undefined ? { fps } : {}) };
 }
 
 export async function renderEditManifest(options: RenderOptions, fixture?: { generateFixtureInput?: boolean; fixturePath?: string }): Promise<RenderResult> {
