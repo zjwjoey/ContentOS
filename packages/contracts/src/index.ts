@@ -1,7 +1,7 @@
 export { validateEditManifest } from './edit-manifest.js';
 export type { ClipMatchingV1, EditManifestV0, EditModeV1, ManifestClip, ScriptSentenceV1 } from './edit-manifest.js';
 export { canvasForAspectRatio, DEFAULT_CANVAS_SETTINGS_V1, DEFAULT_PRESENTATION_SETTINGS_V1, DEFAULT_SUBTITLE_STYLE_V1, normalizePresentationSettings, validatePresentationSettings } from './edit-presentation.js';
-export type { CanvasSettingsV1, PresentationAspectRatioV1, PresentationFitModeV1, PresentationSettingsV1, SegmentationModeV1, SegmentationSettingsV1, SubtitleAlignV1, SubtitleAnimationV1, SubtitleStyleV1 } from './edit-presentation.js';
+export type { CanvasSettingsV1, OutputSettingsV1, PresentationAspectRatioV1, PresentationFitModeV1, PresentationSettingsV1, SegmentationModeV1, SegmentationSettingsV1, SubtitleAlignV1, SubtitleAnimationV1, SubtitleStyleV1 } from './edit-presentation.js';
 export { validateDirectorPlan } from './director-plan.js';
 export type { DirectorBrief, DirectorPlanV0, DirectorScene } from './director-plan.js';
 export { validateContentBriefV1, validateScriptRevisionV1, validateStoryboardRevisionV1 } from './director-v1.js';

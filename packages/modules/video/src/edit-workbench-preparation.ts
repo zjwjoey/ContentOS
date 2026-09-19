@@ -3,11 +3,12 @@ import type { AssetCatalogService } from '../../asset/src/asset-catalog-service.
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import { assembleBrandedTimeline, buildRandomSentenceMontageManifest, buildScriptMontageManifest, type PlannerAsset, type ResolvedVisualAssignment, type TimedScriptSentence } from './planner.js';
 import { segmentScriptSentences } from './sentence-segmenter.js';
+import { cleanAndSegmentScriptV1 } from './script-cleaner.js';
+import type { PresentationSettingsV1 } from '../../../contracts/src/index.js';
 import type { VideoAdjustmentService } from './quick-edit-service.js';
 import type { VideoEditPreset, VideoEditPresetService } from './preset-service.js';
 import type { VideoService } from './video-service.js';
 import { applyPresentationSettings } from './presentation-compiler.js';
-import type { PresentationSettingsV1 } from '../../../contracts/src/index.js';
 
 export interface EditingWorkbenchPreparationDependencies {
   assetService: AssetService;
@@ -61,14 +62,14 @@ export function fitSentencesToVoiceDuration(sentences: TimedScriptSentence[], to
 
 export async function prepareVoiceTiming(
   dependencies: Pick<EditingWorkbenchPreparationDependencies, 'assetService' | 'assets'>,
-  input: Pick<EditingWorkbenchPreparationInput, 'workspaceId' | 'script' | 'voiceAssetId' | 'voicePath' | 'sentences'>,
+  input: Pick<EditingWorkbenchPreparationInput, 'workspaceId' | 'script' | 'voiceAssetId' | 'voicePath' | 'sentences' | 'presentationSettings'>,
 ): Promise<{ voiceAssetId?: string; sentences: TimedScriptSentence[] }> {
   let voiceAssetId = input.voiceAssetId;
   if (!voiceAssetId && input.voicePath) {
     const imported = await dependencies.assetService.importFile({ workspaceId: input.workspaceId, sourcePath: input.voicePath, kind: 'AUDIO', role: 'VOICE' });
     voiceAssetId = imported.id;
   }
-  const rawSentences = input.sentences || segmentScriptSentences(input.script);
+  const rawSentences = input.sentences || (input.presentationSettings ? cleanAndSegmentScriptV1(input.script, input.presentationSettings.segmentation).segments : segmentScriptSentences(input.script));
   if (input.sentences) return { ...(voiceAssetId ? { voiceAssetId } : {}), sentences: input.sentences };
   if (!voiceAssetId) return { sentences: rawSentences };
   const voice = await dependencies.assets.getReadyWorkspaceAsset(input.workspaceId, voiceAssetId, 'AUDIO', 'VOICE');

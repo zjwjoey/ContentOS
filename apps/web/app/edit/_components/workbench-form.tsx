@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import Link from 'next/link';
-import { defaultPresentationSettings, PresentationSettingsPanel, type PresentationSettingsValue } from './presentation-settings';
+import { defaultPresentationSettings, normalizePresentationSettingsValue, PresentationSettingsPanel, type PresentationSettingsValue } from './presentation-settings';
 
 type Item = { title: string; script: string; voicePath: string; voiceName?: string };
 type PairRow = { status: string; basename: string; script?: string; voicePath?: string; textFile?: string | null; audioFile?: string | null };
@@ -71,7 +71,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       if (saved.preferUnusedMedia !== undefined) setPreferUnusedMedia(saved.preferUnusedMedia);
       if (saved.templateId) setTemplateId(saved.templateId);
       if (saved.usePexels !== undefined) setUsePexels(saved.usePexels);
-      if (saved.presentationSettings) setPresentationSettings(saved.presentationSettings);
+      if (saved.presentationSettings) setPresentationSettings(normalizePresentationSettingsValue(saved.presentationSettings));
     } catch { /* ignore malformed local preferences */ }
     setSettingsLoaded(true);
   }, [mode]);
@@ -89,10 +89,10 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
     if (!copyId) return;
     void fetch(`/api/v1/edit/batches/${encodeURIComponent(copyId)}/config`).then(async (response) => {
       if (!response.ok) throw new Error('历史任务配置暂时无法读取。');
-      return await response.json() as { mode: 'SCRIPT' | 'MIX'; title: string; script: string; sourceRoots: string[]; outputRoot: string; settings: { minClipDurationMs: number; maxClipDurationMs: number; seed: number; variants: number; fps: number; preferUnusedMedia: boolean; templateId?: string; usePexels?: boolean }; items: Item[] };
+      return await response.json() as { mode: 'SCRIPT' | 'MIX'; title: string; script: string; sourceRoots: string[]; outputRoot: string; settings: { minClipDurationMs: number; maxClipDurationMs: number; seed: number; variants: number; fps: number; preferUnusedMedia: boolean; templateId?: string; usePexels?: boolean; presentationSettings?: PresentationSettingsValue }; items: Item[] };
     }).then((config) => {
       if (config.mode !== mode) return;
-      setTitle(`${config.title}（副本）`); setScript(config.script || ''); setRoots(config.sourceRoots.length ? config.sourceRoots : ['']); setOutputRoot(config.outputRoot || ''); setMinClipDurationMs(config.settings.minClipDurationMs); setMaxClipDurationMs(config.settings.maxClipDurationMs); setSeed(config.settings.seed); setVariants(config.settings.variants === 3 || config.settings.variants === 5 ? config.settings.variants : 1); setFps(config.settings.fps); setPreferUnusedMedia(config.settings.preferUnusedMedia); if (config.settings.templateId) setTemplateId(config.settings.templateId); if (mode === 'SCRIPT' && config.settings.usePexels) { if (pexelsStatus === 'ready') setUsePexels(true); else setMessage('原任务使用了 Pexels，但当前服务未配置，已回退为本地素材。'); } if (mode === 'MIX' && config.items.length) setItems(config.items.map((item) => ({ title: item.title, script: item.script, voicePath: item.voicePath || '', ...(item.voicePath ? { voiceName: item.voicePath.split(/[\\/]/u).pop() } : {}) })));
+      setTitle(`${config.title}（副本）`); setScript(config.script || ''); setRoots(config.sourceRoots.length ? config.sourceRoots : ['']); setOutputRoot(config.outputRoot || ''); setMinClipDurationMs(config.settings.minClipDurationMs); setMaxClipDurationMs(config.settings.maxClipDurationMs); setSeed(config.settings.seed); setVariants(config.settings.variants === 3 || config.settings.variants === 5 ? config.settings.variants : 1); setFps(config.settings.fps); setPreferUnusedMedia(config.settings.preferUnusedMedia); if (config.settings.presentationSettings) setPresentationSettings(normalizePresentationSettingsValue(config.settings.presentationSettings)); if (config.settings.templateId) setTemplateId(config.settings.templateId); if (mode === 'SCRIPT' && config.settings.usePexels) { if (pexelsStatus === 'ready') setUsePexels(true); else setMessage('原任务使用了 Pexels，但当前服务未配置，已回退为本地素材。'); } if (mode === 'MIX' && config.items.length) setItems(config.items.map((item) => ({ title: item.title, script: item.script, voicePath: item.voicePath || '', ...(item.voicePath ? { voiceName: item.voicePath.split(/[\\/]/u).pop() } : {}) })));
     }).catch((error) => setMessage(error instanceof Error ? error.message : '历史任务配置暂时无法读取。'));
   }, [copyId, mode, pexelsStatus]);
 
@@ -204,7 +204,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
         ...(templateId ? { templateId } : {}),
         preferUnusedMedia,
         ...(mode === 'SCRIPT' ? { usePexels } : {}),
-        presentationSettings,
+        presentationSettings: { ...presentationSettings, output: { ...presentationSettings.output, outputRoot: outputRoot.trim() || undefined } },
       };
       const response = await fetch('/api/v1/edit/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await response.json() as { batchId?: string; error?: { message?: string } };
@@ -258,7 +258,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       <div className="grid"><label>剪辑模板<select value={templateId} onChange={handleTemplateChange}>{presets.length === 0 ? <option value="">默认短视频</option> : presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select></label><label>素材选择策略<select value={preferUnusedMedia ? 'RECOMMENDED' : 'RANDOM'} onChange={(event) => setPreferUnusedMedia(event.target.value === 'RECOMMENDED')}><option value="RECOMMENDED">优先较少使用</option><option value="RANDOM">随机</option></select></label><label>镜头最短时长（秒）<input type="number" min={0.5} step={0.5} value={minClipDurationMs / 1000} onChange={(event) => setMinClipDurationMs(Math.round((Number(event.target.value) || 0.5) * 1000))} /></label><label>镜头最长时长（秒）<input type="number" min={0.5} step={0.5} value={maxClipDurationMs / 1000} onChange={(event) => setMaxClipDurationMs(Math.round((Number(event.target.value) || 0.5) * 1000))} /></label><label>视频帧率<select value={fps} onChange={(event) => setFps(Number(event.target.value))}><option value={24}>24 帧/秒</option><option value={25}>25 帧/秒</option><option value={30}>30 帧/秒</option><option value={50}>50 帧/秒</option><option value={60}>60 帧/秒</option></select></label>{mode === 'MIX' && <label>每条生成版本数<select value={variants} onChange={(event) => setVariants(Number(event.target.value))}><option value={1}>1</option><option value={3}>3</option><option value={5}>5</option></select></label>}</div>
       <p className="muted">片头、片尾和品牌素材继续沿用现有模板配置，不会混入普通素材候选。</p>
     </details>
-    <PresentationSettingsPanel value={presentationSettings} onChange={setPresentationSettings} />
+    <PresentationSettingsPanel value={presentationSettings} onChange={setPresentationSettings} previewText={mode === 'MIX' ? (items[0]?.script || '字幕预览') : (script || '字幕预览')} />
     {message && <p className="form-error">{message}</p>}
     {mode === 'MIX' && <button type="button" className="secondary-action" onClick={() => void submit(undefined, true)} disabled={busy}>生成 1 条测试</button>}
     <button className="primary-action" type="submit" disabled={busy}>{busy ? '正在准备素材……' : mode === 'SCRIPT' ? '开始剪辑' : '开始全部混剪'}</button>

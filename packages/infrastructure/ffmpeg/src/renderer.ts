@@ -63,11 +63,12 @@ export async function probeMedia(path: string, ffprobePath: string, signal?: Abo
 export async function renderEditManifest(options: RenderOptions, fixture?: { generateFixtureInput?: boolean; fixturePath?: string }): Promise<RenderResult> {
   const { manifest, outputPath, ffmpegPath, ffprobePath } = options;
   options.signal?.throwIfAborted();
-  if ((manifest.subtitles?.length || manifest.textOverlays?.length) && !options.fontFile) throw new Error('RENDER_SUBTITLE_FONT_UNAVAILABLE');
+  const renderFontFile = options.fontFile || manifest.presentationSettings?.subtitleStyle.fontFile || manifest.metadata?.presentationSettings?.subtitleStyle.fontFile;
+  if ((manifest.subtitles?.length || manifest.textOverlays?.length) && !renderFontFile) throw new Error('RENDER_SUBTITLE_FONT_UNAVAILABLE');
   if (fixture?.generateFixtureInput && fixture.fixturePath) await generateFixtureVideo(fixture.fixturePath, ffmpegPath);
   await mkdir(dirname(outputPath), { recursive: true });
   const tempOutput = `${outputPath}.${randomUUID()}.part.mp4`;
-  const overlayDir = options.fontFile && (manifest.subtitles?.length || manifest.textOverlays?.length) ? join(dirname(outputPath), `.text-${randomUUID()}`) : undefined;
+  const overlayDir = renderFontFile && (manifest.subtitles?.length || manifest.textOverlays?.length) ? join(dirname(outputPath), `.text-${randomUUID()}`) : undefined;
   if (overlayDir) { await mkdir(overlayDir, { recursive: true }); const textItems = [...(manifest.subtitles ?? []), ...(manifest.textOverlays ?? [])]; await Promise.all(textItems.map((item, index) => writeFile(join(overlayDir, `${index}.txt`), item.text.replaceAll('\r\n', '\n'), 'utf8'))); }
   const args: string[] = ['-y'];
   for (const clip of manifest.timeline) args.push('-ss', String(clip.sourceInMs / 1000), '-t', String(clip.durationMs / 1000), '-i', clip.sourcePath);
@@ -79,7 +80,7 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   const outputFps = Math.max(1, Number(manifest.canvas.fps || 30));
   const canvasWidth = Math.max(2, Number(manifest.canvas.width || 1080));
   const canvasHeight = Math.max(2, Number(manifest.canvas.height || 1920));
-  const fitMode = manifest.canvas.fitMode || manifest.metadata?.presentationSettings?.canvas.fitMode || 'FILL';
+  const fitMode = manifest.canvas.fitMode || manifest.presentationSettings?.canvas.fitMode || manifest.metadata?.presentationSettings?.canvas.fitMode || 'FILL';
   const visualDurations = manifest.timeline.map((clip) => clip.timelineStartMs !== undefined && clip.timelineEndMs !== undefined ? Math.max(clip.durationMs, clip.timelineEndMs - clip.timelineStartMs) : clip.durationMs);
   let visualCursorMs = 0;
   const firstStart = manifest.timeline[0]?.timelineStartMs ?? 0;
@@ -101,25 +102,29 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
     const visualDurationMs = visualDurations[i]!;
     const padMs = Math.max(0, visualDurationMs - clip.durationMs);
     let overlays = '';
-    if (options.fontFile) {
+    if (renderFontFile) {
       const localStart = globalOffsetMs;
       const draw = (item: { text: string; startMs: number; endMs: number; style?: string; fontSize?: number; position?: string }, kind: 'subtitle' | 'hero', fileIndex: number) => {
         const textFile = overlayDir ? join(overlayDir, `${fileIndex}.txt`) : undefined;
         const start = Math.max(0, (item.startMs - localStart) / 1000); const end = Math.max(start + 0.001, (item.endMs - localStart) / 1000);
         if (end <= 0 || start >= visualDurationMs / 1000) return '';
-        const presentation = manifest.metadata?.presentationSettings?.subtitleStyle;
+        const presentation = manifest.subtitleStyle || manifest.presentationSettings?.subtitleStyle || manifest.metadata?.presentationSettings?.subtitleStyle;
+        if (presentation && !presentation.enabled) return '';
+        const baseScale = canvasWidth / 1080;
         const x = presentation ? `(w-text_w)*${presentation.position.x}` : '(w-text_w)/2';
         const y = presentation ? `(h-text_h)*${presentation.position.y}` : (item.position === 'top' ? '180' : item.position === 'center' ? '(h-text_h)/2' : 'h-220');
         const color = presentation?.color ? presentation.color.replace('#', '0x') : (kind === 'hero' || item.style === 'emphasis' ? 'white' : item.style === 'commercial' ? '0xEAF4FF' : 'white');
-        const size = presentation?.fontSize ?? item.fontSize ?? (kind === 'hero' ? 64 : 48);
-        const outline = presentation?.outline.enabled ? `:borderw=${presentation.outline.width}:bordercolor=${ffmpegColor(presentation.outline.color)}` : (item.style === 'commercial' || kind === 'hero' ? ':borderw=2:bordercolor=black@0.75' : '');
-        const shadow = presentation?.shadow.enabled ? `:shadowx=${presentation.shadow.x}:shadowy=${presentation.shadow.y}:shadowcolor=${ffmpegColor(presentation.shadow.color)}` : '';
-        const background = presentation?.background.enabled ? `:box=1:boxcolor=${ffmpegColor(presentation.background.color)}@${presentation.background.opacity}:boxborderw=${presentation.background.padding}` : (item.style === 'simple' ? '' : ':box=1:boxcolor=black@0.45:boxborderw=12');
+        const size = Math.max(1, Math.round((presentation?.fontSize ?? item.fontSize ?? (kind === 'hero' ? 64 : 48)) * baseScale));
+        const outline = presentation?.outline.enabled ? `:borderw=${Math.max(1, Math.round(presentation.outline.width * baseScale))}:bordercolor=${ffmpegColor(presentation.outline.color)}` : (item.style === 'commercial' || kind === 'hero' ? `:borderw=${Math.max(1, Math.round(2 * baseScale))}:bordercolor=black@0.75` : '');
+        const shadowX = presentation?.shadow.offsetX ?? presentation?.shadow.x ?? 2; const shadowY = presentation?.shadow.offsetY ?? presentation?.shadow.y ?? 2;
+        const shadow = presentation?.shadow.enabled ? `:shadowx=${Math.round(shadowX * baseScale)}:shadowy=${Math.round(shadowY * baseScale)}:shadowcolor=${ffmpegColor(presentation.shadow.color)}@${presentation.shadow.opacity ?? .5}` : '';
+        const background = presentation?.background.enabled ? `:box=1:boxcolor=${ffmpegColor(presentation.background.color)}@${presentation.background.opacity}:boxborderw=${Math.round(presentation.background.padding * baseScale)}` : (item.style === 'simple' ? '' : `:box=1:boxcolor=black@0.45:boxborderw=${Math.round(12 * baseScale)}`);
         const animation = presentation?.animation || 'NONE';
-        const animationExpr = animation === 'SLIDE_UP' ? `:y='${y}+if(lt(t-${start},1),40*(1-(t-${start})),0)'` : '';
+        const animationDuration = Math.min((end - start) / 2, Math.max(.05, (presentation?.animationDurationMs ?? 250) / 1000));
+        const animationExpr = animation === 'SLIDE_UP' ? `:y='${y}+if(lt(t-${start},${animationDuration.toFixed(3)}),${Math.round(40 * baseScale)}*(1-(t-${start})/${animationDuration.toFixed(3)}),0)'` : '';
         const textSource = textFile ? `textfile='${escapeFilterPath(textFile)}':expansion=none` : `text='${escapeFilterText(item.text)}'`;
-        const fade = animation === 'FADE_IN' || animation === 'FADE_IN_OUT' ? `:alpha='if(lt(t-${start},0.25),(t-${start})/0.25,1)'` : animation === 'FADE_OUT' ? `:alpha='if(gt(${end}-t,0.25),1,(${end}-t)/0.25)'` : '';
-        return `,drawtext=fontfile='${escapeFilterPath(options.fontFile!)}':${textSource}:fontcolor=${color}:fontsize=${size}:x=${x}:y=${y}${outline}${shadow}${background}${animationExpr}${fade}:enable='between(t\\,${start.toFixed(3)}\\,${end.toFixed(3)})'`;
+        const fade = animation === 'FADE_IN' ? `:alpha='if(lt(t-${start},${animationDuration.toFixed(3)}),(t-${start})/${animationDuration.toFixed(3)},1)'` : animation === 'FADE_OUT' ? `:alpha='if(gt(${end}-t,${animationDuration.toFixed(3)}),1,(${end}-t)/${animationDuration.toFixed(3)})'` : animation === 'FADE_IN_OUT' ? `:alpha='if(lt(t-${start},${animationDuration.toFixed(3)}),(t-${start})/${animationDuration.toFixed(3)},if(gt(${end}-t,${animationDuration.toFixed(3)}),1,(${end}-t)/${animationDuration.toFixed(3)}))'` : '';
+        return `,drawtext=fontfile='${escapeFilterPath(renderFontFile)}':${textSource}:fontcolor=${color}:fontsize=${size}:x=${x}:y=${y}${outline}${shadow}${background}${animationExpr}${fade}:enable='between(t\\,${start.toFixed(3)}\\,${end.toFixed(3)})'`;
       };
       for (const [index, item] of (manifest.subtitles ?? []).entries()) overlays += draw(item, 'subtitle', index);
       const subtitleCount = manifest.subtitles?.length ?? 0;
