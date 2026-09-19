@@ -117,7 +117,9 @@ export function registerScriptEditingV2Routes(app: FastifyInstance, dependencies
         if (!assetId) throw new Error(`EDIT_BRANDING_${role}_MISSING`);
         const content = await dependencies.assets!.getReadyGlobalVideoAssetContent(assetId);
         if (!content) throw new Error(`EDIT_BRANDING_${role}_UNAVAILABLE`);
-        return { id: content.id, path: dependencies.storage!.objectPath(content.storageKey), durationMs: Number(content.metadata.durationMs || 0), source: 'LOCAL', originalName: content.originalName };
+        const durationMs = Number(content.metadata.durationMs || 0);
+        if (!Number.isFinite(durationMs) || durationMs <= 0) throw new Error(`EDIT_BRANDING_${role}_DURATION_INVALID`);
+        return { id: content.id, path: dependencies.storage!.objectPath(content.storageKey), durationMs, source: 'LOCAL', originalName: content.originalName };
       };
       try { if (plan.brandingPlan.introEnabled) intro = await loadBranding(preset.introAssetId, 'INTRO'); if (plan.brandingPlan.outroEnabled) outro = await loadBranding(preset.outroAssetId, 'OUTRO'); }
       catch (error) { return reply.code(422).send({ error: { code: error instanceof Error ? error.message : 'EDIT_BRANDING_ASSET_UNAVAILABLE' } }); }
