@@ -10,7 +10,7 @@ import { validateEditManifest, type EditManifestV0 } from '../../../contracts/sr
 import { digestEditManifest } from './quick-edit.js';
 
 export interface CreateVideoJobInput { projectId: string; videoAssetIds: string[]; voiceAssetId?: string; targetDurationMs: number; seed: number; subtitleText?: string; idempotencyKey?: string; directorRevisionId?: string; directorRevision?: number; directorBrief?: unknown; directorStoryboard?: unknown; plannerType?: 'RANDOM' | 'STORYBOARD'; storyboardScenes?: Array<{ sceneIndex: number; voiceoverText: string; durationHintSeconds: number; visualInstruction: string; assetKeywords: string[] }>; metadata?: { briefId?: string; scriptRevisionId?: string; storyboardRevisionId?: string }; }
-export interface VideoJobPayload extends Omit<CreateVideoJobInput, 'projectId'> { projectId?: string; workspaceId?: string; manifestId?: string; manifestRevision?: number; manifestDigest?: string; }
+export interface VideoJobPayload extends Omit<CreateVideoJobInput, 'projectId'> { projectId?: string; workspaceId?: string; manifestId?: string; manifestRevision?: number; manifestDigest?: string; outputPath?: string; outputRoot?: string; }
 export interface VideoPlanResult { manifestId: string; renderId: string; manifest: ReturnType<typeof buildVideoManifest>; renderStatus: string; outputAssetId: string | null; }
 
 function projectWorkspaceId(projectId: string): string { return `workspace-project-${projectId}`; }
@@ -66,7 +66,7 @@ export class VideoService {
     catch (error) { if ((error as { code?: string }).code === '23505') { const existing = await this.jobs.getByIdempotencyKey(idempotencyKey); if (existing) return existing; } throw error; }
   }
 
-  async createManifestRenderJobForWorkspace(workspaceId: string, manifestId: string, idempotencySuffix?: string): Promise<JobRecord> {
+  async createManifestRenderJobForWorkspace(workspaceId: string, manifestId: string, idempotencySuffix?: string, renderOptions: Pick<VideoJobPayload, 'outputPath' | 'outputRoot'> = {}): Promise<JobRecord> {
     const result = await this.db.query<{ revision: number; workspace_id: string; manifest: EditManifestV0; manifest_digest: string | null }>('select revision, workspace_id, manifest, manifest_digest from edit_manifests where id = $1 and workspace_id = $2', [manifestId, workspaceId]);
     const row = result.rows[0];
     if (!row) throw new Error('VIDEO_MANIFEST_NOT_FOUND');
@@ -74,7 +74,7 @@ export class VideoService {
     if (row.manifest_digest && row.manifest_digest !== manifestDigest) throw new Error('VIDEO_MANIFEST_DIGEST_CONFLICT');
     if (!row.manifest_digest) await this.db.query('update edit_manifests set manifest_digest = $2 where id = $1 and manifest_digest is null', [manifestId, manifestDigest]);
     const idempotencyKey = `video-render:workspace:${workspaceId}:${manifestId}:v${Number(row.revision)}${idempotencySuffix ? `:${idempotencySuffix}` : ''}`;
-    try { return await this.jobs.create({ id: `job-${randomUUID()}`, projectId: null, workspaceId, type: 'VIDEO_RENDER', payload: { workspaceId, manifestId, manifestRevision: Number(row.revision), manifestDigest } as VideoJobPayload, idempotencyKey, maxAttempts: 3 }); }
+    try { return await this.jobs.create({ id: `job-${randomUUID()}`, projectId: null, workspaceId, type: 'VIDEO_RENDER', payload: { workspaceId, manifestId, manifestRevision: Number(row.revision), manifestDigest, ...renderOptions } as VideoJobPayload, idempotencyKey, maxAttempts: 3 }); }
     catch (error) { if ((error as { code?: string }).code === '23505') { const existing = await this.jobs.getByIdempotencyKey(idempotencyKey); if (existing) return existing; } throw error; }
   }
 

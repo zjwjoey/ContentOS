@@ -4,7 +4,7 @@ import { copyFile, mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/pr
 import type { Pool } from 'pg';
 import { AssetCatalogService, type AssetService, type LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { JobLeaseCancellationHandler, JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
-import { planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoService } from '../../../packages/modules/video/src/index.js';
+import { planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoJobPayload, type VideoService } from '../../../packages/modules/video/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import { renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 
@@ -66,7 +66,11 @@ export function createScriptPlanJobHandler(deps: VideoHandlerDeps): (job: JobRec
       if (row.settings?.usePexels === true && deps.mediaProvider) {
         const timedSentences = editorial.sentences || [];
         const hybrid = await new HybridMediaService(deps.assets, deps.storage, deps.mediaProvider, deps.db).resolve({ workspaceId: job.workspaceId || 'workspace-local', script: timedSentences.map((sentence) => sentence.text).join(' '), sentences: timedSentences, localAssets: scannedAssets.map((asset) => ({ id: asset.id, storageKey: asset.id, sourcePath: asset.path, durationMs: asset.durationMs, ...(asset.originalName ? { originalName: asset.originalName } : {}), ...(asset.tags ? { tags: asset.tags } : {}) })), usePexels: true, ...(signal ? { signal } : {}) });
-        scannedAssets.push(...hybrid.assets.map((asset) => ({ id: asset.id, path: asset.sourcePath, durationMs: asset.durationMs, source: asset.metadata?.external ? (String((asset.metadata.external as Record<string, unknown>).provider || '').includes('fake') ? 'FAKE_PEXELS' as const : 'PEXELS' as const) : 'LOCAL' as const, originalName: asset.id, keywords: [] })));
+        scannedAssets.push(...hybrid.assets.map((asset) => {
+          const external = asset.metadata?.external as Record<string, unknown> | undefined;
+          const source = external ? (String(external.provider || '').includes('fake') ? 'FAKE_PEXELS' as const : 'PEXELS' as const) : 'LOCAL' as const;
+          return { id: asset.id, path: asset.sourcePath, durationMs: asset.durationMs, source, originalName: external ? `${source === 'FAKE_PEXELS' ? '网络模拟' : 'Pexels'}-${String(external.providerAssetId || asset.id)}` : asset.id, keywords: [], ...(external?.creatorName ? { author: String(external.creatorName) } : {}), ...(external ? { thumbnailUrl: `/api/v1/video/workspace-assets/${encodeURIComponent(asset.id)}/thumbnail?workspaceId=${encodeURIComponent(job.workspaceId || 'workspace-local')}` } : {}) };
+        }));
       }
       const rawPriority = Array.isArray(row.settings.priorityAssets) ? row.settings.priorityAssets as Array<{ assetId: string; mode: 'PREFER' | 'MUST_USE'; path?: string }> : [];
       const priorityAssets = rawPriority.map((item) => { const match = scannedAssets.find((asset) => asset.id === item.assetId || asset.path === item.assetId || asset.path === item.path); return { assetId: match?.id ?? item.assetId, mode: item.mode, ...(item.path ? { path: item.path } : {}) }; });
@@ -212,6 +216,7 @@ export function createVideoLeaseCancellationHandler(video: VideoService, storage
 
 export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
   return async (job, attemptId, signal) => {
+    const payload = job.payload as VideoJobPayload;
     const planned = await deps.video.planJob(job);
     if (planned.renderStatus === 'SUCCEEDED' && planned.outputAssetId) return { manifestId: planned.manifestId, renderId: planned.renderId, outputAssetId: planned.outputAssetId };
     if (!attemptId || job.attemptCount <= 0) throw new Error('Video Render requires a claimed Job attempt');
@@ -219,8 +224,18 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
     if (!start.executed) return { manifestId: planned.manifestId, renderId: planned.renderId, staleAttempt: true };
     if (!start.value) throw Object.assign(new Error('Current Job attempt could not start its Render'), { code: 'RENDER_START_REJECTED', retryable: true });
     const outputPath = join(deps.storage.root, 'renders', `${job.id}-${attemptId}.mp4`);
+    let copiedOutputPath: string | undefined;
     try {
       const rendered = await renderEditManifest({ manifest: planned.manifest, outputPath, ffmpegPath: deps.ffmpegPath, ffprobePath: deps.ffprobePath, signal, ...(deps.fontFile ? { fontFile: deps.fontFile } : {}) });
+      if (payload.outputPath && payload.outputRoot) {
+        await authorizedOutputPath(payload.outputPath, payload.outputRoot);
+        const destinationExists = await stat(payload.outputPath).then(() => true).catch(() => false);
+        if (!destinationExists) {
+          const destinationPart = `${payload.outputPath}.${job.id}.part`;
+          try { await copyFile(outputPath, destinationPart); await rename(destinationPart, payload.outputPath); copiedOutputPath = payload.outputPath; }
+          finally { await rm(destinationPart, { force: true }).catch(() => undefined); }
+        } else copiedOutputPath = payload.outputPath;
+      }
       const outputInput = { ...(job.projectId ? { projectId: job.projectId } : planned.manifest.workspaceId ? { workspaceId: planned.manifest.workspaceId } : {}), sourcePath: outputPath, kind: 'VIDEO_RENDER', role: 'OUTPUT' as const };
       const preparedOutput = await deps.assets.prepareFile(outputInput);
       const finalized = await deps.jobs.succeedWithCurrentAttempt(job.id, attemptId, async (scope) => {
@@ -228,7 +243,7 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
         const completed = await deps.video.completeRender(planned.renderId, scope, outputAsset.id, { durationMs: rendered.durationMs, width: rendered.width, height: rendered.height, format: rendered.format, outputAssetId: outputAsset.id });
         if (!completed) throw Object.assign(new Error('Current Job attempt could not complete its Render'), { code: 'RENDER_FENCE_REJECTED', retryable: true });
         const editorialPlanId = planned.manifest.metadata?.editorialPlanId;
-        if (editorialPlanId) await scope.query("update edit_script_plans set status='RENDERED',updated_at=now() where id=$1", [editorialPlanId]);
+        if (editorialPlanId) await scope.query("update edit_script_plans set status='RENDERED',settings=settings || $2::jsonb,updated_at=now() where id=$1", [editorialPlanId, JSON.stringify(copiedOutputPath ? { outputPath: copiedOutputPath } : {})]);
         const item = await scope.query<{ id: string; batch_id: string }>("update edit_batch_items set state='SUCCEEDED',output_asset_id=$2,error=null,updated_at=now() where job_id=$1 returning id,batch_id", [job.id, outputAsset.id]);
         if (item.rows[0]) {
           const batch = item.rows[0].batch_id;

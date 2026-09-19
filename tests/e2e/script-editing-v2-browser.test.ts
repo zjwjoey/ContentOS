@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFile, mkdir } from 'node:fs/promises';
+import { copyFile, mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium, type Page } from 'playwright';
 
@@ -44,6 +44,7 @@ test('Script Editing V2 browser flows cover local, hybrid, reroll, BGM and histo
     await scriptInput.fill('');
     await scriptInput.pressSequentially('最近看到一些针对MIZAN的不同声音。\n但是商业合作本来就会有不同观点。\n欢迎大家到店交流。\n市场会慢慢给出答案。');
     await page.locator('#v2-voice').fill(fixtureAudio!);
+    await page.locator('#v2-output-root').fill(fixtureDir!);
     await page.locator('input[placeholder="本地素材文件夹"]').first().fill(localRoot);
     const createButton = page.getByRole('button', { name: '生成剪辑方案' });
     await page.waitForFunction(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('生成剪辑方案')); return Boolean(button && !(button as HTMLButtonElement).disabled); });
@@ -78,7 +79,9 @@ test('Script Editing V2 browser flows cover local, hybrid, reroll, BGM and histo
     assert.equal(await renderButton.count(), 1);
     await page.waitForFunction(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('开始剪辑')); return Boolean(button && !(button as HTMLButtonElement).disabled); }, undefined, { timeout: 15_000 });
     await renderButton.click();
-    await waitForPlan(page, localPlan.id!, 'RENDERED');
+    const renderedLocal = await waitForPlan(page, localPlan.id!, 'RENDERED');
+    assert.equal(typeof renderedLocal.outputPath, 'string');
+    assert.ok((await stat(String(renderedLocal.outputPath))).isFile(), 'V2 render must create the authorized output file');
 
     // Flow B: a deliberately small local pool forces the fake Pexels provider
     // to contribute fallback clips while retaining the authentic local clip.
@@ -86,9 +89,13 @@ test('Script Editing V2 browser flows cover local, hybrid, reroll, BGM and histo
     assert.equal(hybridResponse.status(), 201, await hybridResponse.text());
     const hybridPlan = await hybridResponse.json() as { id: string };
     const hybridReady = await waitForPlan(page, hybridPlan.id);
-    const hybridClips = (hybridReady.resolvedPlan as { scenes: Array<{ clipSlots: Array<{ asset?: { source?: string } }> }> }).scenes.flatMap((scene) => scene.clipSlots);
+    const hybridClips = (hybridReady.resolvedPlan as { scenes: Array<{ clipSlots: Array<{ asset?: { id?: string; source?: string; thumbnailUrl?: string } }> }> }).scenes.flatMap((scene) => scene.clipSlots);
     assert.ok(hybridClips.some((clip) => clip.asset?.source === 'LOCAL'));
     assert.ok(hybridClips.some((clip) => clip.asset?.source === 'FAKE_PEXELS' || clip.asset?.source === 'PEXELS'));
+    const externalThumbnail = hybridClips.find((clip) => clip.asset?.source === 'FAKE_PEXELS' || clip.asset?.source === 'PEXELS')?.asset?.thumbnailUrl;
+    assert.match(externalThumbnail || '', /workspace-assets/);
+    const thumbnailResponse = await page.request.get(`${baseUrl}${externalThumbnail}`);
+    assert.equal(thumbnailResponse.status(), 200, await thumbnailResponse.text());
 
     // Flow D: specified local BGM is accepted and carried into the rendered plan.
     const bgmResponse = await page.request.post(`${baseUrl}/api/v1/edit/script-plans`, { data: { workspaceId: 'workspace-local', script: 'MIZAN门店开业。\n欢迎到店体验。', voicePath: fixtureAudio, sourceRoots: [localRoot], template: 'STORE_PROMOTION', backgroundMusicMode: 'SPECIFIED', backgroundMusic: { path: musicPath, volume: 0.08, loop: true, ducking: { enabled: true, musicVolume: 0.04 } } } });

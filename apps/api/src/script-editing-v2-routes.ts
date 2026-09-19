@@ -1,6 +1,7 @@
-import { randomUUID } from 'node:crypto';
-import { realpath, stat } from 'node:fs/promises';
-import { resolve, sep } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { access, constants, mkdir, realpath, stat } from 'node:fs/promises';
+import { dirname, join, resolve, sep } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { z } from 'zod';
@@ -10,8 +11,9 @@ import type { EditManifestV0 } from '../../../packages/contracts/src/index.js';
 import type { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import type { VideoEditPresetService } from '../../../packages/modules/video/src/index.js';
+import { generateVideoThumbnail } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 
-const inputSchema = z.object({ workspaceId: z.string().min(1), projectId: z.string().min(1).optional(), script: z.string().min(1), sentences: z.array(z.object({ index: z.number().int().nonnegative(), text: z.string().min(1), normalizedText: z.string().min(1), voiceStartMs: z.number().nonnegative().optional(), voiceEndMs: z.number().positive().optional(), durationMs: z.number().positive().optional() })).optional(), assets: z.array(z.object({ id: z.string().min(1), path: z.string().min(1), durationMs: z.number().positive(), source: z.enum(['LOCAL', 'PEXELS', 'FAKE_PEXELS']), entity: z.string().optional(), keywords: z.array(z.string()).optional(), originalName: z.string().optional(), tags: z.array(z.string()).optional(), sourceInMs: z.number().nonnegative().optional(), author: z.string().optional() })).default([]), sourceRoots: z.array(z.string().min(1)).default([]), usePexels: z.boolean().default(false), priorityAssets: z.array(z.object({ assetId: z.string().min(1), mode: z.enum(['PREFER', 'MUST_USE']), path: z.string().optional() })).default([]), knownEntities: z.array(z.string()).default([]), manualKeywords: z.array(z.string()).default([]), template: z.enum(['COMMERCIAL_OPINION', 'NEWS', 'STORE_PROMOTION', 'PRODUCT_INTRO']).default('COMMERCIAL_OPINION'), pace: z.enum(['SLOW', 'NORMAL', 'FAST']).optional(), shotDensity: z.union([z.enum(['LOW', 'MEDIUM', 'HIGH']), z.number().min(.5).max(2)]).optional(), subtitleStyle: z.enum(['simple', 'commercial', 'emphasis', 'news']).optional(), heroText: z.boolean().default(true), heroTextPolicy: z.array(z.enum(['HOOK', 'ENDING', 'EVIDENCE'])).optional(), seed: z.number().int().default(1), voiceAssetId: z.string().optional(), voicePath: z.string().optional(), backgroundMusicMode: z.enum(['NONE', 'AUTO', 'SPECIFIED']).default('NONE'), backgroundMusicCategory: z.string().optional(), backgroundMusic: z.object({ assetId: z.string().optional(), path: z.string().min(1), volume: z.number().min(0).max(1).default(.12), loop: z.boolean().default(true), category: z.string().optional(), ducking: z.object({ enabled: z.boolean(), voiceVolume: z.number().min(0).max(1).optional(), musicVolume: z.number().min(0).max(1).optional() }).optional() }).optional(), introEnabled: z.boolean().optional(), outroEnabled: z.boolean().optional(), brandingPresetId: z.string().optional() });
+const inputSchema = z.object({ workspaceId: z.string().min(1), projectId: z.string().min(1).optional(), script: z.string().min(1), sentences: z.array(z.object({ index: z.number().int().nonnegative(), text: z.string().min(1), normalizedText: z.string().min(1), voiceStartMs: z.number().nonnegative().optional(), voiceEndMs: z.number().positive().optional(), durationMs: z.number().positive().optional() })).optional(), assets: z.array(z.object({ id: z.string().min(1), path: z.string().min(1), durationMs: z.number().positive(), source: z.enum(['LOCAL', 'PEXELS', 'FAKE_PEXELS']), entity: z.string().optional(), keywords: z.array(z.string()).optional(), originalName: z.string().optional(), tags: z.array(z.string()).optional(), sourceInMs: z.number().nonnegative().optional(), author: z.string().optional(), thumbnailUrl: z.string().min(1).optional() })).default([]), sourceRoots: z.array(z.string().min(1)).default([]), usePexels: z.boolean().default(false), priorityAssets: z.array(z.object({ assetId: z.string().min(1), mode: z.enum(['PREFER', 'MUST_USE']), path: z.string().optional() })).default([]), knownEntities: z.array(z.string()).default([]), manualKeywords: z.array(z.string()).default([]), template: z.enum(['COMMERCIAL_OPINION', 'NEWS', 'STORE_PROMOTION', 'PRODUCT_INTRO']).default('COMMERCIAL_OPINION'), pace: z.enum(['SLOW', 'NORMAL', 'FAST']).optional(), shotDensity: z.union([z.enum(['LOW', 'MEDIUM', 'HIGH']), z.number().min(.5).max(2)]).optional(), subtitleStyle: z.enum(['simple', 'commercial', 'emphasis', 'news']).optional(), heroText: z.boolean().default(true), heroTextPolicy: z.array(z.enum(['HOOK', 'ENDING', 'EVIDENCE'])).optional(), seed: z.number().int().default(1), voiceAssetId: z.string().optional(), voicePath: z.string().optional(), backgroundMusicMode: z.enum(['NONE', 'AUTO', 'SPECIFIED']).default('NONE'), backgroundMusicCategory: z.string().optional(), backgroundMusic: z.object({ assetId: z.string().optional(), path: z.string().min(1), volume: z.number().min(0).max(1).default(.12), loop: z.boolean().default(true), category: z.string().optional(), ducking: z.object({ enabled: z.boolean(), voiceVolume: z.number().min(0).max(1).optional(), musicVolume: z.number().min(0).max(1).optional() }).optional() }).optional(), introEnabled: z.boolean().optional(), outroEnabled: z.boolean().optional(), brandingPresetId: z.string().optional(), outputRoot: z.string().trim().min(1).optional() });
 async function authorizeMusicPath(path: string): Promise<string> {
   const candidate = await realpath(path).catch(() => null);
   if (!candidate || !(await stat(candidate).then((value) => value.isFile()).catch(() => false))) throw new Error('MUSIC_PATH_INVALID');
@@ -27,13 +29,40 @@ async function authorizeLocalFile(path: string): Promise<string> {
   if (!authorized.some((root) => root && (candidate.toLowerCase() === root.toLowerCase() || candidate.toLowerCase().startsWith(`${root}${sep}`.toLowerCase())))) throw new Error('LOCAL_MEDIA_FILE_UNAUTHORIZED');
   return candidate;
 }
+function allowedOutputRoots(): string[] { return (process.env.CONTENTOS_OUTPUT_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean).map((value) => resolve(value)); }
+function contained(root: string, candidate: string): boolean { const normalized = root.endsWith(sep) ? root : `${root}${sep}`; return candidate.toLowerCase() === root.toLowerCase() || candidate.toLowerCase().startsWith(normalized.toLowerCase()); }
+async function authorizeOutputRoot(path: string): Promise<string> {
+  if (!path || path.includes('\0')) throw new Error('EDIT_OUTPUT_ROOT_INVALID');
+  const candidate = await realpath(resolve(path)).catch(() => null); if (!candidate) throw new Error('EDIT_OUTPUT_ROOT_NOT_FOUND');
+  const roots = await Promise.all(allowedOutputRoots().map((root) => realpath(root).catch(() => null)));
+  if (!roots.some((root) => root && contained(root, candidate))) throw new Error('EDIT_OUTPUT_ROOT_UNAUTHORIZED');
+  const details = await stat(candidate).catch(() => null); if (!details?.isDirectory()) throw new Error('EDIT_OUTPUT_ROOT_NOT_FOUND');
+  try { await access(candidate, constants.W_OK); } catch { throw new Error('EDIT_OUTPUT_ROOT_NOT_WRITABLE'); }
+  return candidate;
+}
 
 export function registerScriptEditingV2Routes(app: FastifyInstance, dependencies: { db: Pool; jobs: JobService; video?: VideoService; assets?: AssetCatalogService; presets?: VideoEditPresetService; storage?: LocalStorageProvider }): void {
+  app.get('/api/v1/video/workspace-assets/:assetId/thumbnail', async (request, reply) => {
+    if (!dependencies.assets || !dependencies.storage) return reply.code(503).send({ error: { code: 'VIDEO_ASSET_SERVICE_UNAVAILABLE' } });
+    const workspaceId = String((request.query as { workspaceId?: string } | undefined)?.workspaceId || '').trim();
+    const assetId = String((request.params as { assetId?: string }).assetId || '').trim();
+    if (!workspaceId || !assetId) return reply.code(400).send({ error: { code: 'VIDEO_ASSET_SCOPE_REQUIRED' } });
+    const content = await dependencies.assets.getReadyWorkspaceAssetContent(workspaceId, assetId);
+    if (!content || content.kind !== 'VIDEO') return reply.code(404).send({ error: { code: 'VIDEO_ASSET_NOT_FOUND' } });
+    const key = `${createHash('sha256').update(`${workspaceId}:${assetId}`).digest('hex')}.jpg`;
+    const thumbnailPath = join(dependencies.storage.root, 'thumbnails', 'workspace-assets', key);
+    await mkdir(dirname(thumbnailPath), { recursive: true });
+    if (!await stat(thumbnailPath).then(() => true).catch(() => false)) {
+      try { await generateVideoThumbnail(dependencies.storage.objectPath(content.storageKey), thumbnailPath, process.env.FFMPEG_PATH || 'ffmpeg', Number(content.metadata.durationMs || 0)); }
+      catch { return reply.code(422).send({ error: { code: 'VIDEO_ASSET_THUMBNAIL_FAILED' } }); }
+    }
+    return reply.type('image/jpeg').send(createReadStream(thumbnailPath));
+  });
   app.post('/api/v1/edit/script-plans', async (request, reply) => {
     const parsed = inputSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', details: parsed.error.issues } });
     const input = parsed.data;
-    try { if (input.backgroundMusic) input.backgroundMusic.path = await authorizeMusicPath(input.backgroundMusic.path); if (input.voicePath) input.voicePath = await authorizeLocalFile(input.voicePath); for (const priority of input.priorityAssets) if (priority.path) priority.path = await authorizeLocalFile(priority.path); }
+    try { if (input.backgroundMusic) input.backgroundMusic.path = await authorizeMusicPath(input.backgroundMusic.path); if (input.voicePath) input.voicePath = await authorizeLocalFile(input.voicePath); if (input.outputRoot) input.outputRoot = await authorizeOutputRoot(input.outputRoot); for (const priority of input.priorityAssets) if (priority.path) priority.path = await authorizeLocalFile(priority.path); }
     catch (error) { return reply.code(422).send({ error: { code: error instanceof Error ? error.message : 'MUSIC_PATH_UNAUTHORIZED' } }); }
     const sentences = (input.sentences ?? segmentScriptSentences(input.script)).map((sentence) => {
       const value = sentence as { index: number; text: string; normalizedText: string; voiceStartMs?: number; voiceEndMs?: number; durationMs?: number };
@@ -47,19 +76,20 @@ export function registerScriptEditingV2Routes(app: FastifyInstance, dependencies
     const id = randomUUID();
     const needsVoicePlanning = Boolean(input.voicePath || input.voiceAssetId);
     await dependencies.db.query("insert into video_workspaces (id, type, project_id) values ($1, 'STANDALONE', null) on conflict (id) do nothing", [input.workspaceId]);
-    await dependencies.db.query('insert into edit_script_plans (id, workspace_id, script, voice_asset_id, template_id, settings, source_roots, editorial_plan, resolved_plan, status, revision) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [id, input.workspaceId, input.script, input.voiceAssetId ?? null, input.template, { pace: input.pace, shotDensity: input.shotDensity, heroText: input.heroText, heroTextPolicy: input.heroTextPolicy, subtitleStyle: input.subtitleStyle, seed: input.seed, voiceAssetId: input.voiceAssetId, voicePath: input.voicePath, assets: input.assets, sourceRoots: input.sourceRoots, usePexels: input.usePexels, priorityAssets: priorityAssets, knownEntities: input.knownEntities, manualKeywords: input.manualKeywords, backgroundMusicMode: input.backgroundMusicMode, backgroundMusicCategory: input.backgroundMusicCategory, backgroundMusic: input.backgroundMusic, branding: { introEnabled: input.introEnabled, outroEnabled: input.outroEnabled, brandingPresetId: input.brandingPresetId } }, JSON.stringify(input.sourceRoots), draft, needsVoicePlanning ? null : resolved, resolved && !needsVoicePlanning ? 'READY' : 'DRAFT', 1]);
+    await dependencies.db.query('insert into edit_script_plans (id, workspace_id, script, voice_asset_id, template_id, settings, source_roots, editorial_plan, resolved_plan, status, revision) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [id, input.workspaceId, input.script, input.voiceAssetId ?? null, input.template, { pace: input.pace, shotDensity: input.shotDensity, heroText: input.heroText, heroTextPolicy: input.heroTextPolicy, subtitleStyle: input.subtitleStyle, seed: input.seed, voiceAssetId: input.voiceAssetId, voicePath: input.voicePath, assets: input.assets, sourceRoots: input.sourceRoots, usePexels: input.usePexels, priorityAssets: priorityAssets, knownEntities: input.knownEntities, manualKeywords: input.manualKeywords, backgroundMusicMode: input.backgroundMusicMode, backgroundMusicCategory: input.backgroundMusicCategory, backgroundMusic: input.backgroundMusic, outputRoot: input.outputRoot, branding: { introEnabled: input.introEnabled, outroEnabled: input.outroEnabled, brandingPresetId: input.brandingPresetId } }, JSON.stringify(input.sourceRoots), draft, needsVoicePlanning ? null : resolved, resolved && !needsVoicePlanning ? 'READY' : 'DRAFT', 1]);
     const job = await dependencies.jobs.createIdempotent({ id: `job-${id}`, type: 'EDIT_SCRIPT_PLAN', projectId: input.projectId ?? null, workspaceId: input.workspaceId, payload: { schemaVersion: 'EDIT_SCRIPT_PLAN_V1', planId: id }, idempotencyKey: `edit-script-plan:${id}`, maxAttempts: 3 });
     await dependencies.db.query('update edit_script_plans set job_id = $2, status = case when status = \'READY\' then status else \'QUEUED\' end where id = $1', [id, job.id]);
     return reply.code(201).send({ id, status: resolved && !needsVoicePlanning ? 'READY' : 'QUEUED', revision: 1, editorialPlan: draft, resolvedPlan: resolved && !needsVoicePlanning ? resolved : null });
   });
   app.get('/api/v1/edit/script-plans', async (request) => {
     const limit = Math.min(100, Math.max(1, Number((request.query as { limit?: string } | undefined)?.limit || 50)));
-    const result = await dependencies.db.query('select id,status,revision,template_id,script,editorial_plan,resolved_plan,created_at,updated_at,current_manifest_id from edit_script_plans order by updated_at desc limit $1', [limit]);
+    const result = await dependencies.db.query('select id,status,revision,template_id,script,settings,editorial_plan,resolved_plan,created_at,updated_at,current_manifest_id from edit_script_plans order by updated_at desc limit $1', [limit]);
     return { items: result.rows.map((row) => {
       const editorial = row.editorial_plan && typeof row.editorial_plan === 'object' ? row.editorial_plan as { scenes?: unknown[]; textOverlays?: unknown[]; subtitles?: unknown[]; audioPlan?: { path?: string } } : {};
+      const settings = row.settings && typeof row.settings === 'object' && !Array.isArray(row.settings) ? row.settings as Record<string, unknown> : {};
       const resolved = row.resolved_plan && typeof row.resolved_plan === 'object' ? row.resolved_plan as { scenes?: Array<{ clipSlots?: Array<{ asset?: { source?: string } }> }> } : {};
       const clips = (resolved.scenes || []).flatMap((scene) => scene.clipSlots || []);
-      return { id: String(row.id), status: String(row.status), revision: Number(row.revision), templateId: String(row.template_id), script: String(row.script), sceneCount: Number(editorial.scenes?.length || 0), clipCount: clips.length, localCount: clips.filter((clip) => clip.asset?.source === 'LOCAL').length, pexelsCount: clips.filter((clip) => clip.asset?.source === 'PEXELS' || clip.asset?.source === 'FAKE_PEXELS').length, subtitleEnabled: Boolean(editorial.subtitles?.length), bgmEnabled: Boolean(editorial.audioPlan?.path), currentManifestId: row.current_manifest_id ? String(row.current_manifest_id) : undefined, createdAt: new Date(String(row.created_at)).toISOString(), updatedAt: new Date(String(row.updated_at)).toISOString() };
+      return { id: String(row.id), status: String(row.status), revision: Number(row.revision), templateId: String(row.template_id), script: String(row.script), sceneCount: Number(editorial.scenes?.length || 0), clipCount: clips.length, localCount: clips.filter((clip) => clip.asset?.source === 'LOCAL').length, pexelsCount: clips.filter((clip) => clip.asset?.source === 'PEXELS' || clip.asset?.source === 'FAKE_PEXELS').length, subtitleEnabled: Boolean(editorial.subtitles?.length), bgmEnabled: Boolean(editorial.audioPlan?.path), outputPath: typeof settings.outputPath === 'string' ? settings.outputPath : undefined, currentManifestId: row.current_manifest_id ? String(row.current_manifest_id) : undefined, createdAt: new Date(String(row.created_at)).toISOString(), updatedAt: new Date(String(row.updated_at)).toISOString() };
     }) };
   });
   app.post('/api/v1/edit/script-plans/:id/copy', async (request, reply) => {
@@ -76,7 +106,8 @@ export function registerScriptEditingV2Routes(app: FastifyInstance, dependencies
     const result = await dependencies.db.query('select * from edit_script_plans where id = $1', [(request.params as { id: string }).id]);
     if (!result.rows[0]) return reply.code(404).send({ error: { code: 'SCRIPT_PLAN_NOT_FOUND' } });
     const row = result.rows[0] as Record<string, unknown>;
-    return { id: String(row.id), status: row.status, revision: Number(row.revision), editorialPlan: row.editorial_plan, resolvedPlan: row.resolved_plan };
+    const settings = row.settings && typeof row.settings === 'object' && !Array.isArray(row.settings) ? row.settings as Record<string, unknown> : {};
+    return { id: String(row.id), status: row.status, revision: Number(row.revision), outputRoot: typeof settings.outputRoot === 'string' ? settings.outputRoot : undefined, outputPath: typeof settings.outputPath === 'string' ? settings.outputPath : undefined, editorialPlan: row.editorial_plan, resolvedPlan: row.resolved_plan };
   });
   app.patch('/api/v1/edit/script-plans/:id/clips/:clipId', async (request, reply) => {
     const params = request.params as { id: string; clipId: string }; const body = request.body as { locked?: boolean; assetId?: string };
@@ -128,8 +159,19 @@ export function registerScriptEditingV2Routes(app: FastifyInstance, dependencies
     const existing = await dependencies.db.query<{ id: string; revision: number; manifest: EditManifestV0 }>("select id, revision, manifest from edit_manifests where workspace_id=$1 and manifest->'metadata'->>'editorialPlanId'=$2 and (manifest->'metadata'->>'editorialRevision')::int=$3 limit 1", [String(row.workspace_id), String(row.id), Number(row.revision)]);
     const manifestId = existing.rows[0]?.id ?? `manifest-${randomUUID()}`;
     if (!existing.rows[0]) await dependencies.db.query('insert into edit_manifests (id, project_id, workspace_id, revision, schema_version, manifest, manifest_digest, status) values ($1,null,$2,$3,$4,$5,$6,$7)', [manifestId, String(row.workspace_id), Number(row.revision), 'EDIT_MANIFEST_V0', manifest, digestEditManifest(manifest), 'PERSISTED']);
-    const job = await dependencies.video.createManifestRenderJobForWorkspace(String(row.workspace_id), manifestId, `editorial-plan:${row.id}:revision:${Number(row.revision)}`);
+    const configuredOutputRoot = typeof settings.outputRoot === 'string' ? settings.outputRoot : undefined;
+    let outputRoot: string | undefined;
+    let outputPath: string | undefined;
+    if (configuredOutputRoot) {
+      let root: string;
+      try { root = await authorizeOutputRoot(configuredOutputRoot); }
+      catch (error) { return reply.code(422).send({ error: { code: error instanceof Error ? error.message : 'EDIT_OUTPUT_ROOT_UNAUTHORIZED' } }); }
+      outputRoot = root;
+      outputPath = join(root, `contentos-${String(row.id)}-v${Number(row.revision)}.mp4`);
+      await dependencies.db.query('update edit_script_plans set settings=settings || $2::jsonb,updated_at=now() where id=$1', [String(row.id), JSON.stringify({ outputRoot: root, outputPath })]);
+    }
+    const job = await dependencies.video.createManifestRenderJobForWorkspace(String(row.workspace_id), manifestId, `editorial-plan:${row.id}:revision:${Number(row.revision)}`, { ...(outputRoot && outputPath ? { outputRoot, outputPath } : {}) });
     await dependencies.db.query("update edit_script_plans set status='RENDERING',current_manifest_id=$2,updated_at=now() where id=$1", [String(row.id), manifestId]);
-    return { status: 'RENDERING', revision: Number(row.revision), manifest: manifest, planId: String(row.id) };
+    return { status: 'RENDERING', revision: Number(row.revision), ...(outputPath ? { outputPath } : {}), manifest: manifest, planId: String(row.id) };
   });
 }

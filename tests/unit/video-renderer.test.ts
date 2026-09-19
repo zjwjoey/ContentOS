@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { generateFixtureAudio, generateFixtureVideo, renderEditManifest, probeMedia } from '../../packages/infrastructure/ffmpeg/src/index.js';
 import { buildVideoManifest, type PlannerAsset } from '../../packages/modules/video/src/index.js';
+import type { EditManifestV0 } from '../../packages/contracts/src/index.js';
 
 const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
 const ffprobe = process.env.FFPROBE_PATH || 'ffprobe';
@@ -90,5 +91,42 @@ test('FFmpeg renderer mixes looped BGM and renders every subtitle/hero cue', asy
     const manifest = { schemaVersion: 'EDIT_MANIFEST_V0' as const, workspaceId: 'workspace-bgm-test', seed: 1, canvas: { width: 1080 as const, height: 1920 as const, aspectRatio: '9:16' as const, fps: 30 }, timeline: [{ assetId: 'clip', sourcePath: clip, sourceInMs: 0, durationMs: 3_000, transition: 'cut' as const, timelineStartMs: 0, timelineEndMs: 3_000 }], audio: { voicePath: music, volume: 1, backgroundMusic: { path: music, volume: 0.08, loop: true, ducking: { enabled: true, musicVolume: 0.05 } } }, subtitles: [{ text: '中文 € 14% \'quoted\'', startMs: 0, endMs: 1_500, style: 'commercial' as const, fontSize: 42, position: 'bottom' as const, maxLines: 2 }], textOverlays: [{ text: '重点文字', startMs: 1_500, endMs: 2_800, kind: 'HERO' as const, style: 'emphasis' as const, fontSize: 56, position: 'center' as const }], output: { format: 'mp4' as const, videoCodec: 'h264' as const, audioCodec: 'aac' as const } };
     const rendered = await renderEditManifest({ manifest, outputPath: output, ffmpegPath: ffmpeg, ffprobePath: ffprobe, fontFile: process.env.FFMPEG_FONT_FILE || 'C:\\Windows\\Fonts\\msyh.ttc' });
     assert.ok(rendered.audio); assert.ok(rendered.durationMs >= 2_900 && rendered.durationMs <= 3_200);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('FFmpeg fixture matrix covers the ten required render combinations', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-render-matrix-test-'));
+  const clipA = join(root, 'clip-a.mp4'); const clipB = join(root, 'clip-b.mp4'); const voice = join(root, 'voice.wav'); const music = join(root, 'music.wav');
+  const fontFile = process.env.FFMPEG_FONT_FILE || 'C:\\Windows\\Fonts\\msyh.ttc';
+  try {
+    await generateFixtureVideo(clipA, ffmpeg, 'blue', 4); await generateFixtureVideo(clipB, ffmpeg, 'green', 4); await generateFixtureAudio(voice, ffmpeg); await generateFixtureAudio(music, ffmpeg);
+    const timeline = [{ assetId: 'clip-a', sourcePath: clipA, sourceInMs: 0, durationMs: 2_000, transition: 'cut' as const, timelineStartMs: 0, timelineEndMs: 2_000 }];
+    const base: EditManifestV0 = { schemaVersion: 'EDIT_MANIFEST_V0', workspaceId: 'workspace-render-matrix', seed: 1, canvas: { width: 1080, height: 1920, aspectRatio: '9:16', fps: 30 }, timeline, audio: { volume: 1 }, output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' } };
+    const cases: Array<{ name: string; manifest: EditManifestV0; needsFont?: boolean; assertAudio?: boolean; assertFps?: number }> = [
+      { name: 'video-only', manifest: base },
+      { name: 'video-voice', manifest: { ...base, audio: { ...base.audio, voicePath: voice }, }, assertAudio: true },
+      { name: 'video-voice-subtitle', manifest: { ...base, audio: { ...base.audio, voicePath: voice }, subtitles: [{ text: '中文字幕', startMs: 0, endMs: 1_500, style: 'commercial', fontSize: 42, position: 'bottom', maxLines: 2 }] }, needsFont: true, assertAudio: true },
+      { name: 'video-voice-bgm', manifest: { ...base, audio: { ...base.audio, voicePath: voice, backgroundMusic: { path: music, volume: 0.08, loop: true } } }, assertAudio: true },
+      { name: 'video-voice-bgm-ducking', manifest: { ...base, audio: { ...base.audio, voicePath: voice, backgroundMusic: { path: music, volume: 0.08, loop: true, ducking: { enabled: true, musicVolume: 0.04 } } } }, assertAudio: true },
+      { name: 'hero-text', manifest: { ...base, textOverlays: [{ text: '重点文字', startMs: 0, endMs: 1_500, kind: 'HERO', style: 'emphasis', fontSize: 56, position: 'center' }] }, needsFont: true },
+      { name: 'intro-content-outro', manifest: { ...base, timeline: [
+        { assetId: 'intro', sourcePath: clipA, sourceInMs: 0, durationMs: 500, transition: 'cut', role: 'INTRO', timelineStartMs: 0, timelineEndMs: 500 },
+        { assetId: 'content', sourcePath: clipB, sourceInMs: 0, durationMs: 1_000, transition: 'cut', role: 'CONTENT', timelineStartMs: 500, timelineEndMs: 1_500 },
+        { assetId: 'outro', sourcePath: clipA, sourceInMs: 500, durationMs: 500, transition: 'cut', role: 'OUTRO', timelineStartMs: 1_500, timelineEndMs: 2_000 },
+      ] } },
+      { name: 'multi-clip-scene', manifest: { ...base, timeline: [
+        { assetId: 'scene-1-a', sourcePath: clipA, sourceInMs: 0, durationMs: 1_000, transition: 'cut', sceneId: 'scene-1', timelineStartMs: 0, timelineEndMs: 1_000 },
+        { assetId: 'scene-1-b', sourcePath: clipB, sourceInMs: 0, durationMs: 1_000, transition: 'cut', sceneId: 'scene-1', timelineStartMs: 1_000, timelineEndMs: 2_000 },
+      ] } },
+      { name: 'thirty-fps', manifest: { ...base, canvas: { ...base.canvas, fps: 30 } }, assertFps: 30 },
+      { name: 'vertical-9x16', manifest: { ...base, canvas: { width: 1080, height: 1920, aspectRatio: '9:16', fps: 30 } }, assertFps: 30 },
+    ];
+    const completed: string[] = [];
+    for (const item of cases) {
+      const output = join(root, `${item.name}.mp4`);
+      const rendered = await renderEditManifest({ manifest: item.manifest, outputPath: output, ffmpegPath: ffmpeg, ffprobePath: ffprobe, ...(item.needsFont ? { fontFile } : {}) });
+      assert.equal(rendered.format, 'mp4'); assert.equal(rendered.width, 1080); assert.equal(rendered.height, 1920); if (item.assertAudio) assert.equal(rendered.audio, true); if (item.assertFps) assert.ok(Math.abs((await probeMedia(output, ffprobe)).fps! - item.assertFps) < 0.1); completed.push(item.name);
+    }
+    assert.deepEqual(completed, cases.map((item) => item.name));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
