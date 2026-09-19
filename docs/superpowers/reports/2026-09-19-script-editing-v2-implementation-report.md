@@ -5,7 +5,7 @@
 - Base SHA: `f318da93be6724fed87822c1ce9de5fe19ffb4a8`
 - Branch: `codex/script-editing-v2-rule-editorial-layer`
 - Implementation commits: `fab92e6`, `1e30c1f`, `76717b0`, `a665e6d`, `942730e`
-- Final integrity/picker commits: `1336efc`, `2ccab8c`, `0410773`, `6193911`, `a6074d7`, `cd9e360`
+- Final integrity/picker commits: `1336efc`, `2ccab8c`, `0410773`, `6193911`, `a6074d7`, `cd9e360`, `cdfe225`
 - Final HEAD: `cd9e3600de91feac6f5bf339e7fcc9d4b8790502`
 - `origin/main`: `42c9b2f1eb80fddf63bef67dd8932ec448cabcd9`
 - No merge or automatic PR was created.
@@ -46,10 +46,10 @@
 - Duration integrity is a hard resolver constraint for local, Pexels/Fake Pexels, priority and `MUST_USE` assets; short assets fail before planning.
 - Absolute voice timing is preserved through visual gaps, intro offsets, subtitles, Hero Text and manifest metadata (`audioOffsetMs`); FFmpeg pads visual gaps instead of collapsing them.
 - Reroll is now queued as a durable `EDIT_SCRIPT_PLAN` worker job and re-enters the resolver constraints; the API no longer mutates a resolved plan synchronously.
-- Native local path selection is available through Windows Shell dialogs for media roots, output roots, voice/music files and priority assets. The Windows launcher runs the WinForms dialog on the interactive desktop (without PowerShell `-NonInteractive` and without hiding the child window), so a local operator started from a hidden shell still receives the native dialog. Canonical persisted grants are stored by migration `0030`, support folder children and exact files, and retain environment roots as deployment fallback. Picker cancellation returns `{ cancelled: true }`.
+- Native local path selection is available through Windows Shell dialogs for media roots, output roots, voice/music files and priority assets. The Windows launcher runs the WinForms dialog on the interactive desktop (without PowerShell `-NonInteractive` and without hiding the child window), and binds it to a hidden topmost owner so a local operator started behind Edge/ChatGPT still receives the native dialog in the foreground. Canonical persisted grants are stored by migration `0030`, support folder children and exact files, and retain environment roots as deployment fallback. Picker cancellation returns `{ cancelled: true }`.
 - V1, MIX and workbench forms expose the same picker path while retaining manual paths as an advanced fallback; picked media is scanned immediately.
 
-Current continuation verification: `pnpm typecheck`, `pnpm lint`, `pnpm format`, `pnpm build`, `pnpm --dir apps/web build`, `pnpm test:script-edit-v2` (18/18), `pnpm test:migrations` (9/9), `pnpm test:auto-edit-v1` (27/27), `pnpm test:auto-edit-v15` (19/19), `pnpm test` (275/275), and browser acceptance (4/4) pass on PostgreSQL 16 at `127.0.0.1:55433` with isolated schemas. The Windows Shell picker process was successfully invoked from the running local operator and its native `Browse For Folder` window was observed as visible in the interactive Windows session; unattended acceptance deliberately did not select or transmit a user file, while picker cancellation is covered by the route test.
+Current continuation verification: `pnpm typecheck`, `pnpm lint`, `pnpm format`, `pnpm build`, `pnpm --dir apps/web build`, `pnpm test:script-edit-v2` (18/18), `pnpm test:migrations` (9/9), `pnpm test:auto-edit-v1` (27/27), `pnpm test:auto-edit-v15` (19/19), `pnpm test` (275/275), and browser acceptance (4/4) pass on PostgreSQL 16 at `127.0.0.1:55433` with isolated schemas. The Windows Shell picker process was successfully invoked from the running local operator; its native `Browse For Folder` window was observed as visible and as the foreground window in the interactive Windows session after the topmost-owner fix. Unattended acceptance deliberately did not select or transmit a user file, while picker cancellation is covered by the route test.
 
 `pnpm doctor` reports the pre-existing pnpm global-bin PATH warning and a registry-connectivity failure in this environment; local version, cache, filesystem and offline install checks pass.
 
