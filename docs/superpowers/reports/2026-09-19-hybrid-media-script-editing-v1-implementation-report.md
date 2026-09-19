@@ -3,7 +3,7 @@
 Date: 2026-09-19
 Branch: `codex/hybrid-media-script-editing-v1`
 Base SHA: `7961b5e04f99544159d600865622bc16e8f0e248`
-Final SHA: `188ac7b7d60b397b40b93290c5c6ee29d0ab496a`
+Final SHA: `b9aade913354a4d3a2e8c73391c531ea8e89f92f`
 
 ## Delivery status
 
