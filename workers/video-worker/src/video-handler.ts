@@ -1,13 +1,21 @@
-import { dirname, join, sep } from 'node:path';
+import { dirname, extname, join, resolve, sep } from 'node:path';
 import { copyFile, mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
 import type { Pool } from 'pg';
 import { AssetCatalogService, type AssetService, type LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { JobLeaseCancellationHandler, JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
-import { prepareEditingWorkbenchItem, prepareVoiceTiming, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type ExternalVideoProvider, type PlannerAsset, type VideoService } from '../../../packages/modules/video/src/index.js';
+import { planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoService } from '../../../packages/modules/video/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import { renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 
 export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; localMedia?: LocalMediaSourceService; mediaProvider?: ExternalVideoProvider; }
+
+async function chooseLocalMusic(category: string | undefined, seed: number): Promise<string | undefined> {
+  const roots = (process.env.CONTENTOS_MUSIC_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean); const files: string[] = []; const wanted = category?.toLocaleLowerCase();
+  const visit = async (directory: string): Promise<void> => { const entries = await readdir(directory, { withFileTypes: true }).catch(() => []); for (const entry of entries) { if (entry.isSymbolicLink()) continue; const path = resolve(directory, entry.name); if (entry.isDirectory()) await visit(path); else if (entry.isFile() && ['.mp3', '.wav', '.m4a', '.aac', '.flac'].includes(extname(entry.name).toLocaleLowerCase()) && (!wanted || directory.toLocaleLowerCase().includes(wanted) || entry.name.toLocaleLowerCase().includes(wanted))) files.push(path); } };
+  for (const root of roots) { const actual = await realpath(root).catch(() => null); if (actual) await visit(actual); }
+  if (!files.length && wanted) for (const root of roots) { const actual = await realpath(root).catch(() => null); if (actual) await visit(actual); }
+  files.sort((a, b) => a.localeCompare(b)); return files.length ? files[Math.abs(seed) % files.length] : undefined;
+}
 
 export function createScriptPlanJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
   return async (job, _attemptId, signal) => {
@@ -15,9 +23,47 @@ export function createScriptPlanJobHandler(deps: VideoHandlerDeps): (job: JobRec
     if (signal.aborted) throw new Error('EDIT_SCRIPT_PLAN_CANCELLED');
     const planId = (job.payload as { planId?: string }).planId;
     if (!planId) throw new Error('EDIT_SCRIPT_PLAN_PAYLOAD_INVALID');
-    const row = (await deps.db.query('select id, resolved_plan from edit_script_plans where id=$1', [planId])).rows[0] as { id: string; resolved_plan: unknown } | undefined;
+    const row = (await deps.db.query('select id, resolved_plan, editorial_plan, settings, source_roots, script, voice_asset_id from edit_script_plans where id=$1', [planId])).rows[0] as { id: string; resolved_plan: unknown; editorial_plan: unknown; settings: Record<string, unknown>; source_roots: unknown; script: string; voice_asset_id?: string | null } | undefined;
     if (!row) throw new Error('EDIT_SCRIPT_PLAN_NOT_FOUND');
+    await deps.db.query("update edit_script_plans set status='PLANNING',updated_at=now() where id=$1", [planId]);
+    let editorial = row.editorial_plan as import('../../../packages/modules/video/src/index.js').EditorialPlanV1 | null;
+    if (editorial) {
+      const voicePath = typeof row.settings?.voicePath === 'string' ? await authorizedVoicePath(row.settings.voicePath) : undefined;
+      const hasExplicitVoiceTiming = editorial.sentences.length > 0 && editorial.sentences.every((sentence) => sentence.voiceStartMs !== undefined && sentence.voiceEndMs !== undefined);
+      const voiceTiming = await prepareVoiceTiming({ assetService: deps.assets, assets: new AssetCatalogService(deps.db) }, { workspaceId: job.workspaceId || 'workspace-local', script: row.script, ...(hasExplicitVoiceTiming ? { sentences: editorial.sentences } : {}), ...(row.voice_asset_id ? { voiceAssetId: String(row.voice_asset_id) } : {}), ...(voicePath ? { voicePath } : {}) });
+      if (voiceTiming.voiceAssetId && voiceTiming.voiceAssetId !== row.voice_asset_id) {
+        await deps.db.query('update edit_script_plans set voice_asset_id=$2 where id=$1', [planId, voiceTiming.voiceAssetId]);
+      }
+      if (voiceTiming.sentences.length && JSON.stringify(voiceTiming.sentences) !== JSON.stringify(editorial.sentences)) {
+        editorial = planEditorialScript({ sentences: voiceTiming.sentences, template: editorial.templateId, pace: editorial.pace, shotDensity: editorial.shotDensity, subtitleStyle: editorial.subtitlePlan.style, heroText: row.settings?.heroText !== false, ...(Array.isArray(row.settings?.heroTextPolicy) ? { heroTextPolicy: row.settings.heroTextPolicy.filter((value): value is 'HOOK' | 'ENDING' | 'EVIDENCE' => value === 'HOOK' || value === 'ENDING' || value === 'EVIDENCE') } : {}), knownEntities: Array.isArray(row.settings?.knownEntities) ? row.settings.knownEntities.filter((value): value is string => typeof value === 'string') : [], manualKeywords: Array.isArray(row.settings?.manualKeywords) ? row.settings.manualKeywords.filter((value): value is string => typeof value === 'string') : [], audioPlan: editorial.audioPlan, brandingPlan: editorial.brandingPlan });
+        await deps.db.query('update edit_script_plans set editorial_plan=$2,resolved_plan=null where id=$1', [planId, editorial]);
+        row.resolved_plan = null;
+      }
+    }
+    if (!row.resolved_plan && editorial) {
+      const scannedAssets: EditorialAssetV1[] = Array.isArray(row.settings?.assets) ? row.settings.assets as EditorialAssetV1[] : [];
+      const sourceRoots = Array.isArray(row.source_roots) ? row.source_roots : [];
+      if (deps.localMedia && sourceRoots.length) {
+        for (const root of sourceRoots.filter((item): item is string => typeof item === 'string')) {
+          const scan = await deps.localMedia.scan({ sourceRoot: root, recursive: true, signal });
+          scannedAssets.push(...scan.files.filter((file) => file.available).map((file) => ({ id: `${scan.sourceRootId}:${file.relativePath}`, path: file.sourcePath, durationMs: file.durationMs, source: 'LOCAL' as const, originalName: file.fileName, keywords: file.tags, tags: file.tags })));
+        }
+      }
+      if (row.settings?.usePexels === true && deps.mediaProvider) {
+        const timedSentences = editorial.sentences || [];
+        const hybrid = await new HybridMediaService(deps.assets, deps.storage, deps.mediaProvider, deps.db).resolve({ workspaceId: job.workspaceId || 'workspace-local', script: timedSentences.map((sentence) => sentence.text).join(' '), sentences: timedSentences, localAssets: scannedAssets.map((asset) => ({ id: asset.id, storageKey: asset.id, sourcePath: asset.path, durationMs: asset.durationMs, ...(asset.originalName ? { originalName: asset.originalName } : {}), ...(asset.tags ? { tags: asset.tags } : {}) })), usePexels: true, ...(signal ? { signal } : {}) });
+        scannedAssets.push(...hybrid.assets.map((asset) => ({ id: asset.id, path: asset.sourcePath, durationMs: asset.durationMs, source: asset.metadata?.external ? (String((asset.metadata.external as Record<string, unknown>).provider || '').includes('fake') ? 'FAKE_PEXELS' as const : 'PEXELS' as const) : 'LOCAL' as const, originalName: asset.id, keywords: [] })));
+      }
+      const rawPriority = Array.isArray(row.settings.priorityAssets) ? row.settings.priorityAssets as Array<{ assetId: string; mode: 'PREFER' | 'MUST_USE'; path?: string }> : [];
+      const priorityAssets = rawPriority.map((item) => { const match = scannedAssets.find((asset) => asset.id === item.assetId || asset.path === item.assetId || asset.path === item.path); return { assetId: match?.id ?? item.assetId, mode: item.mode, ...(item.path ? { path: item.path } : {}) }; });
+      let resolved = resolveEditorialPlan(editorial, scannedAssets, Number(row.settings.seed || 1), { priorityAssets, allowControlledReuse: true });
+      if (resolved.audioPlan.backgroundMusicMode === 'AUTO' && !resolved.audioPlan.path) { const musicPath = await chooseLocalMusic(resolved.audioPlan.category, Number(row.settings.seed || 1)); if (musicPath) resolved = { ...resolved, audioPlan: { ...resolved.audioPlan, path: musicPath } }; }
+      await deps.db.query("update edit_script_plans set resolved_plan=$2,status='READY',updated_at=now() where id=$1", [planId, resolved]);
+      return { planId, status: 'READY' };
+    }
     if (!row.resolved_plan) { await deps.db.query("update edit_script_plans set status='FAILED',updated_at=now() where id=$1", [planId]); throw new Error('EDIT_SCRIPT_PLAN_NO_RESOLVED_MEDIA'); }
+    let existingPlan = row.resolved_plan as { audioPlan?: { backgroundMusicMode?: string; path?: string; category?: string; [key: string]: unknown } };
+    if (existingPlan.audioPlan?.backgroundMusicMode === 'AUTO' && !existingPlan.audioPlan.path) { const musicPath = await chooseLocalMusic(existingPlan.audioPlan.category, Number(row.settings.seed || 1)); if (musicPath) { existingPlan = { ...existingPlan, audioPlan: { ...existingPlan.audioPlan, path: musicPath } }; await deps.db.query('update edit_script_plans set resolved_plan=$2 where id=$1', [planId, existingPlan]); } }
     await deps.db.query("update edit_script_plans set status='READY',updated_at=now() where id=$1", [planId]);
     return { planId, status: 'READY' };
   };
@@ -163,6 +209,8 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
         const outputAsset = await deps.assets.commitPrepared(outputInput, preparedOutput, scope);
         const completed = await deps.video.completeRender(planned.renderId, scope, outputAsset.id, { durationMs: rendered.durationMs, width: rendered.width, height: rendered.height, format: rendered.format, outputAssetId: outputAsset.id });
         if (!completed) throw Object.assign(new Error('Current Job attempt could not complete its Render'), { code: 'RENDER_FENCE_REJECTED', retryable: true });
+        const editorialPlanId = planned.manifest.metadata?.editorialPlanId;
+        if (editorialPlanId) await scope.query("update edit_script_plans set status='RENDERED',updated_at=now() where id=$1", [editorialPlanId]);
         const item = await scope.query<{ id: string; batch_id: string }>("update edit_batch_items set state='SUCCEEDED',output_asset_id=$2,error=null,updated_at=now() where job_id=$1 returning id,batch_id", [job.id, outputAsset.id]);
         if (item.rows[0]) {
           const batch = item.rows[0].batch_id;
@@ -195,6 +243,8 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
       }
       const failedJob = await deps.jobs.fail(job.id, attemptId, diagnostics, true, async (scope) => {
         await deps.video.failRender(planned.renderId, scope, diagnostics);
+        const editorialPlanId = planned.manifest.metadata?.editorialPlanId;
+        if (editorialPlanId && job.attemptCount >= job.maxAttempts) await scope.query("update edit_script_plans set status='FAILED',updated_at=now() where id=$1", [editorialPlanId]);
         if (job.attemptCount >= job.maxAttempts) {
           const item = await scope.query<{ id: string; batch_id: string }>("update edit_batch_items set state='FAILED',error=$2,updated_at=now() where job_id=$1 returning id,batch_id", [job.id, diagnostics]);
           if (item.rows[0]) {

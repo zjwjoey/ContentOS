@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, rename, rm } from 'node:fs/promises';
-import { basename, dirname } from 'node:path';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { EditManifestV0 } from '../../../contracts/src/index.js';
 
@@ -33,8 +33,9 @@ function run(binary: string, args: string[], signal?: AbortSignal): Promise<{ st
 }
 
 function escapeFilterText(text: string): string {
-  return text.replaceAll('\\', '\\\\').replaceAll(':', '\\:').replaceAll("'", "\\'").replaceAll(',', '\\,').replaceAll('\n', ' ');
+  return text.replaceAll('\\', '\\\\').replaceAll(':', '\\:').replaceAll(',', '\\,').replaceAll(';', '\\;').replaceAll('[', '\\[').replaceAll(']', '\\]').replaceAll('\n', ' ');
 }
+function escapeFilterPath(path: string): string { return path.replaceAll('\\', '/').replaceAll(':', '\\:').replaceAll(',', '\\,').replaceAll(';', '\\;'); }
 
 export async function generateFixtureVideo(path: string, ffmpegPath: string, color?: string, durationSeconds = 2): Promise<void> {
   const input = color ? `color=c=${color}:size=640x360:rate=30` : 'testsrc=size=640x360:rate=30';
@@ -64,12 +65,14 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   if (fixture?.generateFixtureInput && fixture.fixturePath) await generateFixtureVideo(fixture.fixturePath, ffmpegPath);
   await mkdir(dirname(outputPath), { recursive: true });
   const tempOutput = `${outputPath}.${randomUUID()}.part.mp4`;
+  const overlayDir = options.fontFile && (manifest.subtitles?.length || manifest.textOverlays?.length) ? join(dirname(outputPath), `.text-${randomUUID()}`) : undefined;
+  if (overlayDir) { await mkdir(overlayDir, { recursive: true }); const textItems = [...(manifest.subtitles ?? []), ...(manifest.textOverlays ?? [])]; await Promise.all(textItems.map((item, index) => writeFile(join(overlayDir, `${index}.txt`), item.text.replaceAll('\r\n', '\n'), 'utf8'))); }
   const args: string[] = ['-y'];
   for (const clip of manifest.timeline) args.push('-ss', String(clip.sourceInMs / 1000), '-t', String(clip.durationMs / 1000), '-i', clip.sourcePath);
   const voiceIndex = manifest.audio.voicePath ? manifest.timeline.length : -1;
   if (manifest.audio.voicePath) args.push('-i', manifest.audio.voicePath);
   const musicIndex = manifest.audio.backgroundMusic?.path ? manifest.timeline.length + (voiceIndex >= 0 ? 1 : 0) : -1;
-  if (musicIndex >= 0 && manifest.audio.backgroundMusic?.path) args.push('-stream_loop', '-1', '-i', manifest.audio.backgroundMusic.path);
+  if (musicIndex >= 0 && manifest.audio.backgroundMusic?.path) { if (manifest.audio.backgroundMusic.loop !== false) args.push('-stream_loop', '-1'); args.push('-i', manifest.audio.backgroundMusic.path); }
   const filters: string[] = [];
   const outputFps = Math.max(1, Number(manifest.canvas.fps || 30));
   let globalOffsetMs = 0;
@@ -80,16 +83,21 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
     let overlays = '';
     if (options.fontFile) {
       const localStart = globalOffsetMs;
-      const draw = (item: { text: string; startMs: number; endMs: number; style?: string; fontSize?: number; position?: string }, kind: 'subtitle' | 'hero') => {
+      const draw = (item: { text: string; startMs: number; endMs: number; style?: string; fontSize?: number; position?: string }, kind: 'subtitle' | 'hero', fileIndex: number) => {
+        const textFile = overlayDir ? join(overlayDir, `${fileIndex}.txt`) : undefined;
         const start = Math.max(0, (item.startMs - localStart) / 1000); const end = Math.max(start + 0.001, (item.endMs - localStart) / 1000);
         if (end <= 0 || start >= visualDurationMs / 1000) return '';
         const y = item.position === 'top' ? '180' : item.position === 'center' ? '(h-text_h)/2' : 'h-220';
         const color = kind === 'hero' || item.style === 'emphasis' ? 'white' : item.style === 'commercial' ? '0xEAF4FF' : 'white';
         const size = item.fontSize ?? (kind === 'hero' ? 64 : 48);
-        return `,drawtext=fontfile='${escapeFilterText(options.fontFile!)}':text='${escapeFilterText(item.text)}':fontcolor=${color}:fontsize=${size}:x=(w-text_w)/2:y=${y}:box=1:boxcolor=black@0.45:enable='between(t,${start.toFixed(3)},${end.toFixed(3)})'`;
+        const outline = item.style === 'commercial' || kind === 'hero' ? ':borderw=2:bordercolor=black@0.75' : '';
+        const background = item.style === 'simple' ? '' : ':box=1:boxcolor=black@0.45:boxborderw=12';
+        const textSource = textFile ? `textfile='${escapeFilterPath(textFile)}':expansion=none` : `text='${escapeFilterText(item.text)}'`;
+        return `,drawtext=fontfile='${escapeFilterPath(options.fontFile!)}':${textSource}:fontcolor=${color}:fontsize=${size}:x=(w-text_w)/2:y=${y}${outline}${background}:enable='between(t\\,${start.toFixed(3)}\\,${end.toFixed(3)})'`;
       };
-      for (const item of manifest.subtitles ?? []) overlays += draw(item, 'subtitle');
-      for (const item of manifest.textOverlays ?? []) overlays += draw(item, 'hero');
+      for (const [index, item] of (manifest.subtitles ?? []).entries()) overlays += draw(item, 'subtitle', index);
+      const subtitleCount = manifest.subtitles?.length ?? 0;
+      for (const [index, item] of (manifest.textOverlays ?? []).entries()) overlays += draw(item, 'hero', subtitleCount + index);
     }
     const pad = padMs > 0 ? `,tpad=stop_mode=clone:stop_duration=${padMs / 1000}` : '';
     const clipDurationSeconds = Math.max(0.001, clip.durationMs / 1000).toFixed(6);
@@ -103,17 +111,16 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
     const offsetMs = Math.max(0, Number(manifest.metadata?.audioOffsetMs || 0));
     filters.push(`[${voiceIndex}:a]adelay=${offsetMs}:all=1,volume=${manifest.audio.volume ?? 1},apad[voice]`);
   }
-  args.push('-filter_complex', filters.join(';'), '-map', '[vout]');
+  const audioArgs: string[] = [];
   if (musicIndex >= 0) {
     const musicVolume = manifest.audio.backgroundMusic?.ducking?.musicVolume ?? manifest.audio.backgroundMusic?.volume ?? 0.12;
     filters.push(`[${musicIndex}:a]volume=${musicVolume},atrim=duration=${(videoDurationMs / 1000).toFixed(3)},asetpts=PTS-STARTPTS[music]`);
     if (voiceIndex >= 0) filters.push(`[voice][music]amix=inputs=2:duration=first:dropout_transition=0[aout]`);
     else filters.push('[music]apad[aout]');
-    // filter_complex was appended above; replace it with the complete filter graph.
-    args[args.indexOf('-filter_complex') + 1] = filters.join(';');
-    args.push('-map', '[aout]', '-c:a', 'aac', '-strict', '-2', '-t', String(videoDurationMs / 1000));
-  } else if (voiceIndex >= 0) args.push('-map', '[voice]', '-c:a', 'aac', '-strict', '-2', '-t', String(videoDurationMs / 1000));
-  else args.push('-an');
+    audioArgs.push('-map', '[aout]', '-c:a', 'aac', '-strict', '-2', '-t', String(videoDurationMs / 1000));
+  } else if (voiceIndex >= 0) audioArgs.push('-map', '[voice]', '-c:a', 'aac', '-strict', '-2', '-t', String(videoDurationMs / 1000));
+  else audioArgs.push('-an');
+  args.push('-filter_complex', filters.join(';'), '-map', '[vout]', ...audioArgs);
   const videoEncoder = manifest.output.videoCodec === 'h264' ? 'libx264' : 'mpeg4';
   args.push('-c:v', videoEncoder, '-pix_fmt', 'yuv420p', '-r', String(outputFps));
   if (videoEncoder === 'libx264') args.push('-crf', '23');
@@ -121,9 +128,11 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   try {
     await run(ffmpegPath, args, options.signal);
     const probe = await probeMedia(tempOutput, ffprobePath, options.signal);
-    const codecValid = probe.videoCodec === manifest.output.videoCodec && (!manifest.audio.voicePath || probe.audioCodec === manifest.output.audioCodec);
-    if (probe.format !== 'mp4' || probe.width !== 1080 || probe.height !== 1920 || probe.durationMs <= 0 || (manifest.audio.voicePath && !probe.audio) || !codecValid) throw new Error(`Rendered output failed MP4/1080x1920/codec validation: ${JSON.stringify(probe)}`);
+    const requiresAudio = Boolean(manifest.audio.voicePath || manifest.audio.backgroundMusic?.path);
+    const codecValid = probe.videoCodec === manifest.output.videoCodec && (!requiresAudio || probe.audioCodec === manifest.output.audioCodec);
+    if (probe.format !== 'mp4' || probe.width !== 1080 || probe.height !== 1920 || probe.durationMs <= 0 || (requiresAudio && !probe.audio) || !codecValid) throw new Error(`Rendered output failed MP4/1080x1920/codec validation: ${JSON.stringify(probe)}`);
     await rename(tempOutput, outputPath);
+    if (overlayDir) await rm(overlayDir, { recursive: true, force: true });
     return { outputPath, ...probe };
-  } catch (error) { await rm(tempOutput, { force: true }); throw error; }
+  } catch (error) { await rm(tempOutput, { force: true }); if (overlayDir) await rm(overlayDir, { recursive: true, force: true }); throw error; }
 }

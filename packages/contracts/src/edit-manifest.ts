@@ -54,8 +54,8 @@ export interface EditManifestV0 {
   seed: number;
   canvas: { width: 1080; height: 1920; aspectRatio: '9:16'; fps: number };
   timeline: ManifestClip[];
-  audio: { voiceAssetId?: string; voicePath?: string; volume: number; backgroundMusic?: { assetId?: string; path: string; volume: number; ducking?: { enabled: boolean; voiceVolume?: number; musicVolume?: number } } };
-  subtitles?: Array<{ text: string; startMs: number; endMs: number; style?: 'simple' | 'commercial' | 'emphasis'; fontSize?: number; position?: 'top' | 'center' | 'bottom'; maxLines?: number }>;
+  audio: { voiceAssetId?: string; voicePath?: string; volume: number; backgroundMusic?: { assetId?: string; path: string; volume: number; loop?: boolean; category?: string; ducking?: { enabled: boolean; voiceVolume?: number; musicVolume?: number } } };
+  subtitles?: Array<{ text: string; startMs: number; endMs: number; style?: 'simple' | 'commercial' | 'emphasis'; font?: string; fontSize?: number; position?: 'top' | 'center' | 'bottom'; outline?: boolean; background?: boolean; maxLines?: number }>;
   textOverlays?: Array<{ text: string; startMs: number; endMs: number; kind?: 'HERO' | 'EVIDENCE'; style?: 'simple' | 'commercial' | 'emphasis'; fontSize?: number; position?: 'top' | 'center' | 'bottom' }>;
   metadata?: {
     briefId?: string;
@@ -67,6 +67,10 @@ export interface EditManifestV0 {
     localMediaScanId?: string;
     sentences?: ScriptSentenceV1[];
     audioOffsetMs?: number;
+    editorialPlanId?: string;
+    editorialRevision?: number;
+    templateId?: string;
+    plannerVersion?: string;
   };
   output: { format: 'mp4'; videoCodec: 'mpeg4' | 'h264'; audioCodec: 'aac' };
 }
@@ -87,6 +91,9 @@ export function validateEditManifest(manifest: EditManifestV0): void {
   if (manifest.timeline.some((clip) => (clip.voiceStartMs !== undefined || clip.voiceEndMs !== undefined) && (clip.voiceStartMs === undefined || clip.voiceEndMs === undefined || clip.voiceEndMs <= clip.voiceStartMs))) throw new Error('Edit manifest clip voice timing is invalid');
   if (manifest.timeline.some((clip) => (clip.timelineStartMs !== undefined || clip.timelineEndMs !== undefined) && (clip.timelineStartMs === undefined || clip.timelineEndMs === undefined || clip.timelineStartMs < 0 || clip.timelineEndMs <= clip.timelineStartMs))) throw new Error('Edit manifest visual timing is invalid');
   if (manifest.timeline.some((clip) => clip.matching && (clip.matching.matchScore < 0 || clip.matching.matchScore > 100 || !Array.isArray(clip.matching.matchedKeywords)))) throw new Error('Edit manifest matching metadata is invalid');
+  if (manifest.subtitles?.some((cue) => cue.endMs <= cue.startMs || cue.startMs < 0 || (cue.maxLines !== undefined && (!Number.isInteger(cue.maxLines) || cue.maxLines < 1 || cue.maxLines > 3)) || (cue.fontSize !== undefined && cue.fontSize <= 0))) throw new Error('Edit manifest subtitle timing/style is invalid');
+  if (manifest.textOverlays?.some((overlay) => overlay.endMs <= overlay.startMs || overlay.startMs < 0 || (overlay.fontSize !== undefined && overlay.fontSize <= 0))) throw new Error('Edit manifest text overlay timing/style is invalid');
+  if (manifest.audio.backgroundMusic && (!manifest.audio.backgroundMusic.path.trim() || manifest.audio.backgroundMusic.volume < 0 || manifest.audio.backgroundMusic.volume > 1)) throw new Error('Edit manifest background music is invalid');
   if (manifest.metadata?.sentences && manifest.metadata.sentences.some((sentence) => !Number.isInteger(sentence.index) || sentence.index < 0 || !sentence.text.trim() || !sentence.normalizedText.trim() || (sentence.voiceStartMs !== undefined && sentence.voiceEndMs !== undefined && sentence.voiceEndMs <= sentence.voiceStartMs))) throw new Error('Edit manifest sentence metadata is invalid');
   if (manifest.metadata && Object.values(manifest.metadata).some((value) => value !== undefined && !String(value).trim())) throw new Error('Edit manifest provenance metadata must be non-empty when present');
 }

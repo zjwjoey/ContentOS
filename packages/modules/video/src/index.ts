@@ -18,8 +18,8 @@ export type { VisualPlanV1, VisualPlanSegmentV1, ResolvedVisualPlanV1, ResolvedV
 export { prepareEditingWorkbenchItem, prepareVoiceTiming, fitSentencesToVoiceDuration } from './edit-workbench-preparation.js';
 export type { EditingWorkbenchPreparationDependencies, EditingWorkbenchPreparationInput, EditingWorkbenchPreparationResult } from './edit-workbench-preparation.js';
 export type { EditManifestV0, ManifestClip } from '../../../contracts/src/index.js';
-export { planEditorialScript, resolveEditorialPlan, compileEditorialManifest } from './editorial-plan.js';
-export type { EditorialAssetV1, EditorialPaceV1, EditorialPlanInput, EditorialPlanV1, EditorialTemplateV1, NarrativeRoleV1, ScenePlanV1, ClipSlotV1, ResolvedEditorialPlanV1 } from './editorial-plan.js';
+export { planEditorialScript, resolveEditorialPlan, compileEditorialManifest, rerollEditorialClip, getEditorialTemplateConfig, EDITORIAL_TEMPLATES } from './editorial-plan.js';
+export type { EditorialAssetV1, EditorialPaceV1, EditorialPlanInput, EditorialPlanV1, EditorialTemplateV1, NarrativeRoleV1, ScenePlanV1, ClipSlotV1, ResolvedEditorialPlanV1, EditorialShotDensityV1, EditorialTemplateConfigV1, EditorialResolveOptions, PriorityAssetV1, EditorialSourcePolicyV1, EditorialAudioPlanV1, EditorialBrandingPlanV1, SubtitlePlanV1 } from './editorial-plan.js';
 export { applyQuickEditOperations, digestEditManifest, parseQuickEditOperations, rankAdjustmentAssets } from './quick-edit.js';
 export type { QuickEditOperation } from './quick-edit.js';
 export { VideoAdjustmentService, VideoQuickEditService } from './quick-edit-service.js';

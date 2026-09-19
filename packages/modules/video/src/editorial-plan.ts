@@ -1,75 +1,103 @@
+import { createHash } from 'node:crypto';
 import { calculateSentenceRequiredDurationMs, type TimedScriptSentence } from './planner.js';
 import type { EditManifestV0, ManifestClip } from '../../../contracts/src/index.js';
 
 export type EditorialTemplateV1 = 'COMMERCIAL_OPINION' | 'NEWS' | 'STORE_PROMOTION' | 'PRODUCT_INTRO';
 export type EditorialPaceV1 = 'SLOW' | 'NORMAL' | 'FAST';
-export type NarrativeRoleV1 = 'HOOK' | 'BODY' | 'TURN' | 'EVIDENCE' | 'AUTHENTIC_ENTITY' | 'CTA' | 'ENDING';
+export type EditorialShotDensityV1 = 'LOW' | 'MEDIUM' | 'HIGH';
+export type NarrativeRoleV1 = 'HOOK' | 'BODY' | 'EXPLANATION' | 'TURN' | 'AUTHENTIC_ENTITY' | 'EVIDENCE' | 'CTA' | 'ENDING';
+export type EditorialSourcePolicyV1 = 'AUTO' | 'LOCAL_ONLY' | 'PREFER_LOCAL' | 'PREFER' | 'MUST_USE';
 
-export interface EditorialAssetV1 { id: string; path: string; durationMs: number; source: 'LOCAL' | 'PEXELS' | 'FAKE_PEXELS'; entity?: string; keywords?: string[]; }
-export interface ClipSlotV1 { id: string; sceneId: string; index: number; durationMs: number; keywords: string[]; locked?: boolean; asset?: EditorialAssetV1; }
-export interface ScenePlanV1 { id: string; sentenceIndex: number; text: string; role: NarrativeRoleV1; startMs: number; endMs: number; clipSlots: ClipSlotV1[]; }
-export interface EditorialPlanV1 { schemaVersion: 'EDITORIAL_PLAN_V1'; template: EditorialTemplateV1; pace: EditorialPaceV1; shotDensity: number; sentences: TimedScriptSentence[]; scenes: ScenePlanV1[]; subtitles: NonNullable<EditManifestV0['subtitles']>; textOverlays: NonNullable<EditManifestV0['textOverlays']>; }
-export type ResolvedEditorialPlanV1 = Omit<EditorialPlanV1, 'schemaVersion'> & { schemaVersion: 'RESOLVED_EDITORIAL_PLAN_V1' };
-export interface EditorialPlanInput { sentences: TimedScriptSentence[]; template?: EditorialTemplateV1; pace?: EditorialPaceV1; shotDensity?: number; knownEntities?: string[]; heroText?: boolean; priorityAssetIds?: string[]; }
-
-const roleWords: Array<[NarrativeRoleV1, RegExp]> = [
-  ['TURN', /(但是|不过|然而|问题是|实际上|所以)/u],
-  ['EVIDENCE', /(例如|比如|数据显示|销售额|门店数|%|€|\$)/iu],
-  ['CTA', /(欢迎|关注|评论|联系我们|到店|期待|te esperamos)/iu],
-];
-const paceTarget: Record<EditorialPaceV1, number> = { SLOW: 5000, NORMAL: 3250, FAST: 2200 };
-
-function classifyRole(sentence: TimedScriptSentence, index: number, total: number, known: string[]): NarrativeRoleV1 {
-  if (index === 0) return 'HOOK';
-  if (index === total - 1) return 'ENDING';
-  if (known.some((entity) => entity.trim() && sentence.text.toLocaleLowerCase().includes(entity.toLocaleLowerCase()))) return 'AUTHENTIC_ENTITY';
-  for (const [role, re] of roleWords) if (re.test(sentence.text)) return role;
-  return 'BODY';
+export interface EditorialTemplateConfigV1 {
+  id: EditorialTemplateV1; version: string; templateName: string; pace: EditorialPaceV1; shotDensity: EditorialShotDensityV1;
+  subtitleStyle: 'simple' | 'commercial' | 'emphasis' | 'news'; heroTextEnabled: boolean; heroTextPolicy: Array<'HOOK' | 'ENDING' | 'EVIDENCE'>;
+  backgroundMusicMode: 'NONE' | 'AUTO'; backgroundMusicCategory?: string; backgroundMusicVolume: number; duckingEnabled: boolean;
+  introEnabled: boolean; outroEnabled: boolean; assetReusePolicy: 'PREFER_UNIQUE' | 'STRICT_UNIQUE'; pexelsEnabledDefault: boolean;
 }
+export const EDITORIAL_TEMPLATES: Record<EditorialTemplateV1, EditorialTemplateConfigV1> = {
+  COMMERCIAL_OPINION: { id: 'COMMERCIAL_OPINION', version: '1.0.0', templateName: '商业观点', pace: 'NORMAL', shotDensity: 'MEDIUM', subtitleStyle: 'commercial', heroTextEnabled: true, heroTextPolicy: ['HOOK', 'ENDING'], backgroundMusicMode: 'AUTO', backgroundMusicCategory: '商务', backgroundMusicVolume: 0.12, duckingEnabled: true, introEnabled: false, outroEnabled: false, assetReusePolicy: 'PREFER_UNIQUE', pexelsEnabledDefault: true },
+  NEWS: { id: 'NEWS', version: '1.0.0', templateName: '新闻解读', pace: 'FAST', shotDensity: 'HIGH', subtitleStyle: 'news', heroTextEnabled: true, heroTextPolicy: ['HOOK', 'ENDING', 'EVIDENCE'], backgroundMusicMode: 'AUTO', backgroundMusicCategory: '新闻', backgroundMusicVolume: 0.1, duckingEnabled: true, introEnabled: false, outroEnabled: false, assetReusePolicy: 'PREFER_UNIQUE', pexelsEnabledDefault: true },
+  STORE_PROMOTION: { id: 'STORE_PROMOTION', version: '1.0.0', templateName: '门店宣传', pace: 'FAST', shotDensity: 'HIGH', subtitleStyle: 'commercial', heroTextEnabled: true, heroTextPolicy: ['HOOK', 'ENDING'], backgroundMusicMode: 'AUTO', backgroundMusicCategory: '轻快', backgroundMusicVolume: 0.14, duckingEnabled: true, introEnabled: true, outroEnabled: true, assetReusePolicy: 'PREFER_UNIQUE', pexelsEnabledDefault: true },
+  PRODUCT_INTRO: { id: 'PRODUCT_INTRO', version: '1.0.0', templateName: '产品介绍', pace: 'NORMAL', shotDensity: 'MEDIUM', subtitleStyle: 'emphasis', heroTextEnabled: true, heroTextPolicy: ['HOOK', 'EVIDENCE', 'ENDING'], backgroundMusicMode: 'AUTO', backgroundMusicCategory: '科技', backgroundMusicVolume: 0.12, duckingEnabled: true, introEnabled: false, outroEnabled: false, assetReusePolicy: 'PREFER_UNIQUE', pexelsEnabledDefault: true },
+};
 
-function targetCount(durationMs: number, pace: EditorialPaceV1, role: NarrativeRoleV1, density: number): number {
-  let count = Math.ceil(durationMs / (paceTarget[pace] / Math.max(0.5, density)));
-  if (role === 'HOOK') count += 1;
-  if (role === 'AUTHENTIC_ENTITY' || role === 'ENDING') count -= 1;
-  if (role === 'EVIDENCE') count = Math.min(count, 2);
-  return Math.max(1, Math.min(3, count));
+export interface EditorialAssetV1 { id: string; path: string; durationMs: number; source: 'LOCAL' | 'PEXELS' | 'FAKE_PEXELS'; entity?: string; keywords?: string[]; originalName?: string; tags?: string[]; sourceInMs?: number; author?: string; }
+export interface PriorityAssetV1 { assetId: string; mode: 'PREFER' | 'MUST_USE'; path?: string; }
+export interface ClipSlotV1 {
+  id: string; sceneId: string; index: number; clipIndex?: number; startMs: number; endMs: number; durationMs: number; keywords: string[]; role: NarrativeRoleV1; visualIntent: string;
+  sourcePolicy: EditorialSourcePolicyV1; entityRequirement?: string; assetReusePolicy: 'PREFER_UNIQUE' | 'STRICT_UNIQUE' | 'CONTROLLED_REUSE'; locked?: boolean;
+  selectedAssetId?: string; selectedSource?: EditorialAssetV1['source']; prioritySource?: 'NORMAL' | 'PREFER' | 'MUST_USE'; reason?: string; asset?: EditorialAssetV1;
 }
+export interface ScenePlanV1 {
+  id: string; sceneIndex: number; sentenceIndex: number; sourceSentenceIndexes: number[]; text: string; startMs: number; endMs: number; durationMs: number;
+  role: NarrativeRoleV1; narrativeRole?: NarrativeRoleV1; sceneType: 'HOOK' | 'CONTENT' | 'EVIDENCE' | 'CTA' | 'ENDING'; visualIntent: string; clipCount: number; clipSlots: ClipSlotV1[];
+  textOverlay?: NonNullable<EditManifestV0['textOverlays']>[number]; assetPolicy: EditorialSourcePolicyV1; locked?: boolean; reason?: string;
+}
+export interface SubtitlePlanV1 { style: 'simple' | 'commercial' | 'emphasis' | 'news'; cues: NonNullable<EditManifestV0['subtitles']>; keywords: string[]; }
+export interface EditorialAudioPlanV1 { backgroundMusicMode: 'NONE' | 'AUTO' | 'SPECIFIED'; category?: string; volume: number; duckingEnabled: boolean; path?: string; }
+export interface EditorialBrandingPlanV1 { introEnabled: boolean; outroEnabled: boolean; brandingPresetId?: string; }
+export interface EditorialPlanV1 {
+  schemaVersion: 'EDITORIAL_PLAN_V1'; plannerVersion: string; scriptHash: string; templateId: EditorialTemplateV1; templateVersion: string; template?: EditorialTemplateV1;
+  pace: EditorialPaceV1; shotDensity: EditorialShotDensityV1 | number; totalDurationMs: number; sentences: TimedScriptSentence[]; scenes: ScenePlanV1[];
+  subtitlePlan: SubtitlePlanV1; audioPlan: EditorialAudioPlanV1; brandingPlan: EditorialBrandingPlanV1; subtitles: NonNullable<EditManifestV0['subtitles']>; textOverlays: NonNullable<EditManifestV0['textOverlays']>;
+}
+export type ResolvedEditorialPlanV1 = Omit<EditorialPlanV1, 'schemaVersion'> & { schemaVersion: 'RESOLVED_EDITORIAL_PLAN_V1'; resolvedAt?: string };
+export interface EditorialPlanInput {
+  sentences: TimedScriptSentence[]; template?: EditorialTemplateV1; pace?: EditorialPaceV1; shotDensity?: EditorialShotDensityV1 | number; subtitleStyle?: EditorialTemplateConfigV1['subtitleStyle']; heroText?: boolean;
+  heroTextPolicy?: Array<'HOOK' | 'ENDING' | 'EVIDENCE'>; knownEntities?: string[]; manualKeywords?: string[]; audioPlan?: Partial<EditorialAudioPlanV1>; brandingPlan?: Partial<EditorialBrandingPlanV1>;
+}
+export interface EditorialResolveOptions { priorityAssets?: PriorityAssetV1[]; localOnly?: boolean; allowControlledReuse?: boolean; strictUnique?: boolean; seed?: number; }
 
-function splitDuration(total: number, count: number): number[] {
-  const base = Math.floor(total / count); const rest = total - base * count;
-  return Array.from({ length: count }, (_, i) => base + (i < rest ? 1 : 0));
-}
+const turn = /(但是|不过|然而|问题是)/u; const explanation = /(实际上|所以)/u; const evidence = /(例如|比如|数据显示|销售额|门店数|\d+(?:\.\d+)?\s*%|[%€$])/iu; const cta = /(欢迎|关注|评论|联系我们|到店|期待|te esperamos)/iu;
+const densityNumber: Record<EditorialShotDensityV1, number> = { LOW: 0.75, MEDIUM: 1, HIGH: 1.35 }; const paceTarget: Record<EditorialPaceV1, number> = { SLOW: 5_000, NORMAL: 3_250, FAST: 2_200 };
+function scriptHash(sentences: TimedScriptSentence[]): string { return createHash('sha256').update(sentences.map((sentence) => `${sentence.index}:${sentence.text}:${sentence.voiceStartMs ?? ''}:${sentence.voiceEndMs ?? ''}`).join('|')).digest('hex'); }
+function normalizedTerms(text: string): string[] { return [...new Set(text.normalize('NFKC').toLocaleLowerCase().split(/\s+/u).flatMap((part) => { const compact = part.replace(/[。！？!?，,；;：:]/gu, ''); if (compact.length < 2) return [compact]; return [compact, ...[...compact].slice(0, Math.min(8, compact.length - 1))]; }).filter(Boolean))]; }
+function knownEntity(text: string, entities: string[]): string | undefined { return entities.find((entity) => entity.trim() && text.toLocaleLowerCase().includes(entity.toLocaleLowerCase())); }
+function classifyRole(sentence: TimedScriptSentence, index: number, total: number, known: string[]): NarrativeRoleV1 { if (index === 0) return 'HOOK'; if (index === total - 1) return 'ENDING'; if (knownEntity(sentence.text, known)) return 'AUTHENTIC_ENTITY'; if (turn.test(sentence.text)) return 'TURN'; if (explanation.test(sentence.text)) return 'EXPLANATION'; if (evidence.test(sentence.text)) return 'EVIDENCE'; if (cta.test(sentence.text)) return 'CTA'; return 'BODY'; }
+function visualIntent(role: NarrativeRoleV1, template: EditorialTemplateV1): string { if (role === 'AUTHENTIC_ENTITY') return 'authentic entity / brand / store'; if (role === 'EVIDENCE') return template === 'NEWS' ? 'evidence / data / chart context' : 'evidence / product detail'; if (role === 'CTA') return 'people / contact / invitation'; if (role === 'HOOK') return 'attention / brand context'; if (role === 'ENDING') return 'closing / place / brand memory'; if (role === 'TURN' || role === 'EXPLANATION') return 'context / meeting / transition'; return template === 'PRODUCT_INTRO' ? 'product detail / usage scene' : 'neutral b-roll'; }
+function sceneType(role: NarrativeRoleV1): ScenePlanV1['sceneType'] { return role === 'HOOK' ? 'HOOK' : role === 'ENDING' ? 'ENDING' : role === 'EVIDENCE' ? 'EVIDENCE' : role === 'CTA' ? 'CTA' : 'CONTENT'; }
+function countFor(durationMs: number, pace: EditorialPaceV1, density: number, role: NarrativeRoleV1): number { let count = Math.ceil(durationMs / (paceTarget[pace] / Math.max(0.5, density))); if (role === 'HOOK') count += 1; if (role === 'AUTHENTIC_ENTITY' || role === 'ENDING' || role === 'EXPLANATION') count -= 1; if (role === 'EVIDENCE') count = Math.min(count, 2); return Math.max(1, Math.min(3, count)); }
+function splitDuration(total: number, count: number): number[] { const base = Math.floor(total / count); const rest = total - base * count; return Array.from({ length: count }, (_, index) => base + (index < rest ? 1 : 0)); }
+function wrapSubtitleText(text: string, maxChars = 14, maxLines = 2): string { const compact = text.replace(/\s+/gu, ' ').trim(); if (!compact) return compact; const parts: string[] = []; let buffer = ''; for (const char of [...compact]) { if (buffer.length >= maxChars && /[\s，。！？!?；;,:：]/u.test(char)) { parts.push(buffer.trim()); buffer = ''; } else if (buffer.length >= maxChars) { parts.push(buffer); buffer = ''; } buffer += char; } if (buffer) parts.push(buffer.trim()); return parts.slice(0, maxLines).join('\n'); }
+function styleCue(text: string, startMs: number, endMs: number, style: EditorialTemplateConfigV1['subtitleStyle']): NonNullable<EditManifestV0['subtitles']>[number] { return { text: wrapSubtitleText(text), startMs, endMs, style: style === 'news' ? 'commercial' : style, fontSize: style === 'emphasis' ? 60 : 48, position: 'bottom', maxLines: 2, outline: true, background: style !== 'simple' }; }
+function styleHero(text: string, startMs: number, endMs: number, kind: 'HERO' | 'EVIDENCE'): NonNullable<EditManifestV0['textOverlays']>[number] { return { text: wrapSubtitleText(text, 12, 3), startMs, endMs, kind, style: 'emphasis', fontSize: kind === 'EVIDENCE' ? 56 : 64, position: 'center' }; }
+export function getEditorialTemplateConfig(template: EditorialTemplateV1): EditorialTemplateConfigV1 { return { ...EDITORIAL_TEMPLATES[template] }; }
 
 export function planEditorialScript(input: EditorialPlanInput): EditorialPlanV1 {
-  const template = input.template ?? 'COMMERCIAL_OPINION'; const pace = input.pace ?? 'NORMAL'; const shotDensity = Math.max(0.5, Math.min(2, input.shotDensity ?? 1));
-  let cursor = 0;
-  const scenes: ScenePlanV1[] = input.sentences.map((sentence, index) => {
-    const duration = Math.max(1, Math.round(sentence.voiceEndMs !== undefined && sentence.voiceStartMs !== undefined ? sentence.voiceEndMs - sentence.voiceStartMs : calculateSentenceRequiredDurationMs(sentence, 1500, 12000)));
-    const role = classifyRole(sentence, index, input.sentences.length, input.knownEntities ?? []);
-    const count = targetCount(duration, pace, role, shotDensity); const durations = splitDuration(duration, count); const sceneId = `scene-${index + 1}`;
-    const clipSlots = durations.map((durationMs, clipIndex) => ({ id: `${sceneId}-clip-${clipIndex + 1}`, sceneId, index: clipIndex, durationMs, keywords: sentence.normalizedText.split(/\s+/u).filter(Boolean).slice(0, 8) }));
-    const startMs = sentence.voiceStartMs ?? cursor; const endMs = sentence.voiceEndMs ?? startMs + duration; cursor = endMs;
-    return { id: sceneId, sentenceIndex: sentence.index, text: sentence.text, role, startMs, endMs, clipSlots };
+  const templateId = input.template ?? 'COMMERCIAL_OPINION'; const config = EDITORIAL_TEMPLATES[templateId]; const pace = input.pace ?? config.pace; const density = typeof input.shotDensity === 'number' ? Math.max(0.5, Math.min(2, input.shotDensity)) : densityNumber[input.shotDensity ?? config.shotDensity]; const shotDensity = input.shotDensity ?? config.shotDensity; let cursor = 0;
+  const scenes = input.sentences.map((sentence, index) => {
+    const voiced = sentence.voiceStartMs !== undefined && sentence.voiceEndMs !== undefined && sentence.voiceEndMs > sentence.voiceStartMs; const durationMs = Math.max(1, Math.round(voiced ? sentence.voiceEndMs! - sentence.voiceStartMs! : calculateSentenceRequiredDurationMs(sentence, 1_500, 12_000))); const startMs = sentence.voiceStartMs ?? cursor; const endMs = sentence.voiceEndMs ?? startMs + durationMs; cursor = endMs; const role = classifyRole(sentence, index, input.sentences.length, input.knownEntities ?? []); const count = countFor(durationMs, pace, density, role); const durations = splitDuration(durationMs, count); let local = startMs; const policy: EditorialSourcePolicyV1 = role === 'AUTHENTIC_ENTITY' ? 'PREFER_LOCAL' : 'AUTO'; const reuse = role === 'AUTHENTIC_ENTITY' ? 'CONTROLLED_REUSE' : config.assetReusePolicy;
+    const slots = durations.map((slotDuration, slotIndex) => { const slot: ClipSlotV1 = { id: `scene-${index + 1}-clip-${slotIndex + 1}`, sceneId: `scene-${index + 1}`, index: slotIndex, clipIndex: slotIndex, startMs: local, endMs: local + slotDuration, durationMs: slotDuration, keywords: [...new Set([...normalizedTerms(sentence.normalizedText || sentence.text), ...(input.manualKeywords ?? [])])].slice(0, 16), role, visualIntent: visualIntent(role, templateId), sourcePolicy: policy, ...(knownEntity(sentence.text, input.knownEntities ?? []) ? { entityRequirement: knownEntity(sentence.text, input.knownEntities ?? [])! } : {}), assetReusePolicy: reuse, reason: role === 'HOOK' ? '开头场景采用较高镜头密度' : role === 'AUTHENTIC_ENTITY' ? '检测到真实主体，优先本地真实素材' : '按模板规则生成镜头' }; local += slotDuration; return slot; });
+    const heroEnabled = input.heroText !== false && (input.heroTextPolicy ?? config.heroTextPolicy).includes(role as 'HOOK' | 'ENDING' | 'EVIDENCE'); const overlay = heroEnabled ? styleHero(sentence.text, startMs, endMs, role === 'EVIDENCE' ? 'EVIDENCE' : 'HERO') : undefined;
+    return { id: `scene-${index + 1}`, sceneIndex: index, sentenceIndex: sentence.index, sourceSentenceIndexes: [sentence.index], text: sentence.text, startMs, endMs, durationMs, role, narrativeRole: role, sceneType: sceneType(role), visualIntent: visualIntent(role, templateId), clipCount: slots.length, clipSlots: slots, ...(overlay ? { textOverlay: overlay } : {}), assetPolicy: policy, ...(slots[0]?.reason ? { reason: slots[0].reason } : {}) };
   });
-  const subtitles = scenes.map((scene) => ({ text: scene.text, startMs: scene.startMs, endMs: scene.endMs, style: 'simple' as const, fontSize: 48, position: 'bottom' as const, maxLines: 2 }));
-  const textOverlays = input.heroText === false ? [] : scenes.filter((s) => s.role === 'HOOK' || s.role === 'ENDING' || s.role === 'EVIDENCE').map((s) => ({ text: s.text, startMs: s.startMs, endMs: s.endMs, kind: (s.role === 'EVIDENCE' ? 'EVIDENCE' : 'HERO') as 'EVIDENCE' | 'HERO', style: 'emphasis' as const, fontSize: 64, position: 'center' as const }));
-  return { schemaVersion: 'EDITORIAL_PLAN_V1', template, pace, shotDensity, sentences: input.sentences, scenes, subtitles, textOverlays };
+  const subtitleStyle = input.subtitleStyle ?? config.subtitleStyle; const cues = scenes.map((scene) => styleCue(scene.text, scene.startMs, scene.endMs, subtitleStyle)); const textOverlays = scenes.flatMap((scene) => scene.textOverlay ? [scene.textOverlay] : []); const totalDurationMs = scenes.reduce((max, scene) => Math.max(max, scene.endMs), 0);
+  return { schemaVersion: 'EDITORIAL_PLAN_V1', plannerVersion: '1.0.0', scriptHash: scriptHash(input.sentences), templateId, templateVersion: config.version, template: templateId, pace, shotDensity, totalDurationMs, sentences: input.sentences, scenes, subtitlePlan: { style: subtitleStyle, cues, keywords: [...new Set([...input.manualKeywords ?? [], ...input.knownEntities ?? [], ...input.sentences.flatMap((sentence) => (sentence.text.match(/\d+(?:\.\d+)?%|€\s*\d[\d.,]*/gu) ?? []))])] }, audioPlan: { backgroundMusicMode: input.audioPlan?.backgroundMusicMode ?? config.backgroundMusicMode, ...(input.audioPlan?.category || config.backgroundMusicCategory ? { category: input.audioPlan?.category ?? config.backgroundMusicCategory } : {}), volume: input.audioPlan?.volume ?? config.backgroundMusicVolume, duckingEnabled: input.audioPlan?.duckingEnabled ?? config.duckingEnabled, ...(input.audioPlan?.path ? { path: input.audioPlan.path } : {}) }, brandingPlan: { introEnabled: input.brandingPlan?.introEnabled ?? config.introEnabled, outroEnabled: input.brandingPlan?.outroEnabled ?? config.outroEnabled, ...(input.brandingPlan?.brandingPresetId ? { brandingPresetId: input.brandingPlan.brandingPresetId } : {}) }, subtitles: cues, textOverlays };
 }
 
-export function resolveEditorialPlan(plan: EditorialPlanV1, assets: EditorialAssetV1[], seed = 1): ResolvedEditorialPlanV1 {
-  const ordered = [...assets].sort((a, b) => a.id.localeCompare(b.id)); let cursor = Math.abs(seed) % Math.max(1, ordered.length); const used = new Set<string>();
+function assetMatchScore(slot: ClipSlotV1, asset: EditorialAssetV1, priority: PriorityAssetV1 | undefined): number { const haystack = `${asset.id} ${asset.originalName ?? ''} ${asset.entity ?? ''} ${(asset.keywords ?? []).join(' ')} ${(asset.tags ?? []).join(' ')}`.toLocaleLowerCase(); let score = priority?.mode === 'MUST_USE' ? 120 : priority?.mode === 'PREFER' ? 90 : 0; score += slot.keywords.reduce((sum, key) => sum + (haystack.includes(key.toLocaleLowerCase()) ? 10 : 0), 0); if (slot.entityRequirement && asset.entity?.toLocaleLowerCase() === slot.entityRequirement.toLocaleLowerCase()) score += 100; if (slot.role === 'AUTHENTIC_ENTITY' && asset.source === 'LOCAL' && asset.entity) score += 50; if (slot.sourcePolicy === 'LOCAL_ONLY' && asset.source !== 'LOCAL') return -1; return score; }
+function assetIdentity(asset: EditorialAssetV1): string { return asset.path.trim().normalize('NFKC').toLocaleLowerCase() || asset.id; }
+export function resolveEditorialPlan(plan: EditorialPlanV1, assets: EditorialAssetV1[], seed = 1, options: EditorialResolveOptions = {}): ResolvedEditorialPlanV1 {
+  const priority = new Map((options.priorityAssets ?? []).map((item) => [item.assetId, item])); const ordered = [...assets].sort((a, b) => a.id.localeCompare(b.id)); const used = new Set<string>(); let cursor = Math.abs(options.seed ?? seed) % Math.max(1, ordered.length); const controlledReuse = options.allowControlledReuse !== false && options.strictUnique !== true;
   const scenes = plan.scenes.map((scene) => ({ ...scene, clipSlots: scene.clipSlots.map((slot) => {
-    const available = ordered.filter((asset) => !used.has(asset.id));
-    if (!available.length) throw new Error('EDIT_UNIQUE_MEDIA_EXHAUSTED: editorial plan requires more unique assets');
-    const asset = available[cursor++ % available.length]!;
-    used.add(asset.id);
-    return { ...slot, asset };
+    if (slot.locked && slot.asset) { used.add(assetIdentity(slot.asset)); const prioritySource: ClipSlotV1['prioritySource'] = priority.get(slot.asset.id)?.mode ?? 'NORMAL'; return { ...slot, selectedAssetId: slot.asset.id, selectedSource: slot.asset.source, prioritySource }; }
+    const candidates = ordered.filter((asset) => !(options.localOnly || slot.sourcePolicy === 'LOCAL_ONLY') || asset.source === 'LOCAL').map((asset) => ({ asset, priority: priority.get(asset.id), score: assetMatchScore(slot, asset, priority.get(asset.id)) })).filter((item) => item.score >= 0).sort((a, b) => b.score - a.score || a.asset.id.localeCompare(b.asset.id));
+    const unused = candidates.filter((item) => !used.has(assetIdentity(item.asset))); const reused = unused.length === 0; const usable = unused.length ? unused : (controlledReuse ? candidates : candidates.filter((item) => slot.role === 'AUTHENTIC_ENTITY' && item.asset.entity));
+    if (!usable.length) throw new Error('EDIT_UNIQUE_MEDIA_EXHAUSTED: editorial plan requires more unique assets');
+    const chosen = usable[cursor++ % usable.length]!; used.add(assetIdentity(chosen.asset)); const prioritySource: ClipSlotV1['prioritySource'] = chosen.priority?.mode ?? 'NORMAL'; const reason = prioritySource === 'MUST_USE' ? '该素材由用户标记为必须出现' : prioritySource === 'PREFER' ? '该素材由用户标记为优先素材' : reused ? '可用素材已用尽，按规则受控复用' : slot.reason; return { ...slot, asset: chosen.asset, selectedAssetId: chosen.asset.id, selectedSource: chosen.asset.source, prioritySource, assetReusePolicy: reused ? 'CONTROLLED_REUSE' : slot.assetReusePolicy, ...(reason ? { reason } : {}) };
   }) }));
-  return { ...plan, schemaVersion: 'RESOLVED_EDITORIAL_PLAN_V1', scenes };
+  const mustUse = [...priority.entries()].filter(([, value]) => value.mode === 'MUST_USE').map(([id]) => id); const selected = new Set(scenes.flatMap((scene) => scene.clipSlots.flatMap((slot) => slot.selectedAssetId ? [slot.selectedAssetId] : []))); const missing = mustUse.filter((id) => !selected.has(id)); if (missing.length) throw new Error(`EDIT_MUST_USE_ASSET_UNSATISFIED:${missing.join(',')}`);
+  return { ...plan, schemaVersion: 'RESOLVED_EDITORIAL_PLAN_V1', resolvedAt: new Date(0).toISOString(), scenes };
+}
+export function rerollEditorialClip(plan: ResolvedEditorialPlanV1, assets: EditorialAssetV1[], clipId: string, options: EditorialResolveOptions = {}): ResolvedEditorialPlanV1 { const target = plan.scenes.flatMap((scene) => scene.clipSlots).find((slot) => slot.id === clipId); if (!target) throw new Error('SCRIPT_CLIP_NOT_FOUND'); if (target.locked) throw new Error('SCRIPT_CLIP_LOCKED'); const used = new Set(plan.scenes.flatMap((scene) => scene.clipSlots.filter((slot) => slot.id !== clipId && slot.asset).map((slot) => assetIdentity(slot.asset!)))); const candidates = assets.filter((asset) => !used.has(assetIdentity(asset)) && asset.id !== target.selectedAssetId && (!options.localOnly || asset.source === 'LOCAL')).sort((a, b) => a.id.localeCompare(b.id)); if (!candidates.length) throw new Error('EDIT_NO_ALTERNATE_MEDIA'); const replacement = candidates[0]!; return { ...plan, scenes: plan.scenes.map((scene) => ({ ...scene, clipSlots: scene.clipSlots.map((slot) => slot.id === clipId ? { ...slot, asset: replacement, selectedAssetId: replacement.id, selectedSource: replacement.source, prioritySource: 'NORMAL', reason: '局部换片，不重新匹配其他镜头' } : slot) })) };
 }
 
-export function compileEditorialManifest(plan: ResolvedEditorialPlanV1, input: { workspaceId?: string; projectId?: string; seed: number; voiceAssetId?: string; voicePath?: string; backgroundMusic?: EditManifestV0['audio']['backgroundMusic']; fps?: number; }): EditManifestV0 {
-  const timeline: ManifestClip[] = []; let timelineCursor = 0;
-  for (const scene of plan.scenes) for (const slot of scene.clipSlots) { if (!slot.asset) throw new Error(`Unresolved editorial clip ${slot.id}`); timeline.push({ assetId: slot.asset.id, sourcePath: slot.asset.path, sourceInMs: 0, durationMs: slot.durationMs, transition: 'cut', sentenceIndex: scene.sentenceIndex, sentenceText: scene.text, sceneId: scene.id, timelineStartMs: timelineCursor, timelineEndMs: timelineCursor + slot.durationMs, voiceStartMs: scene.startMs, voiceEndMs: scene.endMs, role: scene.role === 'HOOK' ? 'INTRO' : scene.role === 'ENDING' ? 'OUTRO' : 'CONTENT', matching: { matchedKeywords: slot.keywords, matchScore: 100, fallback: false, matchingReason: 'rule-based editorial plan', allowAssetReuse: false, selectedSource: slot.asset.source, selectedRole: slot.asset.entity ? 'AUTHENTIC_ENTITY' : 'GENERIC_BROLL' } }); timelineCursor += slot.durationMs; }
-  return { schemaVersion: 'EDIT_MANIFEST_V0', ...(input.projectId ? { projectId: input.projectId } : {}), ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}), seed: input.seed, canvas: { width: 1080, height: 1920, aspectRatio: '9:16', fps: input.fps ?? 30 }, timeline, audio: { ...(input.voiceAssetId ? { voiceAssetId: input.voiceAssetId } : {}), ...(input.voicePath ? { voicePath: input.voicePath } : {}), ...(input.backgroundMusic ? { backgroundMusic: input.backgroundMusic } : {}), volume: 1 }, subtitles: plan.subtitles, textOverlays: plan.textOverlays, metadata: { editMode: 'SCRIPT', sentences: plan.sentences }, output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' } };
+export function compileEditorialManifest(plan: ResolvedEditorialPlanV1, input: { workspaceId?: string; projectId?: string; seed: number; voiceAssetId?: string; voicePath?: string; backgroundMusic?: EditManifestV0['audio']['backgroundMusic']; fps?: number; planId?: string; revision?: number; intro?: EditorialAssetV1; outro?: EditorialAssetV1; }): EditManifestV0 {
+  const timeline: ManifestClip[] = []; let timelineCursor = 0; const orderedScenes = [...plan.scenes].sort((a, b) => a.sceneIndex - b.sceneIndex); const addClip = (asset: EditorialAssetV1, durationMs: number, role: NonNullable<ManifestClip['role']>, scene?: ScenePlanV1, slot?: ClipSlotV1): void => { const matchingReason = slot?.reason ?? 'rule-based editorial plan'; timeline.push({ assetId: asset.id, sourcePath: asset.path, sourceInMs: slot?.asset?.sourceInMs ?? asset.sourceInMs ?? 0, durationMs, transition: 'cut', ...(scene ? { sentenceIndex: scene.sentenceIndex, sentenceText: scene.text, sceneId: scene.id, voiceStartMs: scene.startMs, voiceEndMs: scene.endMs, role } : { role }), timelineStartMs: timelineCursor, timelineEndMs: timelineCursor + durationMs, ...(slot?.selectedSource ? { matching: { matchedKeywords: slot.keywords, matchScore: 100, fallback: false, matchingReason, allowAssetReuse: slot.assetReusePolicy === 'CONTROLLED_REUSE', selectedSource: slot.selectedSource, selectedRole: slot.entityRequirement ? 'AUTHENTIC_ENTITY' : 'GENERIC_BROLL', reason: matchingReason } } : {}) }); timelineCursor += durationMs; };
+  let contentOffsetMs = 0; if (input.intro) { const duration = Math.min(input.intro.durationMs, 1_500); addClip(input.intro, duration, 'INTRO'); contentOffsetMs = duration; } for (const scene of orderedScenes) for (const slot of scene.clipSlots) { if (!slot.asset) throw new Error(`Unresolved editorial clip ${slot.id}`); addClip(slot.asset, slot.durationMs, 'CONTENT', scene, slot); } if (input.outro) addClip(input.outro, Math.min(input.outro.durationMs, 1_500), 'OUTRO');
+  const subtitles = plan.subtitles.map((cue) => ({ ...cue, startMs: cue.startMs + contentOffsetMs, endMs: cue.endMs + contentOffsetMs })); const textOverlays = plan.textOverlays.map((overlay) => ({ ...overlay, startMs: overlay.startMs + contentOffsetMs, endMs: overlay.endMs + contentOffsetMs }));
+  const metadata: EditManifestV0['metadata'] = { editMode: 'SCRIPT', sentences: plan.sentences, ...(input.planId ? { editorialPlanId: input.planId } : {}), ...(input.revision !== undefined ? { editorialRevision: input.revision } : {}), templateId: plan.templateId, plannerVersion: plan.plannerVersion };
+  const planMusic = plan.audioPlan.path ? { path: plan.audioPlan.path, volume: plan.audioPlan.volume, loop: true, ...(plan.audioPlan.category ? { category: plan.audioPlan.category } : {}), ducking: { enabled: plan.audioPlan.duckingEnabled, musicVolume: plan.audioPlan.volume } } : undefined;
+  const backgroundMusic: NonNullable<EditManifestV0['audio']['backgroundMusic']> | undefined = input.backgroundMusic ?? planMusic;
+  return { schemaVersion: 'EDIT_MANIFEST_V0', ...(input.projectId ? { projectId: input.projectId } : {}), ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}), seed: input.seed, canvas: { width: 1080, height: 1920, aspectRatio: '9:16', fps: input.fps ?? 30 }, timeline, audio: { ...(input.voiceAssetId ? { voiceAssetId: input.voiceAssetId } : {}), ...(input.voicePath ? { voicePath: input.voicePath } : {}), ...(backgroundMusic ? { backgroundMusic } : {}), volume: 1 }, subtitles, textOverlays, metadata, output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' } };
 }

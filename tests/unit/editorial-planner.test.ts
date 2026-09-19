@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compileEditorialManifest, planEditorialScript, resolveEditorialPlan } from '../../packages/modules/video/src/index.js';
+import { compileEditorialManifest, planEditorialScript, rerollEditorialClip, resolveEditorialPlan } from '../../packages/modules/video/src/index.js';
 
 test('editorial planner classifies roles and conserves voiced duration', () => {
   const sentences = [
@@ -21,5 +21,25 @@ test('editorial planner classifies roles and conserves voiced duration', () => {
   ]);
   const manifest = compileEditorialManifest(resolved, { workspaceId: 'w', seed: 1, voicePath: 'voice.wav' });
   assert.equal(manifest.timeline.reduce((sum, clip) => sum + clip.durationMs, 0), 10_000);
-  assert.equal(manifest.textOverlays?.length, 3);
+  assert.equal(manifest.textOverlays?.length, 2);
+});
+
+test('editorial rules expose deterministic roles, template effects, priority and local reroll', () => {
+  const sentences = [
+    { index: 0, text: 'MIZAN 开业消息', normalizedText: 'mizan 开业消息', voiceStartMs: 0, voiceEndMs: 8_000 },
+    { index: 1, text: '但是数据显示销售额增长 14%', normalizedText: '但是数据显示销售额增长 14%', voiceStartMs: 8_000, voiceEndMs: 16_000 },
+    { index: 2, text: '欢迎到店体验', normalizedText: '欢迎到店体验', voiceStartMs: 16_000, voiceEndMs: 20_000 },
+    { index: 3, text: '市场会慢慢给出答案', normalizedText: '市场会慢慢给出答案', voiceStartMs: 20_000, voiceEndMs: 25_000 },
+  ];
+  const normal = planEditorialScript({ sentences, template: 'COMMERCIAL_OPINION', knownEntities: ['MIZAN'] });
+  const fast = planEditorialScript({ sentences, template: 'STORE_PROMOTION', pace: 'FAST', shotDensity: 'HIGH', knownEntities: ['MIZAN'] });
+  assert.deepEqual(normal.scenes.map((scene) => scene.role), ['HOOK', 'TURN', 'CTA', 'ENDING']);
+  assert.ok(fast.scenes.some((scene) => scene.clipCount >= normal.scenes.find((candidate) => candidate.sceneIndex === scene.sceneIndex)!.clipCount));
+  const assets = Array.from({ length: 10 }, (_, index) => ({ id: `asset-${index}`, path: `asset-${index}.mp4`, durationMs: 10_000, source: 'LOCAL' as const, keywords: index === 0 ? ['mizan'] : [] }));
+  const resolved = resolveEditorialPlan(normal, assets, 2, { priorityAssets: [{ assetId: 'asset-9', mode: 'MUST_USE' }], allowControlledReuse: true });
+  assert.ok(resolved.scenes.flatMap((scene) => scene.clipSlots).some((slot) => slot.selectedAssetId === 'asset-9'));
+  const target = resolved.scenes[0]!.clipSlots[0]!; const rerolled = rerollEditorialClip(resolved, assets, target.id); assert.notEqual(rerolled.scenes[0]!.clipSlots[0]!.selectedAssetId, target.selectedAssetId);
+  const manifest = compileEditorialManifest(rerolled, { workspaceId: 'w', seed: 2, planId: 'p', revision: 1 });
+  assert.deepEqual(manifest.timeline.map((clip) => clip.assetId), rerolled.scenes.flatMap((scene) => scene.clipSlots.map((slot) => slot.selectedAssetId)));
+  assert.equal(manifest.metadata?.editorialPlanId, 'p');
 });
