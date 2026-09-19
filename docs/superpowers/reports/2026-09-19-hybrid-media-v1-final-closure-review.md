@@ -2,7 +2,7 @@
 
 Date: 2026-09-19
 Branch: `codex/hybrid-media-script-editing-v1`
-Review base: `3afa046ecd06b3d04d075b631c6685115d3324be`
+Review base: `9cf177d216e478c988d87a82d6a36d12b29d1996`
 
 | Closure item | Status | Evidence |
 | --- | --- | --- |
@@ -25,6 +25,11 @@ Review base: `3afa046ecd06b3d04d075b631c6685115d3324be`
 | MIX behavior | FIXED | MIX bypasses HybridMediaService and retains Random Sentence Montage. |
 | Final manifest regression | FIXED | Integration asserts resolved assignments and final manifest matching/source/role. |
 | Browser acceptance | FIXED | Hybrid, external-only and missing-provider UI flows use the fake provider. |
+| Authentic entity exact match | FIXED | Local ranking exposes matched authentic/place entities separately; `AUTHENTIC_ENTITY` requires a direct authentic match. |
+| Place-context fallback integrity | FIXED | Poland-only local footage cannot represent MIZAN and remains `PLACE_CONTEXT` with `entityFallback=true`; the final manifest preserves it. |
+| External unused pool and explicit reuse | FIXED | Resolver filters ranked results against provider identity sets explicitly; reuse is marked only after the unused pool is exhausted. |
+| Provider-missing settings preservation | FIXED | Missing status only disables Pexels; settings hydration is completed before persistence, preserving local roots/output/template. |
+| Health cache bypass | FIXED | Provider health uses a minimal uncached request and never writes search cache; ordinary search cache remains intact. |
 | Full gates | FIXED | Final report records format, lint, typecheck, tests, migrations, auto-edit, browser, build and doctor results. |
 
 ## Decision

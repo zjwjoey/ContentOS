@@ -19,6 +19,14 @@ test('local ranking prefers entity and penalizes recent usage', () => {
     { id: 'entity', storageKey: 'b', sourcePath: 'MIZAN-store.mp4', durationMs: 5000, tags: ['MIZAN'], recentUsageCount: 0 },
   ]);
   assert.equal(ranked[0]?.id, 'entity');
+  assert.deepEqual(ranked[0]?.matchedAuthenticEntities, ['MIZAN']);
+});
+
+test('place-only local material never qualifies as authentic entity', () => {
+  const segment = planVisuals('MIZAN正在波兰发展。').segments[0]!;
+  const ranked = rankLocalCandidates(segment, [{ id: 'poland-street', storageKey: 'poland', sourcePath: 'Poland-Warsaw-street.mp4', durationMs: 8_000, tags: ['波兰', '华沙'] }]);
+  assert.deepEqual(ranked[0]?.matchedAuthenticEntities, []);
+  assert.deepEqual(ranked[0]?.matchedPlaceEntities, ['波兰']);
 });
 
 test('Pexels adapter blocks non-allowlisted downloads', async () => {
@@ -58,4 +66,15 @@ test('Pexels download has an independent timeout', async () => {
   const hangingFetch: typeof fetch = async (_input, init): Promise<Response> => await new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
   const provider = new PexelsVideoProvider('key', hangingFetch, 50, 20);
   await assert.rejects(() => provider.download({ provider: 'pexels', assetId: 'timeout', width: 1080, height: 1920, durationMs: 8_000, files: [{ id: 'timeout-file', width: 1080, height: 1920, durationMs: 8_000, url: 'https://videos.pexels.com/timeout.mp4' }] }, 'unused.mp4'), /PEXELS_DOWNLOAD_TIMEOUT/);
+});
+
+test('Pexels health bypasses search cache and performs a provider request every time', async () => {
+  let fetchCount = 0;
+  const fetchImpl: typeof fetch = async () => { fetchCount += 1; return new Response(JSON.stringify({ videos: [] }), { status: 200, headers: { 'content-type': 'application/json' } }); };
+  const provider = new PexelsVideoProvider('key', fetchImpl, 100);
+  await provider.search({ query: 'abstract', perPage: 1 });
+  assert.equal(fetchCount, 1);
+  await provider.health();
+  await provider.health();
+  assert.equal(fetchCount, 3);
 });

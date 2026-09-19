@@ -39,9 +39,10 @@ test('Hybrid Script Editing source controls and external-only flow work in the b
 
     const missingPage = await browser.newPage();
     await missingPage.route(`${baseUrl}/api/v1/media-providers`, async (route) => await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: 'fake-pexels', configured: false, healthy: null }] }) }));
+    await missingPage.addInitScript(() => window.localStorage.setItem('contentos-edit-settings-SCRIPT', JSON.stringify({ roots: ['F:\\MIZAN'], outputRoot: 'F:\\OUTPUT', minClipDurationMs: 2_000, maxClipDurationMs: 5_000, seed: 7, variants: 1, fps: 30, preferUnusedMedia: true, templateId: 'template-1', usePexels: true })));
     await missingPage.goto(`${baseUrl}/edit/script`, { waitUntil: 'domcontentloaded' }); await missingPage.waitForTimeout(500);
     const missingToggle = missingPage.locator('.source-provider input[type="checkbox"]');
-    assert.equal(await missingToggle.isDisabled(), true); assert.equal(await missingToggle.isChecked(), false); assert.match(await missingPage.locator('.source-provider').innerText(), /未配置/u); assert.equal(await missingPage.getByRole('link', { name: '前往设置' }).count(), 1); await missingPage.close();
+    assert.equal(await missingToggle.isDisabled(), true); assert.equal(await missingToggle.isChecked(), false); assert.equal(await missingPage.getByLabel('素材目录 1').inputValue(), 'F:\\MIZAN'); assert.equal(await missingPage.getByLabel('输出文件夹').inputValue(), 'F:\\OUTPUT'); assert.match(await missingPage.locator('.source-provider').innerText(), /未配置/u); assert.equal(await missingPage.getByRole('link', { name: '前往设置' }).count(), 1); await missingPage.close();
 
     const fixtureDir = process.env.CONTENTOS_BROWSER_FIXTURE_DIR!;
     const fixture = process.env.CONTENTOS_BROWSER_FIXTURE_VIDEO!;

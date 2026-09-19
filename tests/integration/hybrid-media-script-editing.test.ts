@@ -69,6 +69,26 @@ test('closure external candidate pool avoids duplicate provider identities when 
   try { const result = await service.resolve({ workspaceId: 'duplicate-workspace', script: '商业合作需要不同观点。商业合作需要不同选择。', localAssets: [], usePexels: true, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 }); const identities = result.resolvedAssignments.map((assignment) => assignment.selectedAssetId); assert.equal(new Set(identities).size, identities.length); } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('entity integrity keeps place-only local material as a marked fallback', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-hybrid-entity-fallback-')); const fixture = join(root, 'fixture.mp4'); await writeFile(fixture, 'video');
+  const storage = new LocalStorageProvider(join(root, 'storage')); const provider = new FakeExternalVideoProvider(fixture); const service = new HybridMediaService({ importFile: async () => ({ id: 'external', projectId: '', checksum: 'sha256:external', storageKey: 'objects/external.mp4', byteSize: 5, status: 'READY' as const }) } as never, storage, provider);
+  try {
+    const result = await service.resolve({ workspaceId: 'entity-fallback-workspace', script: 'MIZAN正在波兰发展。', localAssets: [{ id: 'poland-street', storageKey: 'poland', sourcePath: 'Poland-Warsaw-street.mp4', durationMs: 8_000, tags: ['波兰', '华沙'] }], usePexels: false });
+    assert.equal(result.resolvedAssignments[0]?.selectedAssetId, 'poland-street'); assert.notEqual(result.resolvedAssignments[0]?.selectedRole, 'AUTHENTIC_ENTITY'); assert.equal(result.resolvedAssignments[0]?.selectedRole, 'PLACE_CONTEXT'); assert.equal(result.resolvedAssignments[0]?.entityFallback, true);
+    const planned = buildScriptMontageManifest({ workspaceId: 'entity-fallback-workspace', script: 'MIZAN正在波兰发展。', sentences: [], assets: [{ id: 'poland-street', storageKey: 'poland', sourcePath: 'Poland-Warsaw-street.mp4', durationMs: 8_000, tags: ['波兰', '华沙'] }], resolvedAssignments: result.resolvedAssignments, seed: 1, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 });
+    assert.equal(planned.manifest.timeline[0]?.matching?.selectedRole, 'PLACE_CONTEXT'); assert.equal(planned.manifest.timeline[0]?.matching?.entityFallback, true); assert.notEqual(planned.manifest.timeline[0]?.matching?.selectedRole, 'AUTHENTIC_ENTITY');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('external reuse is explicit after the two-candidate pool is exhausted', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-hybrid-external-reuse-')); const fixture = join(root, 'fixture.mp4'); await writeFile(fixture, 'video');
+  const storage = new LocalStorageProvider(join(root, 'storage')); const provider = new FakeExternalVideoProvider(fixture); let index = 0; const service = new HybridMediaService({ importFile: async () => ({ id: `external-${++index}`, projectId: '', checksum: `sha256:${index}`, storageKey: `objects/${index}.mp4`, byteSize: 5, status: 'READY' as const }) } as never, storage, provider);
+  try {
+    const result = await service.resolve({ workspaceId: 'external-reuse-workspace', script: '商业合作正在推进。商业合作正在推进。商业合作正在推进。', localAssets: [], usePexels: true, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 });
+    assert.equal(result.resolvedAssignments.length, 3); assert.notEqual(result.resolvedAssignments[0]?.selectedAssetId, result.resolvedAssignments[1]?.selectedAssetId); assert.notEqual(result.resolvedAssignments[0]?.allowAssetReuse, true); assert.notEqual(result.resolvedAssignments[1]?.allowAssetReuse, true); assert.equal(result.resolvedAssignments[2]?.allowAssetReuse, true); assert.match(result.resolvedAssignments[2]?.reason || '', /复用/u);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('closure external failure uses a marked generic/entity fallback and counts it once', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-hybrid-fallback-')); const fixture = join(root, 'fixture.mp4'); await writeFile(fixture, 'video'); const previous = process.env.CONTENTOS_FAKE_PEXELS_FAILURE; process.env.CONTENTOS_FAKE_PEXELS_FAILURE = '1';
   const storage = new LocalStorageProvider(join(root, 'storage')); const provider = new FakeExternalVideoProvider(fixture); const service = new HybridMediaService({ importFile: async () => ({ id: 'never', projectId: '', checksum: 'sha256:never', storageKey: 'never', byteSize: 5, status: 'READY' as const }) } as never, storage, provider);

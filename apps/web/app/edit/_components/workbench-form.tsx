@@ -51,6 +51,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
   const [usePexels, setUsePexels] = useState(false);
   const [pexelsStatus, setPexelsStatus] = useState<'unknown' | 'ready' | 'missing'>('unknown');
   const [pexelsHealth, setPexelsHealth] = useState<boolean | null>(null);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [uploadingVoice, setUploadingVoice] = useState(false);
   const [message, setMessage] = useState('');
@@ -69,6 +70,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       if (saved.templateId) setTemplateId(saved.templateId);
       if (saved.usePexels !== undefined) setUsePexels(saved.usePexels);
     } catch { /* ignore malformed local preferences */ }
+    setSettingsLoaded(true);
   }, [mode]);
 
   useEffect(() => {
@@ -92,10 +94,11 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
   }, [copyId, mode, pexelsStatus]);
 
   useEffect(() => {
+    if (!settingsLoaded) return;
     window.localStorage.setItem(`contentos-edit-settings-${mode}`, JSON.stringify({ roots, outputRoot, minClipDurationMs, maxClipDurationMs, seed, variants, fps, preferUnusedMedia, templateId, usePexels }));
-  }, [mode, roots, outputRoot, minClipDurationMs, maxClipDurationMs, seed, variants, fps, preferUnusedMedia, templateId, usePexels]);
+  }, [mode, roots, outputRoot, minClipDurationMs, maxClipDurationMs, seed, variants, fps, preferUnusedMedia, templateId, usePexels, settingsLoaded]);
 
-  useEffect(() => { if (mode !== 'SCRIPT') return; void fetch('/api/v1/media-providers').then(async (response) => { if (!response.ok) throw new Error('provider status unavailable'); return await response.json() as { items?: Array<{ id: string; configured: boolean; healthy?: boolean | null }> }; }).then((data) => { const provider = data.items?.find((item) => item.id === 'pexels' || item.id === 'fake-pexels'); if (provider?.configured) { setPexelsStatus('ready'); setPexelsHealth(provider.healthy ?? null); } else { setPexelsStatus('missing'); setPexelsHealth(null); setUsePexels(false); window.localStorage.setItem(`contentos-edit-settings-${mode}`, JSON.stringify({ roots, outputRoot, minClipDurationMs, maxClipDurationMs, seed, variants, fps, preferUnusedMedia, templateId, usePexels: false })); } }).catch(() => { setPexelsStatus('unknown'); setPexelsHealth(null); }); }, [mode]);
+  useEffect(() => { if (mode !== 'SCRIPT') return; void fetch('/api/v1/media-providers').then(async (response) => { if (!response.ok) throw new Error('provider status unavailable'); return await response.json() as { items?: Array<{ id: string; configured: boolean; healthy?: boolean | null }> }; }).then((data) => { const provider = data.items?.find((item) => item.id === 'pexels' || item.id === 'fake-pexels'); if (provider?.configured) { setPexelsStatus('ready'); setPexelsHealth(provider.healthy ?? null); } else { setPexelsStatus('missing'); setPexelsHealth(null); setUsePexels(false); } }).catch(() => { setPexelsStatus('unknown'); setPexelsHealth(null); }); }, [mode]);
 
   const updateItem = (index: number, patch: Partial<Item>) => setItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
   const addRoot = () => setRoots((current) => [...current, '']);

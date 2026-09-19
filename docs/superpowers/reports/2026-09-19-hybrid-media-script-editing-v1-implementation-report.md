@@ -3,7 +3,7 @@
 Date: 2026-09-19
 Branch: `codex/hybrid-media-script-editing-v1`
 Base SHA: `7961b5e04f99544159d600865622bc16e8f0e248`
-Final SHA: d32549d (closure implementation commit)
+Final SHA: populated after the Final Entity Integrity Closure commit
 
 ## Delivery status
 
@@ -21,8 +21,9 @@ montage manifest. No merge to `main` was performed.
   小陈, 波兰, 华沙 and 中欧; generic concepts such as 物流、市场、讨论 and
   商业合作 are not promoted to authentic entities.
 - **Authentic Entity Protection:** authentic brand/company/person/product
-  segments require a strong local entity match. An external result is never
-  labelled as an authentic entity when the local asset is missing.
+  segments require a direct match against `matchedAuthenticEntities`; place-only
+  hits such as Poland cannot be promoted to `AUTHENTIC_ENTITY`. An external
+  result is never labelled as an authentic entity when the local asset is missing.
 - **Neutral B-roll Fallback:** place context is labelled `PLACE_CONTEXT`; other
   unresolved entity segments use `NEUTRAL_BROLL` with `entityFallback: true`.
 - **Local Candidate Ranking:** matching uses asset name, path, tags and metadata,
@@ -51,6 +52,26 @@ montage manifest. No merge to `main` was performed.
   plus external source statistics.
 
 ## Final Closure
+
+### Final Entity Integrity Closure
+
+- **Authentic entity exact match:** local ranking now reports authentic entity,
+  place and keyword matches independently. `AUTHENTIC_ENTITY` selection requires
+  at least one direct authentic entity match, not merely a high aggregate score.
+- **Place-context fallback:** a Poland-only clip for “MIZAN正在波兰发展” remains
+  `PLACE_CONTEXT` with `entityFallback=true`; the resolved assignment and final
+  manifest preserve that protection. A direct MIZAN clip remains authentic and
+  reusable under the existing explicit reuse rule.
+- **External unused pool:** resolver selection explicitly filters ranked results
+  by provider identity before choosing a fresh candidate; once the pool is
+  exhausted, reuse is marked with an explicit reason and `allowAssetReuse=true`.
+- **Provider-missing settings preservation:** settings hydration completes before
+  persistence, and missing Provider status only disables Pexels. Existing roots,
+  output directory and template remain unchanged; unknown status does not clear
+  anything.
+- **Health cache bypass:** Pexels `health()` performs a minimal uncached request
+  and does not write search cache entries, while ordinary `search()` caching is
+  unchanged.
 
 - External identity reuse is tracked separately from local Asset IDs; fresh
   provider identities are preferred and explicit reuse is recorded when the
@@ -81,14 +102,14 @@ montage manifest. No merge to `main` was performed.
 All gates below were run locally against PostgreSQL on `127.0.0.1:55433` where
 the suite requires a database:
 
-- `pnpm format` — 415 files checked
-- `pnpm lint` — 149 TypeScript files passed
+- `pnpm format` — 334 files checked
+- `pnpm lint` — 138 TypeScript files passed
 - `pnpm typecheck` — passed
-- `pnpm test` — 259/259 passed
+- `pnpm test` — 263/263 passed
 - `pnpm test:migrations` — 9/9 passed
 - `pnpm test:auto-edit-v1` — 25/25 passed
 - `pnpm test:auto-edit-v15` — 19/19 passed
-- `pnpm test:browser` — 3/3 passed (Auto Edit, Editing Workbench, Hybrid)
+- `pnpm test:browser` — 3/3 passed (Auto Edit, Editing Workbench, Hybrid, including settings preservation)
 - `pnpm build` — passed
 - `pnpm --dir apps/web build` — passed, 13/13 routes generated
 - `pnpm doctor` — passed with one non-blocking warning about the global pnpm
