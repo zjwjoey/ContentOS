@@ -1,3 +1,4 @@
+import { validatePresentationSettings, type PresentationSettingsV1 } from './edit-presentation.js';
 export type EditModeV1 = 'SCRIPT' | 'RANDOM';
 
 export interface ScriptSentenceV1 {
@@ -52,7 +53,7 @@ export interface EditManifestV0 {
   /** Standalone ownership; mutually exclusive with projectId. */
   workspaceId?: string;
   seed: number;
-  canvas: { width: 1080; height: 1920; aspectRatio: '9:16'; fps: number };
+  canvas: { width: number; height: number; aspectRatio: '9:16' | '16:9' | '1:1'; fps: number; fitMode?: 'FILL' | 'CONTAIN' | 'BLUR_BACKGROUND' };
   timeline: ManifestClip[];
   audio: { voiceAssetId?: string; voicePath?: string; volume: number; backgroundMusic?: { assetId?: string; path: string; volume: number; loop?: boolean; category?: string; ducking?: { enabled: boolean; voiceVolume?: number; musicVolume?: number } } };
   subtitles?: Array<{ text: string; startMs: number; endMs: number; style?: 'simple' | 'commercial' | 'emphasis'; font?: string; fontSize?: number; position?: 'top' | 'center' | 'bottom'; outline?: boolean; background?: boolean; maxLines?: number }>;
@@ -72,6 +73,10 @@ export interface EditManifestV0 {
     templateId?: string;
     plannerVersion?: string;
     warnings?: string[];
+    presentationSettings?: PresentationSettingsV1;
+    rawScript?: string;
+    cleanedScript?: string;
+    confirmedSegments?: string[];
   };
   output: { format: 'mp4'; videoCodec: 'mpeg4' | 'h264'; audioCodec: 'aac' };
 }
@@ -81,7 +86,7 @@ export function validateEditManifest(manifest: EditManifestV0): void {
   const hasProject = typeof manifest.projectId === 'string' && manifest.projectId.trim().length > 0;
   const hasWorkspace = typeof manifest.workspaceId === 'string' && manifest.workspaceId.trim().length > 0;
   if (hasProject === hasWorkspace || manifest.timeline.length === 0) throw new Error('Edit manifest requires exactly one project or workspace owner and a timeline');
-  if (manifest.canvas.width !== 1080 || manifest.canvas.height !== 1920 || manifest.canvas.aspectRatio !== '9:16') throw new Error('Edit manifest canvas must be 9:16 1080x1920');
+  if (!Number.isInteger(manifest.canvas.width) || !Number.isInteger(manifest.canvas.height) || manifest.canvas.width <= 0 || manifest.canvas.height <= 0 || manifest.canvas.width % 2 || manifest.canvas.height % 2 || !['9:16', '16:9', '1:1'].includes(manifest.canvas.aspectRatio)) throw new Error('Edit manifest canvas dimensions are invalid');
   if (!Number.isInteger(manifest.canvas.fps) || manifest.canvas.fps < 1 || manifest.canvas.fps > 120) throw new Error('Edit manifest canvas fps is invalid');
   if (manifest.timeline.some((clip) => clip.durationMs <= 0 || clip.sourceInMs < 0)) throw new Error('Edit manifest contains invalid clip timing');
   if (manifest.metadata?.editMode !== 'RANDOM' && manifest.timeline.some((clip, index) => index > 0 && clip.assetId === manifest.timeline[index - 1]?.assetId && !clip.matching?.allowAssetReuse && !manifest.timeline[index - 1]?.matching?.allowAssetReuse && manifest.timeline.length > 1)) throw new Error('Adjacent duplicate clips are not allowed');
@@ -96,5 +101,6 @@ export function validateEditManifest(manifest: EditManifestV0): void {
   if (manifest.textOverlays?.some((overlay) => overlay.endMs <= overlay.startMs || overlay.startMs < 0 || (overlay.fontSize !== undefined && overlay.fontSize <= 0))) throw new Error('Edit manifest text overlay timing/style is invalid');
   if (manifest.audio.backgroundMusic && (!manifest.audio.backgroundMusic.path.trim() || manifest.audio.backgroundMusic.volume < 0 || manifest.audio.backgroundMusic.volume > 1)) throw new Error('Edit manifest background music is invalid');
   if (manifest.metadata?.sentences && manifest.metadata.sentences.some((sentence) => !Number.isInteger(sentence.index) || sentence.index < 0 || !sentence.text.trim() || !sentence.normalizedText.trim() || (sentence.voiceStartMs !== undefined && sentence.voiceEndMs !== undefined && sentence.voiceEndMs <= sentence.voiceStartMs))) throw new Error('Edit manifest sentence metadata is invalid');
+  if (manifest.metadata?.presentationSettings) validatePresentationSettings(manifest.metadata.presentationSettings);
   if (manifest.metadata && Object.values(manifest.metadata).some((value) => value !== undefined && !String(value).trim())) throw new Error('Edit manifest provenance metadata must be non-empty when present');
 }

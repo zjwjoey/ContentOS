@@ -94,6 +94,20 @@ test('FFmpeg renderer mixes looped BGM and renders every subtitle/hero cue', asy
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('FFmpeg renderer honors dynamic canvas ratios and fit modes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-render-presentation-test-')); const clip = join(root, 'clip.mp4');
+  try {
+    await generateFixtureVideo(clip, ffmpeg, 'purple', 2);
+    const base: EditManifestV0 = { schemaVersion: 'EDIT_MANIFEST_V0', workspaceId: 'workspace-presentation', seed: 1, canvas: { width: 1920, height: 1080, aspectRatio: '16:9', fps: 30, fitMode: 'CONTAIN' }, timeline: [{ assetId: 'clip', sourcePath: clip, sourceInMs: 0, durationMs: 1_000, transition: 'cut' }], audio: { volume: 1 }, output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' } };
+    const contain = await renderEditManifest({ manifest: base, outputPath: join(root, 'contain.mp4'), ffmpegPath: ffmpeg, ffprobePath: ffprobe });
+    assert.equal(contain.width, 1920); assert.equal(contain.height, 1080);
+    const presentation = { schemaVersion: 'EDIT_PRESENTATION_V1' as const, canvas: { ...base.canvas, fitMode: 'BLUR_BACKGROUND' as const }, subtitleStyle: { schemaVersion: 'EDIT_PRESENTATION_V1' as const, fontId: 'sans-serif', fontSize: 42, color: '#FFFFFF', outline: { enabled: true, color: '#000000', width: 2 }, shadow: { enabled: true, color: '#000000', x: 2, y: 2, blur: 0 }, background: { enabled: true, color: '#000000', opacity: .4, padding: 8 }, position: { x: .5, y: .8 }, align: 'CENTER' as const, maxWidth: .88, maxLines: 2, lineHeight: 1.2, animation: 'FADE_IN' as const }, segmentation: { mode: 'COMMA_SENTENCE' as const } };
+    const blurManifest: EditManifestV0 = { ...base, canvas: { ...base.canvas, fitMode: 'BLUR_BACKGROUND' }, metadata: { presentationSettings: presentation }, subtitles: [{ text: '字幕测试', startMs: 0, endMs: 900 }] };
+    const blur = await renderEditManifest({ manifest: blurManifest, outputPath: join(root, 'blur.mp4'), ffmpegPath: ffmpeg, ffprobePath: ffprobe, fontFile: process.env.FFMPEG_FONT_FILE || 'C:\\Windows\\Fonts\\msyh.ttc' });
+    assert.equal(blur.width, 1920); assert.equal(blur.height, 1080);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('FFmpeg fixture matrix covers the ten required render combinations', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-render-matrix-test-'));
   const clipA = join(root, 'clip-a.mp4'); const clipB = join(root, 'clip-b.mp4'); const voice = join(root, 'voice.wav'); const music = join(root, 'music.wav');

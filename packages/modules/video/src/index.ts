@@ -10,6 +10,9 @@ export type { CurrentRenderSummary, RenderHistorySummary, VideoJobProgressSummar
 export type { BuildManifestInput, PlannerAsset, RandomMontageInput, ResolvedVisualAssignment } from './planner.js';
 export type { StoryboardPlannerAsset, StoryboardPlannerDecision, StoryboardPlannerInput, StoryboardPlannerResult, StoryboardPlannerScene } from './planner.js';
 export type { ScriptSentence, SegmentScriptOptions } from './sentence-segmenter.js';
+export { cleanAndSegmentScriptV1, cleanScriptTextV1, mergeScriptSegmentsV1, removeEmptyScriptSegmentsV1, splitScriptSegmentV1 } from './script-cleaner.js';
+export type { CleanScriptResultV1, ScriptCleaningModeV1, ScriptCleaningOptionsV1 } from './script-cleaner.js';
+export { applyPresentationSettings } from './presentation-compiler.js';
 export { calculateSentenceRequiredDurationMs } from './planner.js';
 export type { RandomSentenceMontageInput, ScriptMontageInput, SentenceMontageAsset, SentenceMontageBaseInput, SentenceMontageDecision, SentenceMontageResult, TimedScriptSentence } from './planner.js';
 export type { BrandingAsset, BrandingConfig } from './planner.js';

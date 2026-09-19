@@ -36,6 +36,7 @@ function escapeFilterText(text: string): string {
   return text.replaceAll('\\', '\\\\').replaceAll(':', '\\:').replaceAll(',', '\\,').replaceAll(';', '\\;').replaceAll('[', '\\[').replaceAll(']', '\\]').replaceAll('\n', ' ');
 }
 function escapeFilterPath(path: string): string { return path.replaceAll('\\', '/').replaceAll(':', '\\:').replaceAll(',', '\\,').replaceAll(';', '\\;'); }
+function ffmpegColor(value: string): string { return value.startsWith('#') ? `0x${value.slice(1)}` : value; }
 
 export async function generateFixtureVideo(path: string, ffmpegPath: string, color?: string, durationSeconds = 2): Promise<void> {
   const input = color ? `color=c=${color}:size=640x360:rate=30` : 'testsrc=size=640x360:rate=30';
@@ -76,6 +77,9 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   if (musicIndex >= 0 && manifest.audio.backgroundMusic?.path) { if (manifest.audio.backgroundMusic.loop !== false) args.push('-stream_loop', '-1'); args.push('-i', manifest.audio.backgroundMusic.path); }
   const filters: string[] = [];
   const outputFps = Math.max(1, Number(manifest.canvas.fps || 30));
+  const canvasWidth = Math.max(2, Number(manifest.canvas.width || 1080));
+  const canvasHeight = Math.max(2, Number(manifest.canvas.height || 1920));
+  const fitMode = manifest.canvas.fitMode || manifest.metadata?.presentationSettings?.canvas.fitMode || 'FILL';
   const visualDurations = manifest.timeline.map((clip) => clip.timelineStartMs !== undefined && clip.timelineEndMs !== undefined ? Math.max(clip.durationMs, clip.timelineEndMs - clip.timelineStartMs) : clip.durationMs);
   let visualCursorMs = 0;
   const firstStart = manifest.timeline[0]?.timelineStartMs ?? 0;
@@ -103,13 +107,19 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
         const textFile = overlayDir ? join(overlayDir, `${fileIndex}.txt`) : undefined;
         const start = Math.max(0, (item.startMs - localStart) / 1000); const end = Math.max(start + 0.001, (item.endMs - localStart) / 1000);
         if (end <= 0 || start >= visualDurationMs / 1000) return '';
-        const y = item.position === 'top' ? '180' : item.position === 'center' ? '(h-text_h)/2' : 'h-220';
-        const color = kind === 'hero' || item.style === 'emphasis' ? 'white' : item.style === 'commercial' ? '0xEAF4FF' : 'white';
-        const size = item.fontSize ?? (kind === 'hero' ? 64 : 48);
-        const outline = item.style === 'commercial' || kind === 'hero' ? ':borderw=2:bordercolor=black@0.75' : '';
-        const background = item.style === 'simple' ? '' : ':box=1:boxcolor=black@0.45:boxborderw=12';
+        const presentation = manifest.metadata?.presentationSettings?.subtitleStyle;
+        const x = presentation ? `(w-text_w)*${presentation.position.x}` : '(w-text_w)/2';
+        const y = presentation ? `(h-text_h)*${presentation.position.y}` : (item.position === 'top' ? '180' : item.position === 'center' ? '(h-text_h)/2' : 'h-220');
+        const color = presentation?.color ? presentation.color.replace('#', '0x') : (kind === 'hero' || item.style === 'emphasis' ? 'white' : item.style === 'commercial' ? '0xEAF4FF' : 'white');
+        const size = presentation?.fontSize ?? item.fontSize ?? (kind === 'hero' ? 64 : 48);
+        const outline = presentation?.outline.enabled ? `:borderw=${presentation.outline.width}:bordercolor=${ffmpegColor(presentation.outline.color)}` : (item.style === 'commercial' || kind === 'hero' ? ':borderw=2:bordercolor=black@0.75' : '');
+        const shadow = presentation?.shadow.enabled ? `:shadowx=${presentation.shadow.x}:shadowy=${presentation.shadow.y}:shadowcolor=${ffmpegColor(presentation.shadow.color)}` : '';
+        const background = presentation?.background.enabled ? `:box=1:boxcolor=${ffmpegColor(presentation.background.color)}@${presentation.background.opacity}:boxborderw=${presentation.background.padding}` : (item.style === 'simple' ? '' : ':box=1:boxcolor=black@0.45:boxborderw=12');
+        const animation = presentation?.animation || 'NONE';
+        const animationExpr = animation === 'SLIDE_UP' ? `:y='${y}+if(lt(t-${start},1),40*(1-(t-${start})),0)'` : '';
         const textSource = textFile ? `textfile='${escapeFilterPath(textFile)}':expansion=none` : `text='${escapeFilterText(item.text)}'`;
-        return `,drawtext=fontfile='${escapeFilterPath(options.fontFile!)}':${textSource}:fontcolor=${color}:fontsize=${size}:x=(w-text_w)/2:y=${y}${outline}${background}:enable='between(t\\,${start.toFixed(3)}\\,${end.toFixed(3)})'`;
+        const fade = animation === 'FADE_IN' || animation === 'FADE_IN_OUT' ? `:alpha='if(lt(t-${start},0.25),(t-${start})/0.25,1)'` : animation === 'FADE_OUT' ? `:alpha='if(gt(${end}-t,0.25),1,(${end}-t)/0.25)'` : '';
+        return `,drawtext=fontfile='${escapeFilterPath(options.fontFile!)}':${textSource}:fontcolor=${color}:fontsize=${size}:x=${x}:y=${y}${outline}${shadow}${background}${animationExpr}${fade}:enable='between(t\\,${start.toFixed(3)}\\,${end.toFixed(3)})'`;
       };
       for (const [index, item] of (manifest.subtitles ?? []).entries()) overlays += draw(item, 'subtitle', index);
       const subtitleCount = manifest.subtitles?.length ?? 0;
@@ -117,7 +127,14 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
     }
     const pad = padMs > 0 ? `,tpad=stop_mode=clone:stop_duration=${padMs / 1000}` : '';
     const clipDurationSeconds = Math.max(0.001, clip.durationMs / 1000).toFixed(6);
-    filters.push(`[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,format=yuv420p,fps=${outputFps}:round=up,trim=duration=${clipDurationSeconds},setpts=PTS-STARTPTS${overlays}${pad},fps=${outputFps}:round=up,setpts=PTS-STARTPTS[v${i}]`);
+    const fill = `scale=${canvasWidth}:${canvasHeight}:force_original_aspect_ratio=increase,crop=${canvasWidth}:${canvasHeight}`;
+    const contain = `scale=${canvasWidth}:${canvasHeight}:force_original_aspect_ratio=decrease,pad=${canvasWidth}:${canvasHeight}:(ow-iw)/2:(oh-ih)/2:color=black`;
+    const normalized = fitMode === 'CONTAIN' ? contain : fill;
+    if (fitMode === 'BLUR_BACKGROUND') {
+      filters.push(`[${i}:v]split=2[bg${i}][fg${i}];[bg${i}]${fill},boxblur=12:2[bgf${i}];[fg${i}]${contain}[fgf${i}];[bgf${i}][fgf${i}]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p,fps=${outputFps}:round=up,trim=duration=${clipDurationSeconds},setpts=PTS-STARTPTS${overlays}${pad},fps=${outputFps}:round=up,setpts=PTS-STARTPTS[v${i}]`);
+    } else {
+      filters.push(`[${i}:v]${normalized},setsar=1,format=yuv420p,fps=${outputFps}:round=up,trim=duration=${clipDurationSeconds},setpts=PTS-STARTPTS${overlays}${pad},fps=${outputFps}:round=up,setpts=PTS-STARTPTS[v${i}]`);
+    }
     globalOffsetMs += visualDurationMs;
   }
   if (manifest.timeline.length === 1) filters.push('[v0]null[vout]');
@@ -146,7 +163,7 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
     const probe = await probeMedia(tempOutput, ffprobePath, options.signal);
     const requiresAudio = Boolean(manifest.audio.voicePath || manifest.audio.backgroundMusic?.path);
     const codecValid = probe.videoCodec === manifest.output.videoCodec && (!requiresAudio || probe.audioCodec === manifest.output.audioCodec);
-    if (probe.format !== 'mp4' || probe.width !== 1080 || probe.height !== 1920 || probe.durationMs <= 0 || (requiresAudio && !probe.audio) || !codecValid) throw new Error(`Rendered output failed MP4/1080x1920/codec validation: ${JSON.stringify(probe)}`);
+    if (probe.format !== 'mp4' || probe.width !== canvasWidth || probe.height !== canvasHeight || probe.durationMs <= 0 || (requiresAudio && !probe.audio) || !codecValid) throw new Error(`Rendered output failed MP4/${canvasWidth}x${canvasHeight}/codec validation: ${JSON.stringify(probe)}`);
     await rename(tempOutput, outputPath);
     if (overlayDir) await rm(overlayDir, { recursive: true, force: true });
     return { outputPath, ...probe };

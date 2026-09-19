@@ -224,6 +224,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
     if (!parsed.success) return reply.code(422).send({ error: { code: 'EDIT_INPUT_INVALID', message: '请检查文案、素材目录和剪辑参数。', details: parsed.error.issues } });
     try {
       const input = parsed.data;
+      const presentationSettings = (request.body as { presentationSettings?: unknown } | undefined)?.presentationSettings;
       const outputRoot = input.outputRoot ? await authorizeOutputRoot(input.outputRoot, dependencies.localPathAccess) : null;
       if (input.usePexels && !process.env.PEXELS_API_KEY && process.env.CONTENTOS_FAKE_PEXELS !== '1') throw new Error('PEXELS_NOT_CONFIGURED');
       const sessionId = `edit-session-${randomUUID()}`;
@@ -240,7 +241,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
       const transaction = await dependencies.db.connect();
       try {
         await transaction.query('begin');
-        await transaction.query('insert into edit_workbench_sessions (id, mode, title, script, source_roots, output_root, settings) values ($1,$2,$3,$4,$5,$6,$7)', [sessionId, input.mode, title, input.script || null, JSON.stringify(scanned.scans.map(({ files: _files, ...scan }) => scan)), outputRoot, { seed: input.seed ?? 1, variants: input.variants, fps: input.fps, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, usePexels: input.usePexels, testOnly: input.testOnly, sourceWorkspaceId, requestedItems, scanAssets: scanned.assets, ...(input.templateId ? { templateId: input.templateId } : {}) }]);
+        await transaction.query('insert into edit_workbench_sessions (id, mode, title, script, source_roots, output_root, settings) values ($1,$2,$3,$4,$5,$6,$7)', [sessionId, input.mode, title, input.script || null, JSON.stringify(scanned.scans.map(({ files: _files, ...scan }) => scan)), outputRoot, { seed: input.seed ?? 1, variants: input.variants, fps: input.fps, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, usePexels: input.usePexels, testOnly: input.testOnly, sourceWorkspaceId, requestedItems, scanAssets: scanned.assets, ...(input.templateId ? { templateId: input.templateId } : {}), ...(presentationSettings ? { presentationSettings } : {}) }]);
         await transaction.query('insert into edit_batches (id, session_id, mode, status, total_count) values ($1,$2,$3,$4,$5)', [batchId, sessionId, input.mode, 'RUNNING', durableItems.length]);
         for (const durable of durableItems) {
           await transaction.query("insert into video_workspaces (id, type, project_id) values ($1, 'STANDALONE', null)", [durable.workspaceId]);
@@ -328,7 +329,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
         return String((item as { path?: unknown }).path || '');
       }).filter(Boolean)
       : [];
-    return { id: batchId, mode: String(row.mode), title: String(row.title), script: row.script ? String(row.script) : '', sourceRoots, outputRoot: row.output_root ? String(row.output_root) : '', settings: { minClipDurationMs: Number(settings.minClipDurationMs || 2_000), maxClipDurationMs: Number(settings.maxClipDurationMs || 5_000), seed: Number(settings.seed || 1), variants: Number(settings.variants || 1), fps: Number(settings.fps || 30), preferUnusedMedia: settings.preferUnusedMedia !== false, usePexels: settings.usePexels === true, templateId: typeof settings.templateId === 'string' ? settings.templateId : '' }, items: requestedItems };
+    return { id: batchId, mode: String(row.mode), title: String(row.title), script: row.script ? String(row.script) : '', sourceRoots, outputRoot: row.output_root ? String(row.output_root) : '', settings: { minClipDurationMs: Number(settings.minClipDurationMs || 2_000), maxClipDurationMs: Number(settings.maxClipDurationMs || 5_000), seed: Number(settings.seed || 1), variants: Number(settings.variants || 1), fps: Number(settings.fps || 30), preferUnusedMedia: settings.preferUnusedMedia !== false, usePexels: settings.usePexels === true, templateId: typeof settings.templateId === 'string' ? settings.templateId : '', ...(settings.presentationSettings ? { presentationSettings: settings.presentationSettings } : {}) }, items: requestedItems };
   });
 
   app.get('/api/v1/edit/batches/:batchId/items/:itemId/output', async (request, reply) => {

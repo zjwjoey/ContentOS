@@ -6,6 +6,8 @@ import { segmentScriptSentences } from './sentence-segmenter.js';
 import type { VideoAdjustmentService } from './quick-edit-service.js';
 import type { VideoEditPreset, VideoEditPresetService } from './preset-service.js';
 import type { VideoService } from './video-service.js';
+import { applyPresentationSettings } from './presentation-compiler.js';
+import type { PresentationSettingsV1 } from '../../../contracts/src/index.js';
 
 export interface EditingWorkbenchPreparationDependencies {
   assetService: AssetService;
@@ -32,6 +34,7 @@ export interface EditingWorkbenchPreparationInput {
   templateId?: string;
   renderIdempotencySuffix?: string;
   resolvedAssignments?: ResolvedVisualAssignment[];
+  presentationSettings?: PresentationSettingsV1;
 }
 
 export interface EditingWorkbenchPreparationResult {
@@ -100,7 +103,8 @@ export async function prepareEditingWorkbenchItem(
       planned = buildRandomSentenceMontageManifest({ workspaceId: input.workspaceId, sentences, assets: input.assets, seed: input.seed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });
     }
   }
-  planned.manifest.canvas.fps = input.fps;
+  planned.manifest = applyPresentationSettings(planned.manifest, input.presentationSettings);
+  planned.manifest.canvas.fps = input.presentationSettings?.canvas.fps || input.fps;
   if (preset?.introAssetId || preset?.outroAssetId) {
     const branding = {
       ...(preset.introAssetId ? { intro: await dependencies.assets.getReadyGlobalVideoAssetContent(preset.introAssetId).then(async (asset) => {
