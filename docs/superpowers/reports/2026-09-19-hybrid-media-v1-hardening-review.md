@@ -25,3 +25,23 @@ Branch: `codex/hybrid-media-script-editing-v1`
 
 This review is the starting audit; the implementation report records the final
 status and concrete gate counts after the fixes below.
+
+## Final status matrix
+
+| Finding | Final status | Evidence |
+| --- | --- | --- |
+| Segment → selected asset is preserved through Manifest | FIXED | Resolved assignments are consumed by exact `assetId` in the montage manifest; integration test covers A/B/C ordering. |
+| Entity classification distinguishes proper entities from concepts | FIXED | Known-entity registry plus concept/stopword filtering. |
+| Authentic entity protection and neutral fallback role | FIXED | Local-first threshold, explicit `entityFallback`, `AUTHENTIC_ENTITY`/`NEUTRAL_BROLL`/`PLACE_CONTEXT` roles. |
+| Pexels file quality/ranking | FIXED | Portrait-first, 9:16 distance, preferred resolution tier and HTTPS host allowlist. |
+| Persistent search cache | FIXED | `external_media_search_cache`; second DB-backed resolve does not call provider search. |
+| Provider-identity download cache | FIXED | `external_media_assets` lookup prevents a second provider download. |
+| External asset provenance | FIXED | External relation stores provider asset/file identity and JSON provenance; asset metadata carries external identity. |
+| Staging cleanup on every failure | FIXED | `finally` removes the staging path. |
+| SSRF/size/redirect/abort safeguards | FIXED | HTTPS host allowlist, bounded redirects, content type, byte limit and abort. |
+| GET provider status avoids network calls | FIXED | GET reads cached status; POST performs and persists health. |
+| Source UI placement and unconfigured state | FIXED | Source controls are outside Advanced with Settings action and unknown-state handling. |
+| Copy task preserves `usePexels` | FIXED | Copy/config path carries the source toggle. |
+| History source stats and phases | FIXED | API and UI expose source counts and phase labels. |
+| External-only and graceful fallback | FIXED | Browser and integration coverage include external-only retrieval, local fallback warnings and clear no-source error. |
+| Default unit/integration/browser gates | FIXED | Hybrid tests are registered in `pnpm test`; browser harness runs 3/3 flows. |

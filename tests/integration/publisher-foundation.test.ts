@@ -65,7 +65,7 @@ test('Publisher foundation migration down and up restores its schema without ass
       const down = await migrateDown(db);
       assert.equal(down.removed, 1);
       removedCount += 1;
-      assert.ok(removedCount < 20, 'Publisher migration boundary was not reached');
+      assert.ok(removedCount < 30, 'Publisher migration boundary was not reached');
     }
     assert.ok(removedCount >= 1);
     const restored = await migrateUp(db);

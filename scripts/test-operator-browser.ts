@@ -136,6 +136,8 @@ async function main(): Promise<void> {
       WEB_PORT: String(webPort),
       CONTENTOS_API_URL: apiUrl,
       CONTENTOS_FAKE_PUBLISHER_CONTROLS: '1',
+      CONTENTOS_FAKE_PEXELS: '1',
+      CONTENTOS_FAKE_PEXELS_FIXTURE: fixtureVideos[1]!,
       CONTENTOS_LOCAL_MEDIA_ROOTS: temporaryRoot,
       CONTENTOS_OUTPUT_ROOTS: temporaryRoot,
     };

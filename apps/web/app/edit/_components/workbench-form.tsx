@@ -50,6 +50,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
   const [preferUnusedMedia, setPreferUnusedMedia] = useState(true);
   const [usePexels, setUsePexels] = useState(false);
   const [pexelsStatus, setPexelsStatus] = useState<'unknown' | 'ready' | 'missing'>('unknown');
+  const [pexelsHealth, setPexelsHealth] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [uploadingVoice, setUploadingVoice] = useState(false);
   const [message, setMessage] = useState('');
@@ -94,7 +95,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
     window.localStorage.setItem(`contentos-edit-settings-${mode}`, JSON.stringify({ roots, outputRoot, minClipDurationMs, maxClipDurationMs, seed, variants, fps, preferUnusedMedia, templateId, usePexels }));
   }, [mode, roots, outputRoot, minClipDurationMs, maxClipDurationMs, seed, variants, fps, preferUnusedMedia, templateId, usePexels]);
 
-  useEffect(() => { if (mode !== 'SCRIPT') return; void fetch('/api/v1/media-providers').then(async (response) => response.ok ? await response.json() as { items?: Array<{ id: string; configured: boolean }> } : { items: [] }).then((data) => setPexelsStatus(data.items?.find((item) => item.id === 'pexels' || item.id === 'fake-pexels')?.configured ? 'ready' : 'missing')).catch(() => setPexelsStatus('unknown')); }, [mode]);
+  useEffect(() => { if (mode !== 'SCRIPT') return; void fetch('/api/v1/media-providers').then(async (response) => response.ok ? await response.json() as { items?: Array<{ id: string; configured: boolean; healthy?: boolean | null }> } : { items: [] }).then((data) => { const provider = data.items?.find((item) => item.id === 'pexels' || item.id === 'fake-pexels'); setPexelsStatus(provider?.configured ? 'ready' : 'missing'); setPexelsHealth(provider?.healthy ?? null); }).catch(() => setPexelsStatus('unknown')); }, [mode]);
 
   const updateItem = (index: number, patch: Partial<Item>) => setItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
   const addRoot = () => setRoots((current) => [...current, '']);
@@ -215,7 +216,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
         {roots.length > 1 && <button type="button" onClick={() => removeRoot(index)}>删除</button>}
       </div>)}
       <button type="button" className="secondary-action" onClick={addRoot}>+ 添加素材文件夹</button>
-      {mode === 'SCRIPT' && <div className="source-provider"><strong>素材来源</strong><label className="inline-check"><input type="checkbox" checked={usePexels} disabled={pexelsStatus === 'missing'} onChange={(event) => setUsePexels(event.target.checked)} />本地素材优先，Pexels 作为缺口兜底</label>{pexelsStatus === 'missing' && <p className="muted">Pexels 未配置，<Link href="/settings">前往设置</Link> 后可启用。</p>}{pexelsStatus === 'unknown' && <p className="muted">正在读取服务状态；未配置时该选项会自动禁用。</p>}</div>}
+      {mode === 'SCRIPT' && <div className="source-provider"><strong>素材来源</strong><label className="inline-check"><input type="checkbox" checked={usePexels} disabled={pexelsStatus === 'missing'} onChange={(event) => setUsePexels(event.target.checked)} />本地素材优先，Pexels 作为缺口兜底</label>{pexelsStatus === 'ready' && <p className="muted">Pexels {pexelsHealth === true ? '● 已连接' : '● 已配置（尚未测试）'}</p>}{pexelsStatus === 'missing' && <p className="muted">Pexels ○ 未配置，<Link href="/settings">前往设置</Link> 后可启用。</p>}{pexelsStatus === 'unknown' && <p className="muted">正在读取服务状态；未配置时该选项会自动禁用。</p>}<p className="muted">本地真实素材优先，缺少通用画面时自动补充网络素材。</p></div>}
       <p className="muted">目录离开输入框后会自动验证和扫描，结果会保存在本次剪辑的来源快照中。</p>
     </section>
     <section className="card">

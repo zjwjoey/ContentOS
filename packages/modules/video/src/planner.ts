@@ -180,6 +180,7 @@ export interface ResolvedVisualAssignment {
   selectedSource: 'LOCAL' | 'PEXELS' | 'FAKE_PEXELS';
   selectedRole: 'AUTHENTIC_ENTITY' | 'NEUTRAL_BROLL' | 'GENERIC_BROLL' | 'PLACE_CONTEXT';
   entityFallback: boolean;
+  matchScore?: number;
   searchQuery?: string;
   reason: string;
   visualIntent: string;
@@ -274,7 +275,7 @@ export function buildScriptMontageManifest(input: ScriptMontageInput): SentenceM
       const assignment = byIndex.get(sentence.index); if (!assignment) throw new Error(`VisualPlan assignment missing for segment ${sentence.index}`);
       const asset = input.assets.find((candidate) => candidate.id === assignment.selectedAssetId); if (!asset) throw new Error(`VisualPlan assignment asset missing: ${assignment.selectedAssetId}`);
       const requestedDuration = sentenceDurationMs(sentence, minMs, maxMs); const timing = boundedAssetClip(asset, requestedDuration, random); if (!timing) throw new Error(`第${sentence.index + 1}句话需要足够长的画面素材。`);
-      const placement = visualTiming(sentences, sentence, sentence.index, visualCursor); visualCursor = placement.endMs; const matching: ClipMatchingV1 = { matchedKeywords: assignment.matchedKeywords, matchScore: assignment.entityFallback ? 0 : 100, fallback: assignment.entityFallback, matchingReason: assignment.reason, visualIntent: assignment.visualIntent, selectedSource: assignment.selectedSource, selectedRole: assignment.selectedRole, entityFallback: assignment.entityFallback, ...(assignment.searchQuery ? { query: assignment.searchQuery } : {}), reason: assignment.reason };
+      const placement = visualTiming(sentences, sentence, sentence.index, visualCursor); visualCursor = placement.endMs; const matching: ClipMatchingV1 = { matchedKeywords: assignment.matchedKeywords, matchScore: assignment.matchScore ?? (assignment.entityFallback ? 0 : 100), fallback: assignment.entityFallback, matchingReason: assignment.reason, visualIntent: assignment.visualIntent, selectedSource: assignment.selectedSource, selectedRole: assignment.selectedRole, entityFallback: assignment.entityFallback, ...(assignment.searchQuery ? { query: assignment.searchQuery } : {}), reason: assignment.reason };
       const sceneId = `scene-${String(sentence.index + 1).padStart(3, '0')}`; timeline.push({ assetId: asset.id, sourcePath: asset.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, timelineStartMs: placement.startMs, timelineEndMs: placement.endMs, transition: 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching, role: 'CONTENT', reviewStatus: assignment.entityFallback ? 'REVIEW' : 'GOOD', ...(validVoiceTiming(sentence) ? { voiceStartMs: sentence.voiceStartMs, voiceEndMs: sentence.voiceEndMs } : {}) }); decisions.push({ sentenceIndex: sentence.index, sceneId, assetId: asset.id, durationMs: timing.durationMs, ...matching });
     }
     return { manifest: sentenceManifest(input, sentences, 'SCRIPT', decisions, timeline), decisions, sentences };

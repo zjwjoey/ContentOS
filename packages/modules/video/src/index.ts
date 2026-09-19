@@ -12,7 +12,7 @@ export type { StoryboardPlannerAsset, StoryboardPlannerDecision, StoryboardPlann
 export type { ScriptSentence, SegmentScriptOptions } from './sentence-segmenter.js';
 export type { RandomSentenceMontageInput, ScriptMontageInput, SentenceMontageAsset, SentenceMontageBaseInput, SentenceMontageDecision, SentenceMontageResult, TimedScriptSentence } from './planner.js';
 export type { BrandingAsset, BrandingConfig } from './planner.js';
-export { planVisuals, classifyVisualEntities, dedupeExternalQueries, rankLocalCandidates, pickPexelsFile, PexelsVideoProvider, FakeExternalVideoProvider, HybridMediaService, createExternalVideoProvider, getProviderHealth, recordProviderHealth } from './hybrid-media.js';
+export { planVisuals, classifyVisualEntities, dedupeExternalQueries, rankLocalCandidates, rankExternalCandidates, pickPexelsFile, PexelsVideoProvider, FakeExternalVideoProvider, HybridMediaService, createExternalVideoProvider, getProviderHealth, recordProviderHealth } from './hybrid-media.js';
 export type { VisualPlanV1, VisualPlanSegmentV1, ResolvedVisualPlanV1, ResolvedVisualPlanSegmentV1, VisualEntityDetail, KnownVisualEntity, KnownEntityType, HybridSourcePolicy, ExternalVideoProvider, ExternalVideoResult, ExternalVideoFile, ExternalVideoSearchOptions, RateLimitInfo, HybridRetrievalResult } from './hybrid-media.js';
 export { prepareEditingWorkbenchItem } from './edit-workbench-preparation.js';
 export type { EditingWorkbenchPreparationDependencies, EditingWorkbenchPreparationInput, EditingWorkbenchPreparationResult } from './edit-workbench-preparation.js';
