@@ -123,3 +123,47 @@ explicit review action.
 Local-media scan snapshot reuse remains a follow-up, and the separate hybrid
 local/Pexels script-editing V1 feature is intentionally developed on its own
 feature branch.
+
+## Final audit at `d423fd1` (2026-09-19)
+
+The earlier addendum referred to `56c1190`; the current branch has since
+closed the remaining merge-blocker fixes in `d423fd1` and was re-audited from
+the checked-out source. The branch is still independent of `main` and is not
+merged.
+
+| Required finding | Status | Evidence |
+| --- | --- | --- |
+| Render repeat retry creates a fresh generation while duplicate clicks remain idempotent | FIXED / VERIFIED | Retry suffix includes the previous failed render Job id; unit and worker recovery coverage pass. |
+| Prepare terminal failure is not counted as active | FIXED / VERIFIED | Persisted FAILED/CANCELLED state wins summary/detail mapping; full test suite passes. |
+| Prepare failure reaches terminal batch state and can be retried | FIXED / VERIFIED | Worker terminal failure writes the item and synchronizes batch counts; browser retry flow passes. |
+| Retry crash window is recoverable | FIXED / VERIFIED | Reconciler recreates missing prepare/render jobs from durable item facts. |
+| Render worker writes batch item completion without GET polling | FIXED / VERIFIED | VIDEO_RENDER attempt transaction updates output asset, item state, and batch counters. |
+| GET batch is read-only in normal operation | FIXED / VERIFIED | Batch detail no longer performs normal state writes. |
+| 0027 down migration handles live PREPARING/RENDERING data | FIXED / VERIFIED | State normalization precedes legacy constraint recreation; migration matrix covers down/up. |
+| Variant output grouping and title de-duplication | FIXED / VERIFIED | Source ordinal plus A/B/C naming is covered by unit tests. |
+| History pagination and aggregate export polling | FIXED / VERIFIED | UI requests page/pageSize and waits on aggregate export counters. |
+
+## Re-run Gate evidence
+
+Using an isolated PostgreSQL 16 schema on `127.0.0.1:55433`:
+
+| Gate | Result |
+| --- | --- |
+| `pnpm format` | PASS — 410 files |
+| `pnpm lint` | PASS — 147 TypeScript files |
+| `pnpm typecheck` | PASS |
+| `pnpm test` | PASS — 245/245, 0 failed |
+| `pnpm test:migrations` | PASS — 9/9 |
+| `pnpm test:auto-edit-v1` | PASS — 25/25 (fresh isolated schema) |
+| `pnpm test:auto-edit-v15` | PASS — 19/19 (fresh isolated schema) |
+| `pnpm test:browser` | PASS — 2/2 |
+| `pnpm build` | PASS |
+| `pnpm --dir apps/web exec next build` | PASS |
+| `pnpm doctor` | PASS with one PATH warning for the global pnpm bin directory |
+| `git diff --check` | PASS |
+
+Remote state at audit time: `codex/editing-workbench-v2` and
+`origin/codex/editing-workbench-v2` both point to `d423fd1f3c2f10aabbf0563e3edaa4231316d234`;
+`origin/main` is `42c9b2f1eb80fddf63bef67dd8932ec448cabcd9`; ahead/behind is
+`21/0`. Decision: **READY FOR MERGE** from the local verification
+perspective. Merge remains an explicit review action.
