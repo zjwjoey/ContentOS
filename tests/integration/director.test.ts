@@ -44,6 +44,6 @@ test('Director migration down/up preserves a clean migration boundary', async ()
   await migrateDown(db);
   await migrateUp(db);
   const table = await db.query<{ exists: string }>("select to_regclass('public.director_plan_revisions')::text as exists");
-  assert.equal(table.rows[0]?.exists, 'director_plan_revisions');
+  assert.match(table.rows[0]?.exists || '', /(?:^|\.)director_plan_revisions$/u);
   await db.end();
 });

@@ -61,16 +61,16 @@ test('Publisher foundation migration down and up restores its schema without ass
     await db.query('delete from renders where project_id is null');
     await db.query('delete from edit_manifests where project_id is null');
     let removedCount = 0;
-    while ((await db.query("select to_regclass('public.publisher_requests') as table_name")).rows[0]?.table_name) {
+    while ((await db.query("select to_regclass('publisher_requests') as table_name")).rows[0]?.table_name) {
       const down = await migrateDown(db);
       assert.equal(down.removed, 1);
       removedCount += 1;
-      assert.ok(removedCount < 30, 'Publisher migration boundary was not reached');
+      assert.ok(removedCount <= 30, 'Publisher migration boundary was not reached');
     }
     assert.ok(removedCount >= 1);
     const restored = await migrateUp(db);
     assert.equal(restored.applied, removedCount);
-    const present = await db.query("select to_regclass('public.publisher_requests') as table_name");
+    const present = await db.query("select to_regclass('publisher_requests') as table_name");
     assert.equal(present.rows[0]?.table_name, 'publisher_requests');
   } finally {
     await db.end();

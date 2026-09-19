@@ -78,12 +78,18 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   const outputFps = Math.max(1, Number(manifest.canvas.fps || 30));
   const visualDurations = manifest.timeline.map((clip) => clip.timelineStartMs !== undefined && clip.timelineEndMs !== undefined ? Math.max(clip.durationMs, clip.timelineEndMs - clip.timelineStartMs) : clip.durationMs);
   let visualCursorMs = 0;
-  const firstStart = manifest.timeline[0]?.timelineStartMs;
-  if (firstStart !== undefined && firstStart > 0 && visualDurations.length > 0) visualDurations[0] = visualDurations[0]! + firstStart;
+  const firstStart = manifest.timeline[0]?.timelineStartMs ?? 0;
+  if (visualDurations.length > 0) {
+    if (firstStart > 0) visualDurations[0] = visualDurations[0]! + firstStart;
+    visualCursorMs = firstStart + visualDurations[0]!;
+  }
   for (let index = 1; index < manifest.timeline.length; index += 1) {
     const start = manifest.timeline[index]!.timelineStartMs;
-    if (start !== undefined && start > visualCursorMs) visualDurations[index - 1] = Math.max(visualDurations[index - 1]!, visualDurations[index - 1]! + (start - visualCursorMs));
-    visualCursorMs += visualDurations[index - 1]!;
+    if (start !== undefined && start > visualCursorMs) {
+      visualDurations[index - 1] = Math.max(visualDurations[index - 1]!, visualDurations[index - 1]! + (start - visualCursorMs));
+      visualCursorMs = start;
+    }
+    visualCursorMs += visualDurations[index]!;
   }
   let globalOffsetMs = 0;
   for (let i = 0; i < manifest.timeline.length; i += 1) {
