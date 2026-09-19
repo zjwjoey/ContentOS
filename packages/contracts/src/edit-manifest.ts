@@ -21,6 +21,7 @@ export interface ClipMatchingV1 {
   selectedSource?: 'LOCAL' | 'PEXELS' | 'FAKE_PEXELS';
   selectedRole?: 'AUTHENTIC_ENTITY' | 'NEUTRAL_BROLL' | 'GENERIC_BROLL' | 'PLACE_CONTEXT';
   entityFallback?: boolean;
+  allowAssetReuse?: boolean;
   query?: string;
   reason?: string;
 }
@@ -77,7 +78,7 @@ export function validateEditManifest(manifest: EditManifestV0): void {
   if (manifest.canvas.width !== 1080 || manifest.canvas.height !== 1920 || manifest.canvas.aspectRatio !== '9:16') throw new Error('Edit manifest canvas must be 9:16 1080x1920');
   if (!Number.isInteger(manifest.canvas.fps) || manifest.canvas.fps < 1 || manifest.canvas.fps > 120) throw new Error('Edit manifest canvas fps is invalid');
   if (manifest.timeline.some((clip) => clip.durationMs <= 0 || clip.sourceInMs < 0)) throw new Error('Edit manifest contains invalid clip timing');
-  if (manifest.metadata?.editMode !== 'RANDOM' && manifest.timeline.some((clip, index) => index > 0 && clip.assetId === manifest.timeline[index - 1]?.assetId && manifest.timeline.length > 1)) throw new Error('Adjacent duplicate clips are not allowed');
+  if (manifest.metadata?.editMode !== 'RANDOM' && manifest.timeline.some((clip, index) => index > 0 && clip.assetId === manifest.timeline[index - 1]?.assetId && !clip.matching?.allowAssetReuse && !manifest.timeline[index - 1]?.matching?.allowAssetReuse && manifest.timeline.length > 1)) throw new Error('Adjacent duplicate clips are not allowed');
   if (manifest.output.format !== 'mp4') throw new Error('Only MP4 output is supported in V0');
   if (manifest.timeline.some((clip) => clip.sentenceIndex !== undefined && (!Number.isInteger(clip.sentenceIndex) || clip.sentenceIndex < 0))) throw new Error('Edit manifest sentenceIndex must be a non-negative integer');
   if (manifest.timeline.some((clip) => clip.role && !['INTRO', 'CONTENT', 'OUTRO'].includes(clip.role))) throw new Error('Edit manifest clip role is invalid');

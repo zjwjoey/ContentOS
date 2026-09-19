@@ -63,11 +63,9 @@ export function createEditPrepareJobHandler(deps: VideoHandlerDeps): (job: JobRe
       if (String(row.mode) === 'SCRIPT' && settings.usePexels === true) {
         await deps.db.query("update edit_batch_items set settings_snapshot=settings_snapshot || $2::jsonb,updated_at=now() where id=$1", [payload.itemId, JSON.stringify({ phase: 'VISUAL_PLANNING' })]);
         await deps.db.query("update edit_batch_items set settings_snapshot=settings_snapshot || $2::jsonb,updated_at=now() where id=$1", [payload.itemId, JSON.stringify({ phase: 'LOCAL_MATCHING' })]);
-        await deps.db.query("update edit_batch_items set settings_snapshot=settings_snapshot || $2::jsonb,updated_at=now() where id=$1", [payload.itemId, JSON.stringify({ phase: 'EXTERNAL_SEARCH' })]);
-        const hybrid = await new HybridMediaService(deps.assets, deps.storage, deps.mediaProvider, deps.db).resolve({ workspaceId: payload.workspaceId, script: String(row.script), localAssets: scanAssets as Array<PlannerAsset & { originalName?: string; tags?: string[]; metadata?: Record<string, unknown> }>, usePexels: true, signal });
+        const hybrid = await new HybridMediaService(deps.assets, deps.storage, deps.mediaProvider, deps.db).resolve({ workspaceId: payload.workspaceId, script: String(row.script), localAssets: scanAssets as Array<PlannerAsset & { originalName?: string; tags?: string[]; metadata?: Record<string, unknown> }>, usePexels: true, minClipDurationMs: Number(itemSettings.minClipDurationMs || 2_000), maxClipDurationMs: Number(itemSettings.maxClipDurationMs || 5_000), signal });
         plannedAssets = hybrid.assets;
         hybridDiagnostics = { ...hybrid.diagnostics, visualPlan: hybrid.plan, resolvedVisualPlan: hybrid.resolvedPlan, resolvedAssignments: hybrid.resolvedAssignments };
-        await deps.db.query("update edit_batch_items set settings_snapshot=settings_snapshot || $2::jsonb,updated_at=now() where id=$1", [payload.itemId, JSON.stringify({ phase: hybrid.diagnostics.externalCount > 0 ? 'EXTERNAL_DOWNLOAD' : 'MANIFEST_BUILDING' })]);
         await deps.db.query("update edit_batch_items set settings_snapshot=settings_snapshot || $2::jsonb,updated_at=now() where id=$1", [payload.itemId, JSON.stringify({ phase: 'MANIFEST_BUILDING', hybridDiagnostics })]);
       }
       const catalog = new AssetCatalogService(deps.db);

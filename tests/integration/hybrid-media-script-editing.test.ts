@@ -41,3 +41,36 @@ test('persistent search and provider-identity download caches survive a second r
     assert.ok(provenance.rows.length > 0); assert.equal(provenance.rows[0]?.provider, 'fake-pexels');
   } finally { await db.query('delete from video_workspaces where id=$1', [workspaceId]); await db.end(); await rm(root, { recursive: true, force: true }); }
 });
+
+test('closure resolver keeps authentic entities reusable, prefers relevant external b-roll and preserves final manifest assignments', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-hybrid-closure-')); const fixture = join(root, 'fixture.mp4'); await writeFile(fixture, 'video');
+  const storage = new LocalStorageProvider(join(root, 'storage')); const provider = new FakeExternalVideoProvider(fixture); let importCount = 0;
+  const assetService = { importFile: async (input: { metadata?: Record<string, unknown> }) => ({ id: `external-${++importCount}`, projectId: '', checksum: `sha256:${importCount}`, storageKey: `objects/external-${importCount}.mp4`, byteSize: 5, status: 'READY' as const, metadata: input.metadata || {} }) };
+  const service = new HybridMediaService(assetService as never, storage, provider);
+  const script = 'MIZAN正在波兰拓展业务。商业合作本来就会有不同观点。我会继续在MIZAN招商部工作。欢迎大家以后继续交流合作。';
+  const local = [
+    { id: 'mizan-real', storageKey: 'mizan', sourcePath: 'MIZAN-store.mp4', durationMs: 12_000, tags: ['MIZAN', '门店'] },
+    { id: 'product', storageKey: 'product', sourcePath: 'product.mp4', durationMs: 12_000, tags: ['商品'] },
+    { id: 'unrelated', storageKey: 'unrelated', sourcePath: 'plastic-basin.mp4', durationMs: 12_000, tags: ['塑料盆'] },
+  ];
+  try {
+    const resolved = await service.resolve({ workspaceId: 'closure-workspace', script, localAssets: local, usePexels: true, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 });
+    assert.equal(resolved.resolvedAssignments[0]?.selectedSource, 'LOCAL'); assert.equal(resolved.resolvedAssignments[0]?.selectedRole, 'AUTHENTIC_ENTITY');
+    assert.equal(resolved.resolvedAssignments[1]?.selectedSource, 'FAKE_PEXELS');
+    assert.equal(resolved.resolvedAssignments[2]?.selectedAssetId, 'mizan-real'); assert.equal(resolved.resolvedAssignments[2]?.selectedRole, 'AUTHENTIC_ENTITY'); assert.equal(resolved.resolvedAssignments[2]?.allowAssetReuse, true);
+    const planned = buildScriptMontageManifest({ workspaceId: 'closure-workspace', script, sentences: [], assets: [...local, ...resolved.assets.filter((asset) => !local.some((candidate) => candidate.id === asset.id))], resolvedAssignments: resolved.resolvedAssignments, seed: 1, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 });
+    assert.equal(planned.manifest.timeline[0]?.matching?.selectedRole, 'AUTHENTIC_ENTITY'); assert.equal(planned.manifest.timeline[0]?.matching?.selectedSource, 'LOCAL'); assert.equal(planned.manifest.timeline[2]?.assetId, 'mizan-real');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('closure external candidate pool avoids duplicate provider identities when candidates are available', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-hybrid-duplicates-')); const fixture = join(root, 'fixture.mp4'); await writeFile(fixture, 'video');
+  const provider = new FakeExternalVideoProvider(fixture); const storage = new LocalStorageProvider(join(root, 'storage')); let index = 0; const service = new HybridMediaService({ importFile: async () => ({ id: `external-${++index}`, projectId: '', checksum: `sha256:${index}`, storageKey: `objects/${index}.mp4`, byteSize: 5, status: 'READY' as const }) } as never, storage, provider);
+  try { const result = await service.resolve({ workspaceId: 'duplicate-workspace', script: '商业合作需要不同观点。商业合作需要不同选择。', localAssets: [], usePexels: true, minClipDurationMs: 2_000, maxClipDurationMs: 5_000 }); const identities = result.resolvedAssignments.map((assignment) => assignment.selectedAssetId); assert.equal(new Set(identities).size, identities.length); } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('closure external failure uses a marked generic/entity fallback and counts it once', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-hybrid-fallback-')); const fixture = join(root, 'fixture.mp4'); await writeFile(fixture, 'video'); const previous = process.env.CONTENTOS_FAKE_PEXELS_FAILURE; process.env.CONTENTOS_FAKE_PEXELS_FAILURE = '1';
+  const storage = new LocalStorageProvider(join(root, 'storage')); const provider = new FakeExternalVideoProvider(fixture); const service = new HybridMediaService({ importFile: async () => ({ id: 'never', projectId: '', checksum: 'sha256:never', storageKey: 'never', byteSize: 5, status: 'READY' as const }) } as never, storage, provider);
+  try { const result = await service.resolve({ workspaceId: 'fallback-workspace', script: 'MIZAN正在波兰拓展业务。', localAssets: [{ id: 'generic', storageKey: 'generic', sourcePath: 'generic.mp4', durationMs: 12_000, tags: ['无关'] }], usePexels: true }); assert.equal(result.resolvedAssignments[0]?.entityFallback, true); assert.equal(result.diagnostics.fallbackCount, 1); assert.ok(result.diagnostics.warnings.length > 0); } finally { if (previous === undefined) delete process.env.CONTENTOS_FAKE_PEXELS_FAILURE; else process.env.CONTENTOS_FAKE_PEXELS_FAILURE = previous; await rm(root, { recursive: true, force: true }); }
+});

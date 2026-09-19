@@ -141,6 +141,16 @@ export interface TimedScriptSentence extends ScriptSentence {
   durationMs?: number;
 }
 
+/** Single source of truth for the minimum visual duration required by a sentence. */
+export function calculateSentenceRequiredDurationMs(sentence: Pick<TimedScriptSentence, 'text' | 'voiceStartMs' | 'voiceEndMs' | 'durationMs'> | string, minMs: number, maxMs: number): number {
+  const value = typeof sentence === 'string' ? { text: sentence } : sentence;
+  const voiced = value.voiceStartMs !== undefined && value.voiceEndMs !== undefined ? value.voiceEndMs - value.voiceStartMs : undefined;
+  const explicit = voiced !== undefined && voiced > 0 ? voiced : value.durationMs;
+  if (explicit !== undefined && Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
+  const units = [...value.text.replace(/\s+/gu, '')].length;
+  return Math.max(minMs, Math.min(maxMs, Math.round(Math.max(1, units) * 260)));
+}
+
 export interface SentenceMontageAsset extends StoryboardPlannerAsset { usageCount?: number; lastUsedAt?: string; recentUsageCount?: number; }
 export interface SentenceMontageBaseInput {
   projectId?: string;
@@ -180,6 +190,8 @@ export interface ResolvedVisualAssignment {
   selectedSource: 'LOCAL' | 'PEXELS' | 'FAKE_PEXELS';
   selectedRole: 'AUTHENTIC_ENTITY' | 'NEUTRAL_BROLL' | 'GENERIC_BROLL' | 'PLACE_CONTEXT';
   entityFallback: boolean;
+  fallback?: boolean;
+  allowAssetReuse?: boolean;
   matchScore?: number;
   searchQuery?: string;
   reason: string;
@@ -205,13 +217,7 @@ function normalizeSentences(input: SentenceMontageBaseInput, script?: string): T
   return provided.map((sentence, index) => ({ index, text: sentence.text.trim(), normalizedText: sentence.normalizedText?.trim() || sentence.text.normalize('NFKC').toLowerCase().trim(), ...(sentence.voiceStartMs !== undefined ? { voiceStartMs: sentence.voiceStartMs } : {}), ...(sentence.voiceEndMs !== undefined ? { voiceEndMs: sentence.voiceEndMs } : {}), ...(sentence.durationMs !== undefined ? { durationMs: sentence.durationMs } : {}) })).filter((sentence) => sentence.text.length > 0);
 }
 
-function sentenceDurationMs(sentence: TimedScriptSentence, minMs: number, maxMs: number): number {
-  const voiced = sentence.voiceStartMs !== undefined && sentence.voiceEndMs !== undefined ? sentence.voiceEndMs - sentence.voiceStartMs : undefined;
-  const explicit = voiced !== undefined && voiced > 0 ? voiced : sentence.durationMs;
-  if (explicit !== undefined && Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
-  const units = [...sentence.text.replace(/\s+/gu, '')].length;
-  return Math.max(minMs, Math.min(maxMs, Math.round(Math.max(1, units) * 260)));
-}
+function sentenceDurationMs(sentence: TimedScriptSentence, minMs: number, maxMs: number): number { return calculateSentenceRequiredDurationMs(sentence, minMs, maxMs); }
 
 function validVoiceTiming(sentence: TimedScriptSentence): boolean { return sentence.voiceStartMs !== undefined && sentence.voiceEndMs !== undefined && Number.isFinite(sentence.voiceStartMs) && Number.isFinite(sentence.voiceEndMs) && sentence.voiceEndMs > sentence.voiceStartMs; }
 function validateVoiceTimeline(sentences: TimedScriptSentence[]): void { const timed = sentences.filter(validVoiceTiming).sort((a, b) => (a.voiceStartMs || 0) - (b.voiceStartMs || 0)); for (let index = 1; index < timed.length; index += 1) if ((timed[index]!.voiceStartMs || 0) < (timed[index - 1]!.voiceEndMs || 0)) throw new Error('Voice sentence timings overlap'); }
@@ -275,7 +281,7 @@ export function buildScriptMontageManifest(input: ScriptMontageInput): SentenceM
       const assignment = byIndex.get(sentence.index); if (!assignment) throw new Error(`VisualPlan assignment missing for segment ${sentence.index}`);
       const asset = input.assets.find((candidate) => candidate.id === assignment.selectedAssetId); if (!asset) throw new Error(`VisualPlan assignment asset missing: ${assignment.selectedAssetId}`);
       const requestedDuration = sentenceDurationMs(sentence, minMs, maxMs); const timing = boundedAssetClip(asset, requestedDuration, random); if (!timing) throw new Error(`第${sentence.index + 1}句话需要足够长的画面素材。`);
-      const placement = visualTiming(sentences, sentence, sentence.index, visualCursor); visualCursor = placement.endMs; const matching: ClipMatchingV1 = { matchedKeywords: assignment.matchedKeywords, matchScore: assignment.matchScore ?? (assignment.entityFallback ? 0 : 100), fallback: assignment.entityFallback, matchingReason: assignment.reason, visualIntent: assignment.visualIntent, selectedSource: assignment.selectedSource, selectedRole: assignment.selectedRole, entityFallback: assignment.entityFallback, ...(assignment.searchQuery ? { query: assignment.searchQuery } : {}), reason: assignment.reason };
+      const placement = visualTiming(sentences, sentence, sentence.index, visualCursor); visualCursor = placement.endMs; const matching: ClipMatchingV1 = { matchedKeywords: assignment.matchedKeywords, matchScore: assignment.matchScore ?? (assignment.entityFallback ? 0 : 100), fallback: assignment.fallback ?? assignment.entityFallback, matchingReason: assignment.reason, visualIntent: assignment.visualIntent, selectedSource: assignment.selectedSource, selectedRole: assignment.selectedRole, entityFallback: assignment.entityFallback, ...(assignment.allowAssetReuse ? { allowAssetReuse: true } : {}), ...(assignment.searchQuery ? { query: assignment.searchQuery } : {}), reason: assignment.reason };
       const sceneId = `scene-${String(sentence.index + 1).padStart(3, '0')}`; timeline.push({ assetId: asset.id, sourcePath: asset.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, timelineStartMs: placement.startMs, timelineEndMs: placement.endMs, transition: 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching, role: 'CONTENT', reviewStatus: assignment.entityFallback ? 'REVIEW' : 'GOOD', ...(validVoiceTiming(sentence) ? { voiceStartMs: sentence.voiceStartMs, voiceEndMs: sentence.voiceEndMs } : {}) }); decisions.push({ sentenceIndex: sentence.index, sceneId, assetId: asset.id, durationMs: timing.durationMs, ...matching });
     }
     return { manifest: sentenceManifest(input, sentences, 'SCRIPT', decisions, timeline), decisions, sentences };

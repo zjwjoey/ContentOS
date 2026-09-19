@@ -37,6 +37,12 @@ test('Hybrid Script Editing source controls and external-only flow work in the b
     assert.match(await page.locator('body').innerText(), /Pexels/);
     assert.equal(await page.getByText(/素材来源/u).count() > 0, true);
 
+    const missingPage = await browser.newPage();
+    await missingPage.route(`${baseUrl}/api/v1/media-providers`, async (route) => await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: 'fake-pexels', configured: false, healthy: null }] }) }));
+    await missingPage.goto(`${baseUrl}/edit/script`, { waitUntil: 'domcontentloaded' }); await missingPage.waitForTimeout(500);
+    const missingToggle = missingPage.locator('.source-provider input[type="checkbox"]');
+    assert.equal(await missingToggle.isDisabled(), true); assert.equal(await missingToggle.isChecked(), false); assert.match(await missingPage.locator('.source-provider').innerText(), /未配置/u); assert.equal(await missingPage.getByRole('link', { name: '前往设置' }).count(), 1); await missingPage.close();
+
     const fixtureDir = process.env.CONTENTOS_BROWSER_FIXTURE_DIR!;
     const fixture = process.env.CONTENTOS_BROWSER_FIXTURE_VIDEO!;
     const localRoot = join(fixtureDir, 'hybrid-local');

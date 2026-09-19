@@ -10,6 +10,7 @@ export type { CurrentRenderSummary, RenderHistorySummary, VideoJobProgressSummar
 export type { BuildManifestInput, PlannerAsset, RandomMontageInput, ResolvedVisualAssignment } from './planner.js';
 export type { StoryboardPlannerAsset, StoryboardPlannerDecision, StoryboardPlannerInput, StoryboardPlannerResult, StoryboardPlannerScene } from './planner.js';
 export type { ScriptSentence, SegmentScriptOptions } from './sentence-segmenter.js';
+export { calculateSentenceRequiredDurationMs } from './planner.js';
 export type { RandomSentenceMontageInput, ScriptMontageInput, SentenceMontageAsset, SentenceMontageBaseInput, SentenceMontageDecision, SentenceMontageResult, TimedScriptSentence } from './planner.js';
 export type { BrandingAsset, BrandingConfig } from './planner.js';
 export { planVisuals, classifyVisualEntities, dedupeExternalQueries, rankLocalCandidates, rankExternalCandidates, pickPexelsFile, PexelsVideoProvider, FakeExternalVideoProvider, HybridMediaService, createExternalVideoProvider, getProviderHealth, recordProviderHealth } from './hybrid-media.js';

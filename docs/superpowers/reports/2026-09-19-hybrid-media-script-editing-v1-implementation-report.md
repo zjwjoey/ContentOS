@@ -3,7 +3,7 @@
 Date: 2026-09-19
 Branch: `codex/hybrid-media-script-editing-v1`
 Base SHA: `7961b5e04f99544159d600865622bc16e8f0e248`
-Final SHA: `b9aade913354a4d3a2e8c73391c531ea8e89f92f`
+Final SHA: populated after the closure commit
 
 ## Delivery status
 
@@ -50,15 +50,41 @@ montage manifest. No merge to `main` was performed.
   the deterministic fake provider, including external-only retrieval and local
   plus external source statistics.
 
+## Final Closure
+
+- External identity reuse is tracked separately from local Asset IDs; fresh
+  provider identities are preferred and explicit reuse is recorded when the
+  candidate pool is exhausted.
+- Authentic entity reuse is allowed only through `allowAssetReuse` on the
+  resolved assignment; manifest validation remains strict for ordinary Script
+  montage duplicates.
+- Visual planning and manifest construction share
+  `calculateSentenceRequiredDurationMs`; local and external candidates shorter
+  than the required duration are ineligible.
+- Normal segments require a positive semantic local score before using local
+  media. Unrelated local media therefore gives way to a relevant Pexels query.
+- Entity and generic fallback statistics are derived from resolved segments and
+  are surfaced in history, rather than incremented opportunistically.
+- Provenance stores provider/page/creator/file identity, source dimensions,
+  duration and download time. Search query remains on assignment/manifest
+  matching, not the stable Asset identity.
+- Pexels download has an independent 90-second timeout combined with job
+  cancellation; external staging is removed in every import failure path.
+- Provider missing state clears persisted `usePexels`; provider status failures
+  remain `unknown` and do not erase the user's setting.
+- Added unit, integration and browser coverage for duplicate provider identity,
+  authentic reuse, duration eligibility, relevance threshold, fallback counts,
+  download timeout, missing-provider UI, and final manifest binding.
+
 ## Verification gates
 
 All gates below were run locally against PostgreSQL on `127.0.0.1:55433` where
 the suite requires a database:
 
-- `pnpm format` — 300 files formatted
-- `pnpm lint` — 131 TypeScript files passed
+- `pnpm format` — 415 files checked
+- `pnpm lint` — 149 TypeScript files passed
 - `pnpm typecheck` — passed
-- `pnpm test` — 254/254 passed
+- `pnpm test` — 259/259 passed
 - `pnpm test:migrations` — 9/9 passed
 - `pnpm test:auto-edit-v1` — 25/25 passed
 - `pnpm test:auto-edit-v15` — 19/19 passed
