@@ -5,6 +5,7 @@
 - Base SHA: `f318da93be6724fed87822c1ce9de5fe19ffb4a8`
 - Branch: `codex/script-editing-v2-rule-editorial-layer`
 - Implementation commits: `fab92e6`, `1e30c1f`, `76717b0`, `a665e6d`, `942730e`
+- Final integrity/picker commits: `1336efc`, `2ccab8c`, `0410773`, `6193911`
 - `origin/main`: `42c9b2f1eb80fddf63bef67dd8932ec448cabcd9`
 - No merge or automatic PR was created.
 
@@ -47,8 +48,8 @@
 - Native local path selection is available through Windows Shell dialogs for media roots, output roots, voice/music files and priority assets. Canonical persisted grants are stored by migration `0030`, support folder children and exact files, and retain environment roots as deployment fallback. Picker cancellation returns `{ cancelled: true }`.
 - V1, MIX and workbench forms expose the same picker path while retaining manual paths as an advanced fallback; picked media is scanned immediately.
 
-Current continuation verification: `pnpm typecheck`, `pnpm lint`, `pnpm format`, `pnpm build`, `pnpm --dir apps/web build`, and `pnpm test:script-edit-v2` (18/18) pass. Migration/browser/full-suite gates require a running PostgreSQL/Windows interactive acceptance environment; this machine currently has no PostgreSQL listener on `127.0.0.1:5432`, so those gates must be rerun before release sign-off.
+Current continuation verification: `pnpm typecheck`, `pnpm lint`, `pnpm format`, `pnpm build`, `pnpm --dir apps/web build`, `pnpm test:script-edit-v2` (18/18), `pnpm test:migrations` (9/9), `pnpm test:auto-edit-v1` (27/27), `pnpm test:auto-edit-v15` (19/19), `pnpm test` (275/275), and browser acceptance (4/4) pass on PostgreSQL 16 at `127.0.0.1:55433` with isolated schemas. The Windows Shell picker process was successfully invoked from the running local operator; unattended acceptance deliberately did not select or transmit a user file, while picker cancellation is covered by the route test.
 
 ## GO / NO-GO
 
-NO-GO for final release sign-off until the migration matrix, full PostgreSQL-backed suites and real Windows native-picker acceptance are rerun in their required environments. The implementation is pushed and the focused integrity/build gates are green; this is an environment-gate hold, not an uncommitted-code hold.
+NO-GO for final release sign-off only until a user performs the final interactive Windows picker acceptance (select a real media folder, output folder, voice/music file and priority asset, then verify cancel). All automated integrity, migration, FFmpeg, full-suite, browser and build gates are green and the implementation is pushed; this remaining hold is manual acceptance, not an uncommitted-code hold.
