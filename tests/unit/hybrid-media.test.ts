@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dedupeExternalQueries, FakeExternalVideoProvider, planVisuals, PexelsVideoProvider, rankExternalCandidates, rankLocalCandidates, pickPexelsFile, classifyVisualEntities } from '../../packages/modules/video/src/index.js';
+import { dedupeExternalQueries, FakeExternalVideoProvider, HybridMediaService, planVisuals, PexelsVideoProvider, rankExternalCandidates, rankLocalCandidates, pickPexelsFile, classifyVisualEntities } from '../../packages/modules/video/src/index.js';
+import { LocalStorageProvider } from '../../packages/infrastructure/storage/src/index.js';
 
 test('VisualPlan protects named entities and deduplicates external queries', () => {
   const plan = planVisuals('MIZAN 在科技工厂升级产品。今天展示科技产品。');
@@ -69,6 +70,13 @@ test('external ranking filters short candidates before scoring', () => {
     { provider: 'pexels', assetId: 'long', width: 1080, height: 1920, durationMs: 8_000, files: [{ id: 'long-file', width: 1080, height: 1920, durationMs: 8_000, url: 'https://videos.pexels.com/long.mp4' }] },
   ]);
   assert.deepEqual(result.map((item) => item.assetId), ['long']);
+});
+
+test('Hybrid fails early when local and external media are shorter than the voice segment', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-hybrid-short-media-')); const storage = new LocalStorageProvider(join(root, 'storage'));
+  const provider = { name: 'fake-pexels', configured: true, search: async () => ({ results: [{ provider: 'fake-pexels', assetId: 'short', width: 1080, height: 1920, durationMs: 1_000, files: [{ id: 'short-file', width: 1080, height: 1920, durationMs: 1_000, url: 'https://videos.pexels.com/short.mp4' }] }] }), download: async () => ({ fileId: 'short-file', bytes: 0, contentType: 'video/mp4' }) };
+  const service = new HybridMediaService({ importFile: async () => ({ id: 'unused', storageKey: 'unused', status: 'READY' as const }) } as never, storage, provider);
+  try { await assert.rejects(() => service.resolve({ workspaceId: 'short-media', script: '第一句。', sentences: [{ index: 0, text: '第一句。', normalizedText: '第一句', durationMs: 5_000 }], localAssets: [], usePexels: true }), /EDIT_NO_MEDIA_LONG_ENOUGH/); } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('Pexels download has an independent timeout', async () => {

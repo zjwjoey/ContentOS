@@ -232,6 +232,7 @@ export class HybridMediaService {
         }
       }
       if (!asset) {
+        if (durationEligible.length === 0) throw new Error(`EDIT_NO_MEDIA_LONG_ENOUGH:第${segment.segmentIndex + 1}段需要 ${(segment.desiredDurationMs / 1000).toFixed(1)} 秒画面，但当前没有足够长的可用素材。`);
         const generic = durationEligible.find((candidate) => !usedAssetIds.has(candidate.id));
         if (!generic) throw new Error('EDIT_UNIQUE_MEDIA_EXHAUSTED:同一素材不能在同一任务中重复使用');
         asset = generic;
