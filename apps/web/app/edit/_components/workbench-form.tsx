@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
+import Link from 'next/link';
 
 type Item = { title: string; script: string; voicePath: string; voiceName?: string };
 type PairRow = { status: string; basename: string; script?: string; voicePath?: string; textFile?: string | null; audioFile?: string | null };
@@ -82,12 +83,12 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
     if (!copyId) return;
     void fetch(`/api/v1/edit/batches/${encodeURIComponent(copyId)}/config`).then(async (response) => {
       if (!response.ok) throw new Error('历史任务配置暂时无法读取。');
-      return await response.json() as { mode: 'SCRIPT' | 'MIX'; title: string; script: string; sourceRoots: string[]; outputRoot: string; settings: { minClipDurationMs: number; maxClipDurationMs: number; seed: number; variants: number; fps: number; preferUnusedMedia: boolean; templateId?: string }; items: Item[] };
+      return await response.json() as { mode: 'SCRIPT' | 'MIX'; title: string; script: string; sourceRoots: string[]; outputRoot: string; settings: { minClipDurationMs: number; maxClipDurationMs: number; seed: number; variants: number; fps: number; preferUnusedMedia: boolean; templateId?: string; usePexels?: boolean }; items: Item[] };
     }).then((config) => {
       if (config.mode !== mode) return;
-      setTitle(`${config.title}（副本）`); setScript(config.script || ''); setRoots(config.sourceRoots.length ? config.sourceRoots : ['']); setOutputRoot(config.outputRoot || ''); setMinClipDurationMs(config.settings.minClipDurationMs); setMaxClipDurationMs(config.settings.maxClipDurationMs); setSeed(config.settings.seed); setVariants(config.settings.variants === 3 || config.settings.variants === 5 ? config.settings.variants : 1); setFps(config.settings.fps); setPreferUnusedMedia(config.settings.preferUnusedMedia); if (config.settings.templateId) setTemplateId(config.settings.templateId); if (mode === 'MIX' && config.items.length) setItems(config.items.map((item) => ({ title: item.title, script: item.script, voicePath: item.voicePath || '', ...(item.voicePath ? { voiceName: item.voicePath.split(/[\\/]/u).pop() } : {}) })));
+      setTitle(`${config.title}（副本）`); setScript(config.script || ''); setRoots(config.sourceRoots.length ? config.sourceRoots : ['']); setOutputRoot(config.outputRoot || ''); setMinClipDurationMs(config.settings.minClipDurationMs); setMaxClipDurationMs(config.settings.maxClipDurationMs); setSeed(config.settings.seed); setVariants(config.settings.variants === 3 || config.settings.variants === 5 ? config.settings.variants : 1); setFps(config.settings.fps); setPreferUnusedMedia(config.settings.preferUnusedMedia); if (config.settings.templateId) setTemplateId(config.settings.templateId); if (mode === 'SCRIPT' && config.settings.usePexels) { if (pexelsStatus === 'ready') setUsePexels(true); else setMessage('原任务使用了 Pexels，但当前服务未配置，已回退为本地素材。'); } if (mode === 'MIX' && config.items.length) setItems(config.items.map((item) => ({ title: item.title, script: item.script, voicePath: item.voicePath || '', ...(item.voicePath ? { voiceName: item.voicePath.split(/[\\/]/u).pop() } : {}) })));
     }).catch((error) => setMessage(error instanceof Error ? error.message : '历史任务配置暂时无法读取。'));
-  }, [copyId, mode]);
+  }, [copyId, mode, pexelsStatus]);
 
   useEffect(() => {
     window.localStorage.setItem(`contentos-edit-settings-${mode}`, JSON.stringify({ roots, outputRoot, minClipDurationMs, maxClipDurationMs, seed, variants, fps, preferUnusedMedia, templateId, usePexels }));
@@ -214,6 +215,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
         {roots.length > 1 && <button type="button" onClick={() => removeRoot(index)}>删除</button>}
       </div>)}
       <button type="button" className="secondary-action" onClick={addRoot}>+ 添加素材文件夹</button>
+      {mode === 'SCRIPT' && <div className="source-provider"><strong>素材来源</strong><label className="inline-check"><input type="checkbox" checked={usePexels} disabled={pexelsStatus === 'missing'} onChange={(event) => setUsePexels(event.target.checked)} />本地素材优先，Pexels 作为缺口兜底</label>{pexelsStatus === 'missing' && <p className="muted">Pexels 未配置，<Link href="/settings">前往设置</Link> 后可启用。</p>}{pexelsStatus === 'unknown' && <p className="muted">正在读取服务状态；未配置时该选项会自动禁用。</p>}</div>}
       <p className="muted">目录离开输入框后会自动验证和扫描，结果会保存在本次剪辑的来源快照中。</p>
     </section>
     <section className="card">
@@ -222,9 +224,8 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
       <p className="muted">目录必须已存在、可写，并位于服务端允许范围内；权限仅作只读校验，完成后可直接导出成片。</p>
     </section>
     <details className="card advanced-settings"><summary>4. 高级设置</summary>
-      <div className="grid"><label>剪辑模板<select value={templateId} onChange={handleTemplateChange}>{presets.length === 0 ? <option value="">默认短视频</option> : presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select></label><label>素材选择策略<select value={preferUnusedMedia ? 'RECOMMENDED' : 'RANDOM'} onChange={(event) => setPreferUnusedMedia(event.target.value === 'RECOMMENDED')}><option value="RECOMMENDED">优先较少使用</option><option value="RANDOM">随机</option></select></label><label>镜头最短时长（秒）<input type="number" min={0.5} step={0.5} value={minClipDurationMs / 1000} onChange={(event) => setMinClipDurationMs(Math.round((Number(event.target.value) || 0.5) * 1000))} /></label><label>镜头最长时长（秒）<input type="number" min={0.5} step={0.5} value={maxClipDurationMs / 1000} onChange={(event) => setMaxClipDurationMs(Math.round((Number(event.target.value) || 0.5) * 1000))} /></label><label>视频帧率<select value={fps} onChange={(event) => setFps(Number(event.target.value))}><option value={24}>24 fps</option><option value={25}>25 fps</option><option value={30}>30 fps</option><option value={50}>50 fps</option><option value={60}>60 fps</option></select></label>{mode === 'MIX' && <label>每条生成版本数<select value={variants} onChange={(event) => setVariants(Number(event.target.value))}><option value={1}>1</option><option value={3}>3</option><option value={5}>5</option></select></label>}</div>
+      <div className="grid"><label>剪辑模板<select value={templateId} onChange={handleTemplateChange}>{presets.length === 0 ? <option value="">默认短视频</option> : presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select></label><label>素材选择策略<select value={preferUnusedMedia ? 'RECOMMENDED' : 'RANDOM'} onChange={(event) => setPreferUnusedMedia(event.target.value === 'RECOMMENDED')}><option value="RECOMMENDED">优先较少使用</option><option value="RANDOM">随机</option></select></label><label>镜头最短时长（秒）<input type="number" min={0.5} step={0.5} value={minClipDurationMs / 1000} onChange={(event) => setMinClipDurationMs(Math.round((Number(event.target.value) || 0.5) * 1000))} /></label><label>镜头最长时长（秒）<input type="number" min={0.5} step={0.5} value={maxClipDurationMs / 1000} onChange={(event) => setMaxClipDurationMs(Math.round((Number(event.target.value) || 0.5) * 1000))} /></label><label>视频帧率<select value={fps} onChange={(event) => setFps(Number(event.target.value))}><option value={24}>24 帧/秒</option><option value={25}>25 帧/秒</option><option value={30}>30 帧/秒</option><option value={50}>50 帧/秒</option><option value={60}>60 帧/秒</option></select></label>{mode === 'MIX' && <label>每条生成版本数<select value={variants} onChange={(event) => setVariants(Number(event.target.value))}><option value={1}>1</option><option value={3}>3</option><option value={5}>5</option></select></label>}</div>
       <p className="muted">片头、片尾和品牌素材继续沿用现有模板配置，不会混入普通素材候选。</p>
-      {mode === 'SCRIPT' && <label className="inline-check"><input type="checkbox" checked={usePexels} onChange={(event) => setUsePexels(event.target.checked)} />本地素材优先，Pexels 作为缺口兜底{pexelsStatus === 'missing' && <small>（服务端未配置 PEXELS_API_KEY）</small>}</label>}
     </details>
     {message && <p className="form-error">{message}</p>}
     {mode === 'MIX' && <button type="button" className="secondary-action" onClick={() => void submit(undefined, true)} disabled={busy}>生成 1 条测试</button>}

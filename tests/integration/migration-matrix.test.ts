@@ -9,7 +9,7 @@ import { createDatabase, migrateDown, migrateUp, resolveMigrationsDirectory } fr
 
 const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test';
 const migrationDirectory = resolveMigrationsDirectory();
-const migrationNames = Array.from({ length: 27 }, (_, index) => String(index + 1).padStart(4, '0'));
+const migrationNames = Array.from({ length: 28 }, (_, index) => String(index + 1).padStart(4, '0'));
 
 function schemaUrl(name: string): string {
   const url = new URL(adminUrl);
@@ -47,7 +47,7 @@ for (const [label, subset] of [['clean', 0], ['0001-0005', 5], ['0001-0006', 6]]
       const db = await createDatabase(database.url);
       try {
         const result = await migrateUp(db);
-      assert.equal(result.applied, 27 - subset);
+      assert.equal(result.applied, 28 - subset);
         const rows = await db.query<{ name: string }>('select name from schema_migrations order by name');
         assert.deepEqual(rows.rows.map((row) => row.name.slice(0, 4)), migrationNames);
       } finally { await db.end(); }
@@ -151,10 +151,11 @@ test('migration 0027 down normalizes live preparation/rendering states and can m
       await db.query("insert into edit_workbench_sessions (id,mode,title) values ($1,'MIX','migration')", [sessionId]);
       await db.query("insert into edit_batches (id,session_id,mode,total_count) values ($1,$2,'MIX',4)", [batchId, sessionId]);
       for (const [index, state] of ['PREPARING', 'RENDERING', 'FAILED', 'SUCCEEDED'].entries()) await db.query('insert into edit_batch_items (id,batch_id,ordinal,title,script,workspace_id,state) values ($1,$2,$3,$4,$5,$6,$7)', [`migration-edit-item-${index}-${randomUUID()}`, batchId, index + 1, `item-${index}`, 'script', workspaceId, state]);
-      assert.equal((await migrateDown(db)).removed, 1);
+      assert.equal((await migrateDown(db)).removed, 1); // 0028 cache tables
+      assert.equal((await migrateDown(db)).removed, 1); // 0027 state normalization
       const states = await db.query<{ state: string }>('select state from edit_batch_items where batch_id=$1 order by ordinal', [batchId]);
       assert.deepEqual(states.rows.map((row) => row.state), ['RUNNING', 'RUNNING', 'FAILED', 'SUCCEEDED']);
-      assert.equal((await migrateUp(db)).applied, 1);
+      assert.equal((await migrateUp(db)).applied, 2);
       const columns = await db.query<{ column_name: string }>("select column_name from information_schema.columns where table_schema=current_schema() and table_name='edit_batch_items' and column_name='prepare_job_id'");
       assert.equal(columns.rowCount, 1);
     } finally { await db.end(); }

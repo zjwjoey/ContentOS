@@ -17,6 +17,12 @@ export interface ClipMatchingV1 {
   matchScore: number;
   fallback: boolean;
   matchingReason: string;
+  visualIntent?: string;
+  selectedSource?: 'LOCAL' | 'PEXELS' | 'FAKE_PEXELS';
+  selectedRole?: 'AUTHENTIC_ENTITY' | 'NEUTRAL_BROLL' | 'GENERIC_BROLL' | 'PLACE_CONTEXT';
+  entityFallback?: boolean;
+  query?: string;
+  reason?: string;
 }
 
 export interface ManifestClip {

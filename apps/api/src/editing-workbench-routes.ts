@@ -320,7 +320,7 @@ export function registerEditingWorkbenchRoutes(app: FastifyInstance, dependencie
         return String((item as { path?: unknown }).path || '');
       }).filter(Boolean)
       : [];
-    return { id: batchId, mode: String(row.mode), title: String(row.title), script: row.script ? String(row.script) : '', sourceRoots, outputRoot: row.output_root ? String(row.output_root) : '', settings: { minClipDurationMs: Number(settings.minClipDurationMs || 2_000), maxClipDurationMs: Number(settings.maxClipDurationMs || 5_000), seed: Number(settings.seed || 1), variants: Number(settings.variants || 1), fps: Number(settings.fps || 30), preferUnusedMedia: settings.preferUnusedMedia !== false, templateId: typeof settings.templateId === 'string' ? settings.templateId : '' }, items: requestedItems };
+    return { id: batchId, mode: String(row.mode), title: String(row.title), script: row.script ? String(row.script) : '', sourceRoots, outputRoot: row.output_root ? String(row.output_root) : '', settings: { minClipDurationMs: Number(settings.minClipDurationMs || 2_000), maxClipDurationMs: Number(settings.maxClipDurationMs || 5_000), seed: Number(settings.seed || 1), variants: Number(settings.variants || 1), fps: Number(settings.fps || 30), preferUnusedMedia: settings.preferUnusedMedia !== false, usePexels: settings.usePexels === true, templateId: typeof settings.templateId === 'string' ? settings.templateId : '' }, items: requestedItems };
   });
 
   app.get('/api/v1/edit/batches/:batchId/items/:itemId/output', async (request, reply) => {

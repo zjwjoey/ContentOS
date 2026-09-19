@@ -1,160 +1,90 @@
 import { createHash } from 'node:crypto';
 import { copyFile, mkdir, rm } from 'node:fs/promises';
 import { extname, join } from 'node:path';
+import type { Pool } from 'pg';
 import type { AssetService } from '../../asset/src/asset-service.js';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
-import { segmentScriptSentences, type ScriptSentence } from './sentence-segmenter.js';
-import type { PlannerAsset } from './planner.js';
+import { segmentScriptSentences } from './sentence-segmenter.js';
+import type { PlannerAsset, ResolvedVisualAssignment } from './planner.js';
 
 export type HybridSourcePolicy = 'LOCAL_ONLY' | 'LOCAL_FIRST' | 'HYBRID' | 'EXTERNAL_FIRST';
+export type KnownEntityType = 'BRAND' | 'COMPANY' | 'PERSON' | 'PLACE' | 'PRODUCT';
+export interface KnownVisualEntity { name: string; type: KnownEntityType; aliases?: string[]; }
+export const DEFAULT_VISUAL_ENTITIES: KnownVisualEntity[] = [
+  { name: 'MIZAN', type: 'BRAND' }, { name: '东晟', type: 'COMPANY' }, { name: 'Action', type: 'BRAND' },
+  { name: 'Pepco', type: 'BRAND' }, { name: '小陈', type: 'PERSON' }, { name: '波兰', type: 'PLACE', aliases: ['Poland'] },
+  { name: '华沙', type: 'PLACE', aliases: ['Warsaw'] }, { name: '中欧', type: 'PLACE', aliases: ['Central Europe'] },
+];
+export interface VisualEntityDetail { name: string; type: KnownEntityType; requiresAuthenticAsset: boolean; }
 export interface VisualPlanSegmentV1 {
-  segmentIndex: number;
-  text: string;
-  visualIntent: string;
-  entities: string[];
-  keywords: string[];
-  localQueries: string[];
-  externalQueries: string[];
-  sourcePolicy: HybridSourcePolicy;
-  requiresAuthenticEntityVisual: boolean;
-  desiredDurationMs: number;
+  segmentIndex: number; text: string; visualIntent: string; entities: string[]; entityDetails?: VisualEntityDetail[]; keywords: string[];
+  localQueries: string[]; externalQueries: string[]; sourcePolicy: HybridSourcePolicy; requiresAuthenticEntityVisual: boolean; desiredDurationMs: number; reason?: string;
 }
 export interface VisualPlanV1 { schemaVersion: 'VISUAL_PLAN_V1'; scriptHash: string; segments: VisualPlanSegmentV1[]; generatedBy: 'deterministic-v1' | 'ai'; }
+export interface ResolvedVisualPlanSegmentV1 extends VisualPlanSegmentV1 { selectedAssetId: string; selectedSource: 'LOCAL' | 'PEXELS' | 'FAKE_PEXELS'; selectedRole: 'AUTHENTIC_ENTITY' | 'NEUTRAL_BROLL' | 'GENERIC_BROLL' | 'PLACE_CONTEXT'; entityFallback: boolean; query?: string; }
+export interface ResolvedVisualPlanV1 { schemaVersion: 'RESOLVED_VISUAL_PLAN_V1'; plan: VisualPlanV1; segments: ResolvedVisualPlanSegmentV1[]; }
 
 export interface ExternalVideoFile { id: string; width: number; height: number; durationMs: number; url: string; fileType?: string; quality?: string; }
 export interface ExternalVideoResult { provider: string; assetId: string; pageUrl?: string; creator?: string; creatorUrl?: string; width: number; height: number; durationMs: number; files: ExternalVideoFile[]; tags?: string[]; }
 export interface ExternalVideoSearchOptions { query: string; orientation?: 'portrait' | 'landscape' | 'square'; locale?: string; page?: number; perPage?: number; signal?: AbortSignal | undefined; }
-export interface ExternalVideoProvider {
-  readonly name: string;
-  readonly configured: boolean;
-  search(options: ExternalVideoSearchOptions): Promise<{ results: ExternalVideoResult[]; rateLimit?: RateLimitInfo }>;
-  download(video: ExternalVideoResult, destination: string, signal?: AbortSignal): Promise<{ fileId: string; bytes: number; contentType: string }>;
-  health?(): Promise<{ ok: boolean; message?: string; rateLimit?: RateLimitInfo }>;
-}
 export interface RateLimitInfo { limit?: number | undefined; remaining?: number | undefined; resetAt?: string | undefined; }
+export interface ExternalVideoProvider { readonly name: string; readonly configured: boolean; search(options: ExternalVideoSearchOptions): Promise<{ results: ExternalVideoResult[]; rateLimit?: RateLimitInfo }>; download(video: ExternalVideoResult, destination: string, signal?: AbortSignal): Promise<{ fileId: string; bytes: number; contentType: string }>; health?(): Promise<{ ok: boolean; message?: string; rateLimit?: RateLimitInfo }>; }
 
-const cache = new Map<string, { expiresAt: number; value: ExternalVideoResult[]; rateLimit?: RateLimitInfo }>();
-const WORD_MAP: Record<string, string[]> = { 产品: ['product', 'product closeup'], 科技: ['technology', 'futuristic technology'], 城市: ['city', 'urban skyline'], 人物: ['people', 'portrait'], 自然: ['nature', 'landscape'], 会议: ['business meeting', 'office'], 工厂: ['factory', 'manufacturing'], 海边: ['ocean', 'beach'], 食物: ['food', 'cooking'], 旅行: ['travel', 'destination'] };
-
+const processCache = new Map<string, { expiresAt: number; value: ExternalVideoResult[]; rateLimit?: RateLimitInfo }>();
+const WORD_MAP: Record<string, string[]> = { 产品: ['product', 'product closeup'], 科技: ['technology', 'futuristic technology'], 城市: ['city', 'urban skyline'], 人物: ['people', 'portrait'], 自然: ['nature', 'landscape'], 会议: ['business meeting', 'office'], 工厂: ['factory', 'manufacturing'], 海边: ['ocean', 'beach'], 食物: ['food', 'cooking'], 旅行: ['travel', 'destination'], 零售: ['retail store'], 商店: ['retail store'], 物流: ['logistics warehouse'] };
+const CONCEPTS = new Set(['商业合作', '市场磨合', '选择', '观点', '商业', '合作', '市场', '讨论', '不同声音', '零售', '商店', '仓库', '物流', '消费者', '城市', '门店', '工厂', '办公', '招商']);
 function hash(value: string): string { return createHash('sha256').update(value).digest('hex'); }
 function normalize(value: string): string { return value.normalize('NFKC').trim().toLocaleLowerCase(); }
 function unique(values: string[]): string[] { return [...new Set(values.map((value) => value.trim()).filter(Boolean))]; }
-function extractEntities(text: string): string[] {
+export function classifyVisualEntities(text: string, registry: KnownVisualEntity[] = DEFAULT_VISUAL_ENTITIES): VisualEntityDetail[] {
+  const normalized = normalize(text); const found: VisualEntityDetail[] = [];
+  for (const entity of registry) if ([entity.name, ...(entity.aliases || [])].some((candidate) => normalized.includes(normalize(candidate)))) found.push({ name: entity.name, type: entity.type, requiresAuthenticAsset: ['BRAND', 'COMPANY', 'PERSON', 'PRODUCT'].includes(entity.type) });
   const english = text.match(/\b[A-Z][A-Za-z0-9-]{2,}\b/gu) || [];
-  const chinese = text.match(/[\u3400-\u9fff]{2,8}/gu) || [];
-  return unique([...english, ...chinese]).filter((value) => !['This', 'That', 'With', 'When', 'The', '我们', '今天', '如果', '因为'].includes(value));
+  for (const value of english) if (!found.some((item) => normalize(item.name) === normalize(value)) && !CONCEPTS.has(value)) found.push({ name: value, type: 'PRODUCT', requiresAuthenticAsset: true });
+  return found;
 }
-function keywordQueries(text: string, entities: string[]): string[] {
-  const mapped = Object.entries(WORD_MAP).flatMap(([key, values]) => text.includes(key) ? values : []);
-  const englishWords = text.match(/[A-Za-z][A-Za-z0-9-]{2,}/gu) || [];
-  return unique([...entities, ...mapped, ...englishWords]).slice(0, 8);
-}
+function keywordQueries(text: string, entities: string[]): string[] { const mapped = Object.entries(WORD_MAP).flatMap(([key, values]) => text.includes(key) ? values : []); const english = text.match(/[A-Za-z][A-Za-z0-9-]{2,}/gu) || []; return unique([...mapped, ...english, ...entities]).slice(0, 10); }
 export function planVisuals(script: string, options: { durationMs?: number; generatedBy?: 'deterministic-v1' | 'ai' } = {}): VisualPlanV1 {
-  const sentences = segmentScriptSentences(script);
-  const scriptHash = `sha256:${hash(script)}`;
-  const desired = Math.max(2_000, Math.round((options.durationMs || Math.max(2_000, sentences.length * 4_000)) / Math.max(1, sentences.length)));
+  const sentences = segmentScriptSentences(script); const scriptHash = `sha256:${hash(script)}`; const desired = Math.max(2_000, Math.round((options.durationMs || Math.max(2_000, sentences.length * 4_000)) / Math.max(1, sentences.length)));
   return { schemaVersion: 'VISUAL_PLAN_V1', scriptHash, generatedBy: options.generatedBy || 'deterministic-v1', segments: sentences.map((sentence, index) => {
-    const entities = extractEntities(sentence.text);
-    const keywords = keywordQueries(sentence.text, entities);
-    const authentic = entities.length > 0;
-    const intent = keywords.length ? keywords.join(', ') : 'editorial abstract b-roll';
-    return { segmentIndex: index, text: sentence.text, visualIntent: intent, entities, keywords, localQueries: unique([...entities, ...keywords]), externalQueries: unique([...(authentic ? keywords.filter((item) => !entities.includes(item)) : keywords), authentic ? 'editorial b-roll' : 'cinematic b-roll']), sourcePolicy: authentic ? 'LOCAL_FIRST' : 'HYBRID', requiresAuthenticEntityVisual: authentic, desiredDurationMs: desired };
+    const details = classifyVisualEntities(sentence.text); const entities = details.map((item) => item.name); const keywords = keywordQueries(sentence.text, entities); const authentic = details.some((item) => item.requiresAuthenticAsset); const place = details.some((item) => item.type === 'PLACE');
+    const intent = keywords.length ? keywords.join(', ') : 'editorial abstract b-roll'; const externalQueries = unique([...(authentic ? keywords.filter((item) => !entities.includes(item)) : keywords), place ? 'city contextual b-roll' : 'cinematic neutral b-roll']);
+    return { segmentIndex: index, text: sentence.text, visualIntent: intent, entities, entityDetails: details, keywords, localQueries: unique([...entities, ...keywords]), externalQueries, sourcePolicy: authentic ? 'LOCAL_FIRST' : 'HYBRID', requiresAuthenticEntityVisual: authentic, desiredDurationMs: desired, reason: authentic ? '已识别真实品牌、公司或人物，优先使用本地真实素材' : place ? '地点允许使用上下文 B-roll' : '未识别真实实体，使用中性 B-roll' };
   }) };
 }
-
 export function dedupeExternalQueries(plan: VisualPlanV1): string[] { return unique(plan.segments.flatMap((segment) => segment.externalQueries.map(normalize))); }
 export function rankLocalCandidates(segment: VisualPlanSegmentV1, assets: Array<PlannerAsset & { originalName?: string; tags?: string[]; metadata?: Record<string, unknown> }>): Array<PlannerAsset & { score: number; matched: string[] }> {
-  const required = segment.localQueries.map(normalize);
-  return assets.filter((asset) => Number(asset.durationMs) > 0).map((asset) => {
-    const haystack = normalize([asset.id, asset.sourcePath, asset.originalName || '', ...(asset.tags || []), ...Object.values(asset.metadata || {}).filter((value): value is string => typeof value === 'string')].join(' '));
-    const matched = required.filter((query) => haystack.includes(query));
-    const entityHit = segment.entities.some((entity) => haystack.includes(normalize(entity)));
-    const usagePenalty = Math.min(25, Number(asset.usageCount || 0) * 2 + Number(asset.recentUsageCount || 0));
-    const score = matched.length * 24 + (entityHit ? 80 : 0) + (asset.sourcePath ? 5 : 0) - usagePenalty;
-    return { ...asset, score, matched };
-  }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  const required = segment.localQueries.map(normalize); return assets.filter((asset) => Number(asset.durationMs) > 0).map((asset) => { const haystack = normalize([asset.id, asset.sourcePath, asset.originalName || '', ...(asset.tags || []), ...Object.values(asset.metadata || {}).filter((value): value is string => typeof value === 'string')].join(' ')); const matched = required.filter((query) => haystack.includes(query)); const entityHit = segment.entities.some((entity) => haystack.includes(normalize(entity))); const score = matched.length * 24 + (entityHit ? 80 : 0) + (asset.sourcePath ? 5 : 0) - Math.min(25, Number(asset.usageCount || 0) * 2 + Number(asset.recentUsageCount || 0)); return { ...asset, score, matched }; }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 }
-
-function allowedDownloadUrl(input: string): URL {
-  let url: URL;
-  try { url = new URL(input); } catch { throw new Error('PEXELS_DOWNLOAD_URL_INVALID'); }
-  if (url.protocol !== 'https:' || !['videos.pexels.com', 'images.pexels.com'].includes(url.hostname.toLowerCase())) throw new Error('PEXELS_DOWNLOAD_URL_BLOCKED');
-  return url;
-}
-function pickFile(video: ExternalVideoResult): ExternalVideoFile {
-  const files = video.files.filter((file) => file.url && file.width > 0 && file.height > 0).sort((a, b) => (Math.abs((b.width / b.height) - 0.5625) - Math.abs((a.width / a.height) - 0.5625)) || b.width - a.width);
-  if (!files[0]) throw new Error('PEXELS_NO_USABLE_VIDEO_FILE');
-  allowedDownloadUrl(files[0].url);
-  return files[0];
-}
-
+function allowedDownloadUrl(input: string): URL { let url: URL; try { url = new URL(input); } catch { throw new Error('PEXELS_DOWNLOAD_URL_INVALID'); } if (url.protocol !== 'https:' || !['videos.pexels.com', 'images.pexels.com'].includes(url.hostname.toLowerCase())) throw new Error('PEXELS_DOWNLOAD_URL_BLOCKED'); return url; }
+export function pickPexelsFile(video: ExternalVideoResult): ExternalVideoFile { const files = video.files.filter((file) => file.url && file.width > 0 && file.height > 0).sort((a, b) => { const portrait = (height: number, width: number) => height >= width ? 0 : 1; const pa = portrait(a.height, a.width); const pb = portrait(b.height, b.width); return pa - pb || Math.abs(a.width / a.height - 0.5625) - Math.abs(b.width / b.height - 0.5625) || Math.abs(a.width - 1080) - Math.abs(b.width - 1080) || b.width - a.width; }); const file = files[0]; if (!file) throw new Error('PEXELS_NO_USABLE_VIDEO_FILE'); allowedDownloadUrl(file.url); return file; }
 export class PexelsVideoProvider implements ExternalVideoProvider {
-  readonly name = 'pexels';
-  readonly configured: boolean;
-  private rateLimit: RateLimitInfo | undefined;
+  readonly name = 'pexels'; readonly configured: boolean; private rateLimit: RateLimitInfo | undefined;
   constructor(private readonly apiKey = process.env.PEXELS_API_KEY || '', private readonly fetchImpl: typeof fetch = fetch, private readonly timeoutMs = 15_000) { this.configured = Boolean(this.apiKey.trim()); }
-  private async request(path: string, signal?: AbortSignal): Promise<Response> {
-    if (!this.configured) throw new Error('PEXELS_NOT_CONFIGURED');
-    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs); const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true });
-    try {
-      const response = await this.fetchImpl(`https://api.pexels.com${path}`, { headers: { Authorization: this.apiKey }, signal: controller.signal });
-      this.rateLimit = { limit: Number(response.headers.get('x-ratelimit-limit')) || undefined, remaining: Number(response.headers.get('x-ratelimit-remaining')) || undefined, resetAt: response.headers.get('x-ratelimit-reset') || undefined };
-      if (!response.ok) throw new Error(`PEXELS_HTTP_${response.status}`);
-      return response;
-    } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
-  }
-  async search(options: ExternalVideoSearchOptions): Promise<{ results: ExternalVideoResult[]; rateLimit?: RateLimitInfo }> {
-    const key = `${options.query}|${options.orientation || ''}|${options.locale || ''}|${options.page || 1}`;
-    const cached = cache.get(key); if (cached && cached.expiresAt > Date.now()) return { results: cached.value, ...(cached.rateLimit ? { rateLimit: cached.rateLimit } : {}) };
-    const params = new URLSearchParams({ query: options.query, page: String(options.page || 1), per_page: String(Math.min(20, options.perPage || 8)), ...(options.orientation ? { orientation: options.orientation } : {}), ...(options.locale ? { locale: options.locale } : {}) });
-    const response = await this.request(`/videos/search?${params.toString()}`, options.signal); const body = await response.json() as { videos?: Array<Record<string, unknown>> };
-    const results = (body.videos || []).map((item) => { const files = Array.isArray(item.video_files) ? item.video_files.map((file) => ({ id: String((file as Record<string, unknown>).id || ''), width: Number((file as Record<string, unknown>).width || 0), height: Number((file as Record<string, unknown>).height || 0), durationMs: Number(item.duration || 0) * 1000, url: String((file as Record<string, unknown>).link || ''), fileType: String((file as Record<string, unknown>).file_type || ''), quality: String((file as Record<string, unknown>).quality || '') })) : []; return { provider: 'pexels', assetId: String(item.id || ''), pageUrl: String(item.url || ''), creator: String((item.user as Record<string, unknown> | undefined)?.name || ''), creatorUrl: String((item.user as Record<string, unknown> | undefined)?.url || ''), width: Number(item.width || 0), height: Number(item.height || 0), durationMs: Number(item.duration || 0) * 1000, files }; }).filter((item) => item.assetId && item.files.some((file) => file.url));
-    cache.set(key, { expiresAt: Date.now() + 24 * 60 * 60 * 1000, value: results, ...(this.rateLimit ? { rateLimit: this.rateLimit } : {}) }); return { results, ...(this.rateLimit ? { rateLimit: this.rateLimit } : {}) };
-  }
-  async download(video: ExternalVideoResult, destination: string, signal?: AbortSignal): Promise<{ fileId: string; bytes: number; contentType: string }> {
-    const file = pickFile(video); let current = allowedDownloadUrl(file.url); let response: Response | undefined;
-    for (let redirect = 0; redirect <= 2; redirect += 1) { response = await this.fetchImpl(current.toString(), { redirect: 'manual', ...(signal ? { signal } : {}) }); if (![301, 302, 303, 307, 308].includes(response.status)) break; const location = response.headers.get('location'); if (!location) throw new Error('PEXELS_REDIRECT_INVALID'); current = allowedDownloadUrl(new URL(location, current).toString()); }
-    if (!response || !response.ok) throw new Error(`PEXELS_DOWNLOAD_HTTP_${response?.status || 0}`);
-    const contentType = response.headers.get('content-type') || ''; if (!contentType.toLowerCase().startsWith('video/')) throw new Error('PEXELS_DOWNLOAD_CONTENT_TYPE_INVALID');
-    const maxBytes = 500 * 1024 * 1024; const length = Number(response.headers.get('content-length') || 0); if (length > maxBytes) throw new Error('PEXELS_DOWNLOAD_TOO_LARGE');
-    if (!response.body) throw new Error('PEXELS_DOWNLOAD_EMPTY'); await mkdir(join(destination, '..'), { recursive: true });
-    const fileHandle = await import('node:fs/promises').then((fs) => fs.open(destination, 'w')); let bytes = 0;
-    try { for await (const chunk of response.body as AsyncIterable<Uint8Array>) { bytes += chunk.byteLength; if (bytes > maxBytes) throw new Error('PEXELS_DOWNLOAD_TOO_LARGE'); await fileHandle.write(chunk); } } finally { await fileHandle.close(); }
-    return { fileId: file.id, bytes, contentType };
-  }
+  private async request(path: string, signal?: AbortSignal): Promise<Response> { if (!this.configured) throw new Error('PEXELS_NOT_CONFIGURED'); const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs); const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true }); try { const response = await this.fetchImpl(`https://api.pexels.com${path}`, { headers: { Authorization: this.apiKey }, signal: controller.signal }); this.rateLimit = { limit: Number(response.headers.get('x-ratelimit-limit')) || undefined, remaining: Number(response.headers.get('x-ratelimit-remaining')) || undefined, resetAt: response.headers.get('x-ratelimit-reset') || undefined }; if (!response.ok) throw new Error(`PEXELS_HTTP_${response.status}`); return response; } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); } }
+  async search(options: ExternalVideoSearchOptions): Promise<{ results: ExternalVideoResult[]; rateLimit?: RateLimitInfo }> { const page = options.page || 1; const perPage = Math.min(20, options.perPage || 8); const key = JSON.stringify({ provider: this.name, query: normalize(options.query), orientation: options.orientation || '', locale: options.locale || '', page, perPage }); const cached = processCache.get(key); if (cached && cached.expiresAt > Date.now()) return { results: cached.value, ...(cached.rateLimit ? { rateLimit: cached.rateLimit } : {}) }; const params = new URLSearchParams({ query: options.query, page: String(page), per_page: String(perPage), ...(options.orientation ? { orientation: options.orientation } : {}), ...(options.locale ? { locale: options.locale } : {}) }); const response = await this.request(`/videos/search?${params.toString()}`, options.signal); const body = await response.json() as { videos?: Array<Record<string, unknown>> }; const results = (body.videos || []).map((item) => { const user = item.user as Record<string, unknown> | undefined; const files = Array.isArray(item.video_files) ? item.video_files.map((raw) => { const file = raw as Record<string, unknown>; return { id: String(file.id || ''), width: Number(file.width || 0), height: Number(file.height || 0), durationMs: Number(item.duration || 0) * 1000, url: String(file.link || ''), fileType: String(file.file_type || ''), quality: String(file.quality || '') }; }) : []; return { provider: this.name, assetId: String(item.id || ''), pageUrl: String(item.url || ''), creator: String(user?.name || ''), creatorUrl: String(user?.url || ''), width: Number(item.width || 0), height: Number(item.height || 0), durationMs: Number(item.duration || 0) * 1000, files }; }).filter((item) => item.assetId && item.files.some((file) => file.url)); processCache.set(key, { expiresAt: Date.now() + 24 * 60 * 60 * 1000, value: results, ...(this.rateLimit ? { rateLimit: this.rateLimit } : {}) }); return { results, ...(this.rateLimit ? { rateLimit: this.rateLimit } : {}) }; }
+  async download(video: ExternalVideoResult, destination: string, signal?: AbortSignal): Promise<{ fileId: string; bytes: number; contentType: string }> { const file = pickPexelsFile(video); let current = allowedDownloadUrl(file.url); let response: Response | undefined; for (let redirect = 0; redirect <= 2; redirect += 1) { response = await this.fetchImpl(current.toString(), { redirect: 'manual', ...(signal ? { signal } : {}) }); if (![301, 302, 303, 307, 308].includes(response.status)) break; const location = response.headers.get('location'); if (!location) throw new Error('PEXELS_REDIRECT_INVALID'); current = allowedDownloadUrl(new URL(location, current).toString()); } if (!response || !response.ok) throw new Error(`PEXELS_DOWNLOAD_HTTP_${response?.status || 0}`); const contentType = response.headers.get('content-type') || ''; if (!contentType.toLowerCase().startsWith('video/')) throw new Error('PEXELS_DOWNLOAD_CONTENT_TYPE_INVALID'); const maxBytes = 500 * 1024 * 1024; const length = Number(response.headers.get('content-length') || 0); if (length > maxBytes) throw new Error('PEXELS_DOWNLOAD_TOO_LARGE'); if (!response.body) throw new Error('PEXELS_DOWNLOAD_EMPTY'); await mkdir(join(destination, '..'), { recursive: true }); const handle = await import('node:fs/promises').then((fs) => fs.open(destination, 'w')); let bytes = 0; try { for await (const chunk of response.body as AsyncIterable<Uint8Array>) { bytes += chunk.byteLength; if (bytes > maxBytes) throw new Error('PEXELS_DOWNLOAD_TOO_LARGE'); await handle.write(chunk); } } finally { await handle.close(); } return { fileId: file.id, bytes, contentType }; }
   async health(): Promise<{ ok: boolean; message?: string; rateLimit?: RateLimitInfo }> { try { await this.search({ query: 'abstract', perPage: 1 }); return { ok: true, ...(this.rateLimit ? { rateLimit: this.rateLimit } : {}) }; } catch (error) { return { ok: false, message: error instanceof Error ? error.message : 'PEXELS_HEALTH_FAILED', ...(this.rateLimit ? { rateLimit: this.rateLimit } : {}) }; } }
-  getRateLimit(): RateLimitInfo | undefined { return this.rateLimit; }
 }
-
-export class FakeExternalVideoProvider implements ExternalVideoProvider {
-  readonly name = 'fake-pexels'; readonly configured = true;
-  constructor(private readonly fixturePath = process.env.CONTENTOS_FAKE_PEXELS_FIXTURE || '') {}
-  async search(options: ExternalVideoSearchOptions): Promise<{ results: ExternalVideoResult[] }> { const query = options.query.trim() || 'abstract'; return { results: [{ provider: this.name, assetId: `fake-${hash(query).slice(0, 12)}`, pageUrl: `https://www.pexels.com/video/fake-${hash(query).slice(0, 8)}/`, creator: 'ContentOS Fake', width: 1080, height: 1920, durationMs: 8_000, files: [{ id: `file-${hash(query).slice(0, 12)}`, width: 1080, height: 1920, durationMs: 8_000, url: 'https://videos.pexels.com/fake/contentos.mp4', fileType: 'video/mp4', quality: 'hd' }] }] }; }
-  async download(video: ExternalVideoResult, destination: string): Promise<{ fileId: string; bytes: number; contentType: string }> { if (!this.fixturePath) throw new Error('CONTENTOS_FAKE_PEXELS_FIXTURE_REQUIRED'); await copyFile(this.fixturePath, destination); return { fileId: video.files[0]?.id || 'fake-file', bytes: 1, contentType: 'video/mp4' }; }
-  async health(): Promise<{ ok: boolean }> { return { ok: true }; }
-}
+export class FakeExternalVideoProvider implements ExternalVideoProvider { readonly name = 'fake-pexels'; readonly configured = true; searchCount = 0; downloadCount = 0; constructor(private readonly fixturePath = process.env.CONTENTOS_FAKE_PEXELS_FIXTURE || '') {} async search(options: ExternalVideoSearchOptions): Promise<{ results: ExternalVideoResult[] }> { this.searchCount += 1; if (process.env.CONTENTOS_FAKE_PEXELS_FAILURE === '1') throw new Error('FAKE_PEXELS_UNAVAILABLE'); const q = options.query.trim() || 'abstract'; const id = `fake-${hash(q).slice(0, 12)}`; return { results: [{ provider: this.name, assetId: id, pageUrl: `https://www.pexels.com/video/${id}/`, creator: 'ContentOS Fake', width: 1080, height: 1920, durationMs: 8_000, files: [{ id: `file-${hash(q).slice(0, 12)}`, width: 1080, height: 1920, durationMs: 8_000, url: 'https://videos.pexels.com/fake/contentos.mp4', fileType: 'video/mp4', quality: 'hd' }] }] }; } async download(video: ExternalVideoResult, destination: string): Promise<{ fileId: string; bytes: number; contentType: string }> { this.downloadCount += 1; if (!this.fixturePath) throw new Error('CONTENTOS_FAKE_PEXELS_FIXTURE_REQUIRED'); await mkdir(join(destination, '..'), { recursive: true }); await copyFile(this.fixturePath, destination); return { fileId: video.files[0]?.id || 'fake-file', bytes: 1, contentType: 'video/mp4' }; } async health(): Promise<{ ok: boolean }> { return { ok: process.env.CONTENTOS_FAKE_PEXELS_FAILURE !== '1' }; } }
+const providerHealth = new Map<string, { ok: boolean; message?: string; rateLimit?: RateLimitInfo; checkedAt: string }>();
+export function recordProviderHealth(provider: string, status: { ok: boolean; message?: string; rateLimit?: RateLimitInfo }): void { providerHealth.set(provider, { ...status, checkedAt: new Date().toISOString() }); }
+export function getProviderHealth(provider: string): { ok?: boolean; message?: string; rateLimit?: RateLimitInfo; checkedAt?: string } { return providerHealth.get(provider) || {}; }
 export function createExternalVideoProvider(): ExternalVideoProvider { return process.env.CONTENTOS_FAKE_PEXELS === '1' ? new FakeExternalVideoProvider() : new PexelsVideoProvider(); }
 
-export interface HybridRetrievalResult { assets: PlannerAsset[]; plan: VisualPlanV1; diagnostics: { localCount: number; externalCount: number; fallbackCount: number; queries: string[]; warnings: string[]; }; }
+export interface HybridRetrievalResult { assets: PlannerAsset[]; plan: VisualPlanV1; resolvedPlan: ResolvedVisualPlanV1; resolvedAssignments: ResolvedVisualAssignment[]; diagnostics: { localCount: number; externalCount: number; fallbackCount: number; queries: string[]; warnings: string[]; sourceStats: { local: number; pexels: number; fallback: number }; }; }
 export class HybridMediaService {
-  constructor(private readonly assetService: AssetService, private readonly storage: LocalStorageProvider, private readonly provider?: ExternalVideoProvider) {}
+  constructor(private readonly assetService: AssetService, private readonly storage: LocalStorageProvider, private readonly provider?: ExternalVideoProvider, private readonly db?: Pool) {}
+  private async searchCached(options: ExternalVideoSearchOptions): Promise<{ results: ExternalVideoResult[]; rateLimit?: RateLimitInfo }> { const page = options.page || 1; const perPage = options.perPage || 8; const key = JSON.stringify({ provider: this.provider?.name || '', query: normalize(options.query), orientation: options.orientation || '', locale: options.locale || '', page, perPage }); if (this.db) { const row = (await this.db.query('select response, rate_limit from external_media_search_cache where cache_key=$1 and expires_at > now()', [key])).rows[0] as { response?: unknown; rate_limit?: RateLimitInfo } | undefined; if (row?.response) return { results: row.response as ExternalVideoResult[], ...(row.rate_limit ? { rateLimit: row.rate_limit } : {}) }; } const response = await this.provider!.search(options); if (this.db) await this.db.query('insert into external_media_search_cache(cache_key,provider,query,orientation,locale,page,per_page,response,rate_limit,expires_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,now()+interval \'24 hours\') on conflict(cache_key) do update set response=excluded.response,rate_limit=excluded.rate_limit,expires_at=excluded.expires_at', [key, this.provider!.name, options.query, options.orientation || null, options.locale || null, page, perPage, JSON.stringify(response.results), response.rateLimit || null]); return response; }
+  private async importExternal(workspaceId: string, result: ExternalVideoResult, signal?: AbortSignal): Promise<PlannerAsset> { const file = pickPexelsFile(result); if (this.db) { const row = (await this.db.query('select e.asset_id,a.storage_key,a.metadata from external_media_assets e join assets a on a.id=e.asset_id where e.provider=$1 and e.provider_asset_id=$2 and e.provider_file_id=$3 and a.lifecycle=\'READY\'', [result.provider, result.assetId, file.id])).rows[0] as { asset_id: string; storage_key: string; metadata?: Record<string, unknown> } | undefined; if (row && await this.storage.exists(String(row.storage_key))) { await this.db.query('insert into video_workspace_assets(workspace_id,asset_id,role) values($1,$2,\'SOURCE\') on conflict do nothing', [workspaceId, row.asset_id]); return { id: row.asset_id, storageKey: String(row.storage_key), sourcePath: this.storage.objectPath(String(row.storage_key)), durationMs: result.durationMs || 8_000, ...(row.metadata ? { metadata: row.metadata } : {}) }; } } const temp = join(this.storage.root, 'staging', `hybrid-${hash(`${workspaceId}:${result.provider}:${result.assetId}:${file.id}`)}${extname(file.url) || '.mp4'}`); try { await this.provider!.download(result, temp, signal); const imported = await this.assetService.importFile({ workspaceId, sourcePath: temp, kind: 'VIDEO', role: 'SOURCE', metadata: { external: { provider: result.provider, providerAssetId: result.assetId, providerFileId: file.id, pageUrl: result.pageUrl || null, creator: result.creator || null, query: result.tags || [] } } }); if (this.db) await this.db.query('insert into external_media_assets(provider,provider_asset_id,provider_file_id,asset_id,provenance) values($1,$2,$3,$4,$5) on conflict(provider,provider_asset_id,provider_file_id) do update set asset_id=excluded.asset_id,provenance=excluded.provenance', [result.provider, result.assetId, file.id, imported.id, JSON.stringify({ pageUrl: result.pageUrl || null, creator: result.creator || null })]); return { id: imported.id, storageKey: imported.storageKey, sourcePath: this.storage.objectPath(imported.storageKey), durationMs: result.durationMs || 8_000, metadata: { external: { provider: result.provider, providerAssetId: result.assetId, providerFileId: file.id } } }; } finally { await rm(temp, { force: true }).catch(() => undefined); } }
   async resolve(input: { workspaceId: string; script: string; localAssets: Array<PlannerAsset & { originalName?: string; tags?: string[]; metadata?: Record<string, unknown> }>; usePexels: boolean; signal?: AbortSignal }): Promise<HybridRetrievalResult> {
-    const plan = planVisuals(input.script); const chosen: PlannerAsset[] = []; let externalCount = 0; let fallbackCount = 0; const warnings: string[] = []; const queries = dedupeExternalQueries(plan);
-    for (const segment of plan.segments) {
-      if (input.signal?.aborted) throw new Error('EDIT_PREPARE_CANCELLED');
-      const ranked = rankLocalCandidates(segment, input.localAssets); const local = ranked.find((candidate) => candidate.durationMs >= Math.min(segment.desiredDurationMs, Math.max(1, candidate.durationMs)));
-      if (local && (!segment.requiresAuthenticEntityVisual || local.score >= 70)) { chosen.push(local); continue; }
-      if (segment.requiresAuthenticEntityVisual && !local) fallbackCount += 1;
-      if (!input.usePexels || !this.provider) { if (local) chosen.push(local); else if (input.localAssets[0]) chosen.push(input.localAssets[0]); else throw new Error('EDIT_NO_VIDEO_ASSETS'); continue; }
-      const query = segment.externalQueries[0] || 'cinematic b-roll';
-      try {
-        const search = await this.provider.search({ query, orientation: 'portrait', locale: 'zh-CN', perPage: 8, ...(input.signal ? { signal: input.signal } : {}) }); const result = search.results[0];
-        if (!result) throw new Error('PEXELS_NO_RESULTS');
-        const temp = join(this.storage.root, 'staging', `hybrid-${hash(`${input.workspaceId}:${segment.segmentIndex}:${result.assetId}`)}${extname(result.files[0]?.url || '.mp4') || '.mp4'}`);
-        await this.provider.download(result, temp, input.signal); const imported = await this.assetService.importFile({ workspaceId: input.workspaceId, sourcePath: temp, kind: 'VIDEO', role: 'SOURCE' });
-        await rm(temp, { force: true }); chosen.push({ id: imported.id, storageKey: imported.storageKey, sourcePath: this.storage.objectPath(imported.storageKey), durationMs: result.durationMs || 8_000 }); externalCount += 1;
-      } catch (error) { warnings.push(`${query}:${error instanceof Error ? error.message : 'external retrieval failed'}`); if (local) chosen.push(local); else if (input.localAssets[0]) chosen.push(input.localAssets[0]); else throw error; }
+    const plan = planVisuals(input.script); const chosen: PlannerAsset[] = []; const assignments: ResolvedVisualAssignment[] = []; const resolvedSegments: ResolvedVisualPlanSegmentV1[] = []; let externalCount = 0; let fallbackCount = 0; const warnings: string[] = []; const used = new Set<string>(); const searchResults = new Map<string, ExternalVideoResult[]>();
+    for (const segment of plan.segments) { if (input.signal?.aborted) throw new Error('EDIT_PREPARE_CANCELLED'); const ranked = rankLocalCandidates(segment, input.localAssets); const authentic = segment.requiresAuthenticEntityVisual; const local = ranked.find((candidate) => (!authentic || candidate.score >= 70) && candidate.durationMs >= Math.min(segment.desiredDurationMs, Math.max(1, candidate.durationMs)) && !used.has(candidate.id)); const selectedRole = authentic && local ? 'AUTHENTIC_ENTITY' : segment.entityDetails?.some((item) => item.type === 'PLACE') ? 'PLACE_CONTEXT' : local ? 'GENERIC_BROLL' : 'NEUTRAL_BROLL';
+      let asset = local as PlannerAsset | undefined; let source: 'LOCAL' | 'PEXELS' | 'FAKE_PEXELS' = 'LOCAL'; let query: string | undefined; let entityFallback = false;
+      if (!asset && input.usePexels && this.provider) { query = segment.externalQueries[0] || 'cinematic neutral b-roll'; try { let results = searchResults.get(query); if (!results) { results = (await this.searchCached({ query, orientation: 'portrait', locale: 'zh-CN', perPage: 8, ...(input.signal ? { signal: input.signal } : {}) })).results; searchResults.set(query, results); } const candidate = results.find((item) => !used.has(`${item.provider}:${item.assetId}`)) || results[0]; if (!candidate) throw new Error('PEXELS_NO_RESULTS'); asset = await this.importExternal(input.workspaceId, candidate, input.signal); source = this.provider.name === 'fake-pexels' ? 'FAKE_PEXELS' : 'PEXELS'; externalCount += 1; } catch (error) { warnings.push(`${query}:${error instanceof Error ? error.message : 'external retrieval failed'}`); } }
+      if (!asset) { asset = ranked.find((candidate) => !used.has(candidate.id)) || input.localAssets.find((candidate) => !used.has(candidate.id)) || input.localAssets[0]; if (!asset) throw new Error(input.usePexels ? 'HYBRID_MEDIA_UNAVAILABLE:当前没有可用的本地素材，网络素材服务也暂时不可用。' : 'EDIT_NO_VIDEO_ASSETS'); fallbackCount += authentic ? 1 : 0; entityFallback = authentic; source = 'LOCAL'; }
+      used.add(asset.id); chosen.push(asset); const reason = source === 'LOCAL' ? (entityFallback ? '无真实实体本地素材，已明确标记为 fallback' : '本地素材命中') : '外部素材下载并写入本地缓存'; assignments.push({ segmentIndex: segment.segmentIndex, selectedAssetId: asset.id, selectedSource: source, selectedRole: entityFallback ? 'GENERIC_BROLL' : selectedRole, entityFallback, ...(query ? { searchQuery: query } : {}), reason, visualIntent: segment.visualIntent, matchedKeywords: ranked.find((item) => item.id === asset.id)?.matched || [] }); resolvedSegments.push({ ...segment, selectedAssetId: asset.id, selectedSource: source, selectedRole: entityFallback ? 'GENERIC_BROLL' : selectedRole, entityFallback, ...(query ? { query } : {}) });
     }
-    return { assets: chosen.length ? chosen : input.localAssets, plan, diagnostics: { localCount: chosen.length - externalCount, externalCount, fallbackCount, queries, warnings } };
+    return { assets: chosen, plan, resolvedPlan: { schemaVersion: 'RESOLVED_VISUAL_PLAN_V1', plan, segments: resolvedSegments }, resolvedAssignments: assignments, diagnostics: { localCount: chosen.length - externalCount, externalCount, fallbackCount, queries: dedupeExternalQueries(plan), warnings, sourceStats: { local: chosen.length - externalCount, pexels: externalCount, fallback: fallbackCount } } };
   }
 }

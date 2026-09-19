@@ -1,7 +1,7 @@
 import type { AssetService } from '../../asset/src/asset-service.js';
 import type { AssetCatalogService } from '../../asset/src/asset-catalog-service.js';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
-import { assembleBrandedTimeline, buildRandomSentenceMontageManifest, buildScriptMontageManifest, type PlannerAsset } from './planner.js';
+import { assembleBrandedTimeline, buildRandomSentenceMontageManifest, buildScriptMontageManifest, type PlannerAsset, type ResolvedVisualAssignment } from './planner.js';
 import { segmentScriptSentences } from './sentence-segmenter.js';
 import type { VideoAdjustmentService } from './quick-edit-service.js';
 import type { VideoEditPreset, VideoEditPresetService } from './preset-service.js';
@@ -30,6 +30,7 @@ export interface EditingWorkbenchPreparationInput {
   fps: number;
   templateId?: string;
   renderIdempotencySuffix?: string;
+  resolvedAssignments?: ResolvedVisualAssignment[];
 }
 
 export interface EditingWorkbenchPreparationResult {
@@ -63,7 +64,7 @@ export async function prepareEditingWorkbenchItem(
     planned = buildRandomSentenceMontageManifest({ workspaceId: input.workspaceId, sentences, assets: input.assets, seed: input.seed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });
   } else {
     try {
-      planned = buildScriptMontageManifest({ workspaceId: input.workspaceId, script: input.script, sentences, assets: input.assets, seed: input.seed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });
+      planned = buildScriptMontageManifest({ workspaceId: input.workspaceId, script: input.script, sentences, assets: input.assets, seed: input.seed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(input.resolvedAssignments ? { resolvedAssignments: input.resolvedAssignments } : {}), ...(voiceAssetId ? { voiceAssetId } : {}) });
     } catch (error) {
       if (input.assets.length !== 1 || !(error instanceof Error) || !error.message.includes('Adjacent duplicate clips')) throw error;
       planned = buildRandomSentenceMontageManifest({ workspaceId: input.workspaceId, sentences, assets: input.assets, seed: input.seed, minClipDurationMs: input.minClipDurationMs, maxClipDurationMs: input.maxClipDurationMs, preferUnusedMedia: input.preferUnusedMedia, ...(voiceAssetId ? { voiceAssetId } : {}) });

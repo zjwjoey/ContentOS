@@ -1,7 +1,7 @@
 import { validateEditManifest, type ClipMatchingV1, type EditManifestV0 } from '../../../contracts/src/index.js';
 import { segmentScriptSentences, type ScriptSentence } from './sentence-segmenter.js';
 
-export interface PlannerAsset { id: string; storageKey: string; sourcePath: string; durationMs: number; usageCount?: number; lastUsedAt?: string; recentUsageCount?: number; }
+export interface PlannerAsset { id: string; storageKey: string; sourcePath: string; durationMs: number; usageCount?: number; lastUsedAt?: string; recentUsageCount?: number; originalName?: string; tags?: string[]; metadata?: Record<string, unknown>; }
 export interface StoryboardPlannerAsset extends PlannerAsset { originalName?: string; tags?: string[]; metadata?: Record<string, unknown>; }
 export interface StoryboardPlannerScene { sceneIndex: number; assetKeywords: string[]; durationHintSeconds: number; }
 export interface BuildManifestInput { projectId?: string; workspaceId?: string; seed: number; assets: PlannerAsset[]; targetDurationMs: number; voiceAssetId?: string; voicePath?: string; subtitleText?: string; metadata?: EditManifestV0['metadata']; }
@@ -171,6 +171,19 @@ export interface BrandingConfig { intro?: BrandingAsset; outro?: BrandingAsset; 
 
 export interface ScriptMontageInput extends SentenceMontageBaseInput {
   script?: string;
+  resolvedAssignments?: ResolvedVisualAssignment[];
+}
+
+export interface ResolvedVisualAssignment {
+  segmentIndex: number;
+  selectedAssetId: string;
+  selectedSource: 'LOCAL' | 'PEXELS' | 'FAKE_PEXELS';
+  selectedRole: 'AUTHENTIC_ENTITY' | 'NEUTRAL_BROLL' | 'GENERIC_BROLL' | 'PLACE_CONTEXT';
+  entityFallback: boolean;
+  searchQuery?: string;
+  reason: string;
+  visualIntent: string;
+  matchedKeywords: string[];
 }
 
 export interface RandomSentenceMontageInput extends SentenceMontageBaseInput {}
@@ -254,6 +267,18 @@ export function buildScriptMontageManifest(input: ScriptMontageInput): SentenceM
   const minMs = input.minClipDurationMs ?? 2_000; const maxMs = input.maxClipDurationMs ?? 5_000;
   if (!Number.isInteger(minMs) || !Number.isInteger(maxMs) || minMs <= 0 || maxMs < minMs) throw new Error('Script montage clip bounds are invalid');
   const random = seededRandom(input.seed); const assets = [...input.assets].sort((a, b) => a.id.localeCompare(b.id)); const timeline: EditManifestV0['timeline'] = []; const decisions: SentenceMontageDecision[] = [];
+  if (input.resolvedAssignments) {
+    const byIndex = new Map(input.resolvedAssignments.map((assignment) => [assignment.segmentIndex, assignment]));
+    let visualCursor = 0;
+    for (const sentence of sentences) {
+      const assignment = byIndex.get(sentence.index); if (!assignment) throw new Error(`VisualPlan assignment missing for segment ${sentence.index}`);
+      const asset = input.assets.find((candidate) => candidate.id === assignment.selectedAssetId); if (!asset) throw new Error(`VisualPlan assignment asset missing: ${assignment.selectedAssetId}`);
+      const requestedDuration = sentenceDurationMs(sentence, minMs, maxMs); const timing = boundedAssetClip(asset, requestedDuration, random); if (!timing) throw new Error(`第${sentence.index + 1}句话需要足够长的画面素材。`);
+      const placement = visualTiming(sentences, sentence, sentence.index, visualCursor); visualCursor = placement.endMs; const matching: ClipMatchingV1 = { matchedKeywords: assignment.matchedKeywords, matchScore: assignment.entityFallback ? 0 : 100, fallback: assignment.entityFallback, matchingReason: assignment.reason, visualIntent: assignment.visualIntent, selectedSource: assignment.selectedSource, selectedRole: assignment.selectedRole, entityFallback: assignment.entityFallback, ...(assignment.searchQuery ? { query: assignment.searchQuery } : {}), reason: assignment.reason };
+      const sceneId = `scene-${String(sentence.index + 1).padStart(3, '0')}`; timeline.push({ assetId: asset.id, sourcePath: asset.sourcePath, sourceInMs: timing.sourceInMs, durationMs: timing.durationMs, timelineStartMs: placement.startMs, timelineEndMs: placement.endMs, transition: 'cut', sentenceIndex: sentence.index, sentenceText: sentence.text, sceneId, matching, role: 'CONTENT', reviewStatus: assignment.entityFallback ? 'REVIEW' : 'GOOD', ...(validVoiceTiming(sentence) ? { voiceStartMs: sentence.voiceStartMs, voiceEndMs: sentence.voiceEndMs } : {}) }); decisions.push({ sentenceIndex: sentence.index, sceneId, assetId: asset.id, durationMs: timing.durationMs, ...matching });
+    }
+    return { manifest: sentenceManifest(input, sentences, 'SCRIPT', decisions, timeline), decisions, sentences };
+  }
   let visualCursor = 0;
   for (let sentenceIndex = 0; sentenceIndex < sentences.length; sentenceIndex += 1) {
     const sentence = sentences[sentenceIndex]!;
