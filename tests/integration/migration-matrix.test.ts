@@ -151,12 +151,13 @@ test('migration 0027 down normalizes live preparation/rendering states and can m
       await db.query("insert into edit_workbench_sessions (id,mode,title) values ($1,'MIX','migration')", [sessionId]);
       await db.query("insert into edit_batches (id,session_id,mode,total_count) values ($1,$2,'MIX',4)", [batchId, sessionId]);
       for (const [index, state] of ['PREPARING', 'RENDERING', 'FAILED', 'SUCCEEDED'].entries()) await db.query('insert into edit_batch_items (id,batch_id,ordinal,title,script,workspace_id,state) values ($1,$2,$3,$4,$5,$6,$7)', [`migration-edit-item-${index}-${randomUUID()}`, batchId, index + 1, `item-${index}`, 'script', workspaceId, state]);
+      assert.equal((await migrateDown(db)).removed, 1); // 0030 local path grants
       assert.equal((await migrateDown(db)).removed, 1); // 0029 editorial plan
       assert.equal((await migrateDown(db)).removed, 1); // 0028 cache tables
       assert.equal((await migrateDown(db)).removed, 1); // 0027 state normalization
       const states = await db.query<{ state: string }>('select state from edit_batch_items where batch_id=$1 order by ordinal', [batchId]);
       assert.deepEqual(states.rows.map((row) => row.state), ['RUNNING', 'RUNNING', 'FAILED', 'SUCCEEDED']);
-      assert.equal((await migrateUp(db)).applied, 3);
+      assert.equal((await migrateUp(db)).applied, 4);
       const columns = await db.query<{ column_name: string }>("select column_name from information_schema.columns where table_schema=current_schema() and table_name='edit_batch_items' and column_name='prepare_job_id'");
       assert.equal(columns.rowCount, 1);
     } finally { await db.end(); }

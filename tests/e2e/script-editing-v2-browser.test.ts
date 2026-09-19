@@ -45,7 +45,7 @@ test('Script Editing V2 browser flows cover local, hybrid, reroll, BGM and histo
     await scriptInput.pressSequentially('最近看到一些针对MIZAN的不同声音。\n但是商业合作本来就会有不同观点。\n欢迎大家到店交流。\n市场会慢慢给出答案。');
     await page.locator('#v2-voice').fill(fixtureAudio!);
     await page.locator('#v2-output-root').fill(fixtureDir!);
-    await page.locator('input[placeholder="本地素材文件夹"]').first().fill(localRoot);
+    await page.locator('input[placeholder="高级模式：手动填写路径"]').first().fill(localRoot);
     const createButton = page.getByRole('button', { name: '生成剪辑方案' });
     await page.waitForFunction(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('生成剪辑方案')); return Boolean(button && !(button as HTMLButtonElement).disabled); });
     await createButton.click();

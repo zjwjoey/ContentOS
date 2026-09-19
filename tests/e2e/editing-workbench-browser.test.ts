@@ -69,7 +69,7 @@ test('独立剪辑工作台完成脚本、测试混剪与批量失败重试流�
     const scriptArea = page.locator('.edit-form textarea').first(); await scriptArea.click(); await scriptArea.pressSequentially('第一段脚本。第二段脚本。第三段脚本。');
     await page.getByLabel('脚本配音文件').setInputFiles(fixtureAudio!);
     const sourceLabels = page.locator('.folder-row input');
-    await page.getByRole('button', { name: '+ 添加素材文件夹' }).click(); await sourceLabels.nth(0).fill(roots.first); await sourceLabels.nth(1).fill(roots.second);
+    await page.getByRole('button', { name: '高级模式：手动添加路径' }).click(); await sourceLabels.nth(0).fill(roots.first); await sourceLabels.nth(1).fill(roots.second);
     await page.getByLabel('输出文件夹').fill(roots.output);
     await page.getByRole('button', { name: '开始剪辑' }).click();
     try { await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 15_000 }); }
