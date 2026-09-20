@@ -58,6 +58,9 @@ test('V3 database workflow freezes pools, reuses Assets, and preserves locked cl
     const session = await service.createSession({ workspaceId, snapshotId: snapshot.id, script: '顾客在货架购物。' });
     const generated = await service.generate(session.id);
     assert.ok(generated.manifestId);
+    const sourceSegment = (await db.query<{ asset_id: string; source_in_ms: number; source_out_ms: number }>('select asset_id,source_in_ms,source_out_ms from source_segments where snapshot_id=$1', [snapshot.id])).rows[0];
+    assert.equal(sourceSegment?.asset_id, fileId);
+    assert.equal(Number(sourceSegment?.source_out_ms) - Number(sourceSegment?.source_in_ms), 3_000);
     const initial = await service.getSession(session.id);
     assert.equal(initial.cards[0]?.clip?.durationMs, 3_000);
     assert.ok((initial.cards[0]?.candidates || []).some((candidate) => candidate.assetId === fileId));
