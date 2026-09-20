@@ -53,7 +53,7 @@ process.once('SIGTERM', stopChildren);
 
 launch(['--filter', '@contentos/api', 'dev'], { ...commonEnv, PORT: process.env.PORT ?? '3000' });
 const webMode = process.env.CONTENTOS_WEB_PRODUCTION === '1' ? 'start' : 'dev';
-launch(['--filter', '@contentos/web', 'exec', 'next', webMode, '-p', process.env.WEB_PORT ?? '3001'], { ...commonEnv, CONTENTOS_API_URL: process.env.CONTENTOS_API_URL ?? `http://127.0.0.1:${process.env.PORT ?? '3000'}`, PORT: process.env.WEB_PORT ?? '3001' });
+launch(['--filter', '@contentos/web', 'exec', 'next', webMode, '-p', process.env.WEB_PORT ?? '3001'], { ...commonEnv, ...(webMode === 'start' ? { NODE_ENV: 'production' } : {}), CONTENTOS_API_URL: process.env.CONTENTOS_API_URL ?? `http://127.0.0.1:${process.env.PORT ?? '3000'}`, PORT: process.env.WEB_PORT ?? '3001' });
 launch(['--filter', '@contentos/director-worker', 'dev'], { ...commonEnv, PORT: process.env.DIRECTOR_WORKER_PORT ?? '3010' });
 launch(['--filter', '@contentos/asset-worker', 'dev'], { ...commonEnv, PORT: process.env.ASSET_WORKER_PORT ?? '3012' });
 launch(['--filter', '@contentos/worker-video', 'dev'], { ...commonEnv, PORT: process.env.VIDEO_WORKER_PORT ?? '3015' });
