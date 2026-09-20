@@ -144,7 +144,7 @@ async function main(): Promise<void> {
     };
     if (process.env.CONTENTOS_WEB_PRODUCTION === '1') {
       const buildInvocation = pnpmInvocation(['--filter', '@contentos/web', 'exec', 'next', 'build']);
-      await run(buildInvocation.command, buildInvocation.args, environment);
+      await run(buildInvocation.command, buildInvocation.args, { ...environment, NODE_ENV: 'production' });
     }
     operator = spawnPnpm(['dev:operator'], environment);
     await waitForHealth(apiUrl);
