@@ -91,8 +91,12 @@ jobs:
             echo "::error title=ContentOS test failures::$summary"
           fi
           exit "$status"
+      - name: Reset database before Auto Edit V1
+        run: pnpm exec tsx scripts/reset-test-database.ts
       - name: Auto Edit V1
         run: pnpm test:auto-edit-v1 2>&1 | tee auto-edit-v1-output.log
+      - name: Reset database before Auto Edit V1.5
+        run: pnpm exec tsx scripts/reset-test-database.ts
       - name: Auto Edit V1.5
         run: pnpm test:auto-edit-v15 2>&1 | tee auto-edit-v15-output.log
       - name: Script Editing V2 and FFmpeg
