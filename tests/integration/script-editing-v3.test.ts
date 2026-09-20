@@ -5,7 +5,10 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import pg from 'pg';
 import { createDatabase, migrateUp, resolveMigrationsDirectory } from '../../packages/database/src/index.js';
-import { JianyingDraftImporter, ScriptEditingV3Service } from '../../packages/modules/video/src/index.js';
+import { generateFixtureVideo, probeMedia } from '../../packages/infrastructure/ffmpeg/src/index.js';
+import { AssetService } from '../../packages/modules/asset/src/index.js';
+import { FakeExternalVideoProvider, HybridMediaService, JianyingDraftImporter, ScriptEditingV3Service } from '../../packages/modules/video/src/index.js';
+import { LocalStorageProvider } from '../../packages/infrastructure/storage/src/index.js';
 
 const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55433/contentos_test';
 
@@ -50,11 +53,29 @@ test('V3 database workflow freezes pools, reuses Assets, and preserves locked cl
     const service = new ScriptEditingV3Service(db);
     const snapshot = await service.createMaterialPoolSnapshot({ workspaceId, sourceRootIds: [rootId] });
     assert.deepEqual(snapshot.items.map((item) => item.assetId).sort(), [fileId, secondFileId].sort());
+    const health = await service.getMaterialPoolHealth(snapshot.id);
+    assert.equal(health.total, 2);
+    assert.equal(health.missing, 2);
+    assert.equal(health.aiNotRequested, 2);
+
+    await service.setManualTags(snapshot.id, fileId, ['货架', 'MIZAN']);
+    const originalFingerprint = snapshot.items.find((item) => item.assetId === fileId)?.sourceFingerprint;
+    await service.persistVisualProfile({ assetId: fileId, summary: '门店内部', tags: [{ tag: '门店内部', confidence: .9, timestampsMs: [1_000] }], recommendedTimestampsMs: [1_000], modelProvider: 'QWEN_VL', modelName: 'qwen', modelVersion: '1', promptVersion: 'p', analysisVersion: '1', createdAt: new Date().toISOString() }, originalFingerprint);
+    await service.persistVisualProfile({ assetId: fileId, summary: '门店内部更新', tags: [{ tag: '商品特写', confidence: .8, timestampsMs: [2_000] }], recommendedTimestampsMs: [2_000], modelProvider: 'QWEN_VL', modelName: 'qwen', modelVersion: '1', promptVersion: 'p', analysisVersion: '1', createdAt: new Date().toISOString() }, originalFingerprint);
+    const evidence = (await db.query<{ tag: string; evidence_kind: string }>('select tag,evidence_kind from asset_tag_evidence where asset_id=$1 order by evidence_kind,tag', [fileId])).rows;
+    assert.deepEqual(evidence, [{ tag: '货架', evidence_kind: 'MANUAL' }, { tag: '商品特写', evidence_kind: 'QWEN_VL' }]);
+    assert.deepEqual((await service.getSnapshot(snapshot.id)).items.find((item) => item.assetId === fileId)?.tags.sort(), ['货架']);
+    assert.equal((await service.getMaterialPoolHealth(snapshot.id)).aiReady, 1);
+
+    await db.query("update local_media_scan_files set modified_at='2026-01-02T00:00:00Z' where file_id=$1", [fileId]);
+    await db.query("update local_media_index set modified_at='2026-01-02T00:00:00Z' where file_id=$1", [fileId]);
+    const changedSnapshot = await service.createMaterialPoolSnapshot({ workspaceId, sourceRootIds: [rootId] });
+    assert.notEqual(changedSnapshot.items.find((item) => item.assetId === fileId)?.sourceFingerprint, originalFingerprint);
+    assert.equal((await service.getMaterialPoolHealth(changedSnapshot.id)).aiReady, 0);
 
     await insertMedia(db, workspaceId, rootId, `${rootId}:new.mp4`, 'F:/media/new.mp4', 'new.mp4', 5_000);
     assert.equal((await service.getSnapshot(snapshot.id)).items.length, 2);
 
-    await db.query("insert into asset_visual_profiles (asset_id,summary,profile,provider,model_name,model_version,prompt_version,analysis_version,status) values ($1,$2,$3,'QWEN_VL','qwen','1','p','1','READY')", [fileId, '门店内部与货架', { assetId: fileId, summary: '门店内部与货架', tags: [{ tag: '货架', confidence: .9, timestampsMs: [1000] }], recommendedTimestampsMs: [1000], modelProvider: 'QWEN_VL', modelName: 'qwen', modelVersion: '1', promptVersion: 'p', analysisVersion: '1', createdAt: new Date().toISOString() }]);
     const session = await service.createSession({ workspaceId, snapshotId: snapshot.id, script: '顾客在货架购物。' });
     const generated = await service.generate(session.id);
     assert.ok(generated.manifestId);
@@ -63,7 +84,15 @@ test('V3 database workflow freezes pools, reuses Assets, and preserves locked cl
     assert.equal(Number(sourceSegment?.source_out_ms) - Number(sourceSegment?.source_in_ms), 3_000);
     const initial = await service.getSession(session.id);
     assert.equal(initial.cards[0]?.clip?.durationMs, 3_000);
+    assert.ok(initial.cards[0]?.candidates[0]?.sourceSegmentId);
+    assert.ok(Number.isFinite(initial.cards[0]?.candidates[0]?.recommendedTimestampMs));
     assert.ok((initial.cards[0]?.candidates || []).some((candidate) => candidate.assetId === fileId));
+
+    const initialClip = initial.cards[0]?.clip;
+    assert.ok(initialClip);
+    await service.applyOperation(session.id, { type: 'MANUAL_SELECT_CLIP', sentenceId: 'sentence-0', assetId: fileId, sourceInMs: initialClip.sourceInMs, sourceSegmentId: 'manual-same-range' });
+    const sameRangeSegments = (await db.query('select count(*) from source_segments where snapshot_id=$1 and asset_id=$2 and source_in_ms=$3 and source_out_ms=$4', [snapshot.id, fileId, initialClip.sourceInMs, initialClip.sourceOutMs])).rows[0]?.count;
+    assert.equal(sameRangeSegments, '1');
 
     await service.applyOperation(session.id, { type: 'TRIM_SOURCE', sentenceId: 'sentence-0', sourceInMs: 1_000, sourceOutMs: 4_000 });
     await service.applyOperation(session.id, { type: 'LOCK_CLIP', sentenceId: 'sentence-0' });
@@ -83,19 +112,96 @@ test('V3 database workflow freezes pools, reuses Assets, and preserves locked cl
   });
 });
 
+test('V3 uses the existing Hybrid/Pexels fallback only after local candidates are exhausted', async () => {
+  const root = await mkdtemp(join(process.env.TEMP || process.env.TMP || '.', 'contentos-v3-hybrid-'));
+  try {
+    const localPath = join(root, 'too-short.mp4');
+    const externalFixture = join(root, 'external-fixture.mp4');
+    await generateFixtureVideo(localPath, process.env.FFMPEG_PATH || 'ffmpeg', 'blue', 1);
+    await generateFixtureVideo(externalFixture, process.env.FFMPEG_PATH || 'ffmpeg', 'green', 6);
+    await withDatabase(async (db, workspaceId) => {
+      const storage = new LocalStorageProvider(join(root, 'storage'));
+      const assets = new AssetService(db, storage, async (path) => probeMedia(path, process.env.FFPROBE_PATH || 'ffprobe'));
+      const provider = new FakeExternalVideoProvider(externalFixture);
+      const hybrid = new HybridMediaService(assets, storage, provider, db);
+      const service = new ScriptEditingV3Service(db, { hybridMedia: hybrid, storage });
+      const snapshot = await service.createMaterialPoolSnapshot({ workspaceId, sourceFiles: [localPath] });
+      const session = await service.createSession({ workspaceId, snapshotId: snapshot.id, script: '商业合作正在推进。', settings: { usePexels: true }, sentences: [{ text: '商业合作正在推进', durationMs: 3_000 }] });
+      await service.generate(session.id);
+      const manifest = (await db.query<{ manifest: { timeline: Array<{ assetId: string; sourcePath: string; matching?: { selectedSource?: string } }> } }>('select manifest from edit_manifests join script_editing_v3_sessions on current_manifest_id=edit_manifests.id where script_editing_v3_sessions.id=$1', [session.id])).rows[0]?.manifest;
+      const clip = manifest?.timeline[0];
+      assert.equal(clip?.matching?.selectedSource, 'FAKE_PEXELS');
+      assert.ok(clip?.assetId && !snapshot.items.some((item) => item.assetId === clip.assetId));
+      assert.ok(clip?.sourcePath && !clip.sourcePath.startsWith('https://'));
+      assert.equal((await db.query('select count(*) from external_media_assets where asset_id=$1', [clip?.assetId])).rows[0]?.count, '1');
+      assert.equal((await service.getSession(session.id)).cards[0]?.asset?.assetId, clip?.assetId);
+    });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('V3 preserves confirmed voice absolute timing when ranking and compiling clips', async () => {
+  await withDatabase(async (db, workspaceId, rootId) => {
+    const fileId = `${rootId}:timed.mp4`;
+    await insertMedia(db, workspaceId, rootId, fileId, 'F:/media/timed.mp4', 'timed.mp4', 8_000);
+    const service = new ScriptEditingV3Service(db);
+    const snapshot = await service.createMaterialPoolSnapshot({ workspaceId, sourceRootIds: [rootId] });
+    const session = await service.createSession({ workspaceId, snapshotId: snapshot.id, script: '第一句。', voicePath: 'F:/voice/confirmed.wav', settings: { template: 'NEWS', presentationSettings: { canvas: { aspectRatio: '16:9', width: 1920, height: 1080, fps: 25, fitMode: 'CONTAIN' } } }, sentences: [{ text: '第一句', startMs: 1_200, endMs: 4_400, durationMs: 3_200 }] });
+    await service.generate(session.id);
+    const card = (await service.getSession(session.id)).cards[0]!;
+    assert.equal(card.startMs, 1_200);
+    assert.equal(card.endMs, 4_400);
+    assert.equal(card.clip?.durationMs, 3_200);
+    assert.equal(card.clip?.timelineStartMs, 1_200);
+    const manifest = (await db.query<{ manifest: { canvas: { aspectRatio: string; width: number }; audio?: { voicePath?: string }; plannerVersion?: string; timeline: Array<{ voiceStartMs?: number; voiceEndMs?: number; sceneId?: string; timelineStartMs?: number; timelineEndMs?: number }> } }>('select manifest from edit_manifests join script_editing_v3_sessions on current_manifest_id=edit_manifests.id where script_editing_v3_sessions.id=$1', [session.id])).rows[0]?.manifest;
+    assert.equal(manifest?.audio?.voicePath, 'F:/voice/confirmed.wav');
+    assert.equal(manifest?.timeline[0]?.voiceStartMs, 1_200);
+    assert.equal(manifest?.timeline[0]?.voiceEndMs, 4_400);
+    assert.equal(manifest?.timeline[0]?.sceneId, 'scene-1');
+    assert.deepEqual(manifest?.timeline[0] && { timelineStartMs: manifest.timeline[0].timelineStartMs, timelineEndMs: manifest.timeline[0].timelineEndMs }, { timelineStartMs: 1_200, timelineEndMs: 4_400 });
+    assert.deepEqual(manifest && { aspectRatio: manifest.canvas.aspectRatio, width: manifest.canvas.width }, { aspectRatio: '16:9', width: 1920 });
+  });
+});
+
+test('V3 can build a material snapshot from explicitly selected video files without copying them', async () => {
+  const sourceDirectory = await mkdtemp(join(process.env.TEMP || process.env.TMP || '.', 'contentos-v3-selected-video-'));
+  try {
+    const sourcePath = join(sourceDirectory, 'selected.mp4');
+    await generateFixtureVideo(sourcePath, process.env.FFMPEG_PATH || 'ffmpeg', 'blue', 5);
+    await withDatabase(async (db, workspaceId) => {
+      const service = new ScriptEditingV3Service(db);
+      const snapshot = await service.createMaterialPoolSnapshot({ workspaceId, sourceFiles: [sourcePath] });
+      assert.equal(snapshot.items.length, 1);
+      assert.equal(snapshot.items[0]?.sourcePath, sourcePath);
+      assert.equal(snapshot.items[0]?.availability, 'VALID');
+      assert.ok((snapshot.items[0]?.fps || 0) > 0);
+      assert.match(snapshot.items[0]?.codec || '', /h264/i);
+      assert.equal((await service.getMaterialPoolHealth(snapshot.id)).valid, 1);
+      const secondSnapshot = await service.createMaterialPoolSnapshot({ workspaceId, sourceFiles: [sourcePath] });
+      assert.equal(secondSnapshot.items[0]?.assetId, snapshot.items[0]?.assetId);
+    });
+  } finally { await rm(sourceDirectory, { recursive: true, force: true }); }
+});
+
 test('Jianying directory import is read-only and maps history back to the existing Asset', async () => {
   const draftDirectory = await mkdtemp(join(process.env.TEMP || process.env.TMP || '.', 'contentos-v3-jianying-'));
+  const secondDraftDirectory = await mkdtemp(join(process.env.TEMP || process.env.TMP || '.', 'contentos-v3-jianying-2-'));
   try {
     await writeFile(join(draftDirectory, 'draft_content.json'), JSON.stringify({ draft_id: 'draft-1', draft_name: '历史草稿', materials: [{ material_id: 'material-1', path: 'F:/media/clip.mp4' }], tracks: [{ segments: [{ material_id: 'material-1', source_timerange: { start: 1_000_000, duration: 3_000_000 }, target_timerange: { start: 0, duration: 3_000_000 } }] }] }));
+    await writeFile(join(secondDraftDirectory, 'draft_content.json'), JSON.stringify({ draft_id: 'draft-2', draft_name: '第二份历史草稿', materials: [{ material_id: 'material-2', path: 'F:/media/clip.mp4' }], tracks: [{ segments: [{ material_id: 'material-2', source_timerange: { start: 2_000_000, duration: 2_000_000 }, target_timerange: { start: 0, duration: 2_000_000 } }] }] }));
     await withDatabase(async (db, workspaceId, rootId) => {
       const fileId = `${rootId}:clip.mp4`;
       await insertMedia(db, workspaceId, rootId, fileId, resolve('F:/media/clip.mp4'), 'clip.mp4', 5_000);
-      const imported = await new JianyingDraftImporter(db).importReadOnly(workspaceId, draftDirectory);
+      const importer = new JianyingDraftImporter(db);
+      const imported = await importer.importReadOnly(workspaceId, draftDirectory);
+      const importedAgain = await importer.importReadOnly(workspaceId, secondDraftDirectory);
       assert.equal(imported.usageCount, 1);
+      assert.equal(importedAgain.usageCount, 1);
       const snapshot = await new ScriptEditingV3Service(db).createMaterialPoolSnapshot({ workspaceId, sourceKind: 'JIANYING_DRAFT' });
       assert.deepEqual(snapshot.items.map((item) => item.assetId), [fileId]);
+      assert.equal(snapshot.items[0]?.jianyingUseCount, 2);
+      assert.equal((await db.query('select count(*) from jianying_asset_usages where asset_id=$1', [resolve('F:/media/clip.mp4')])).rows[0]?.count, '2');
       const usage = (await db.query<{ source_in_ms: number; source_out_ms: number }>('select source_in_ms,source_out_ms from jianying_asset_usages where draft_import_id=$1', [imported.id])).rows[0];
       assert.deepEqual(usage, { source_in_ms: 1_000, source_out_ms: 4_000 });
     });
-  } finally { await rm(draftDirectory, { recursive: true, force: true }); }
+  } finally { await rm(draftDirectory, { recursive: true, force: true }); await rm(secondDraftDirectory, { recursive: true, force: true }); }
 });
