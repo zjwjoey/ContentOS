@@ -42,8 +42,10 @@ test('persistent search and provider-identity download caches survive a second r
     const firstSearches = provider.searchCount; const firstDownloads = provider.downloadCount; assert.ok(firstSearches > 0); assert.ok(firstDownloads > 0);
     await service.resolve({ workspaceId, script: cacheScript, localAssets: [], usePexels: true });
     assert.equal(provider.searchCount, firstSearches); assert.equal(provider.downloadCount, firstDownloads);
-    const provenance = await db.query<{ provider: string; provider_asset_id: string; provider_file_id: string }>('select provider,provider_asset_id,provider_file_id from external_media_assets where asset_id in (select asset_id from video_workspace_assets where workspace_id=$1)', [workspaceId]);
+    const provenance = await db.query<{ provider: string; provider_asset_id: string; provider_file_id: string; asset_id: string }>('select provider,provider_asset_id,provider_file_id,asset_id from external_media_assets where asset_id in (select asset_id from video_workspace_assets where workspace_id=$1)', [workspaceId]);
     assert.ok(provenance.rows.length > 0); assert.equal(provenance.rows[0]?.provider, 'fake-pexels');
+    const imported = await db.query<{ metadata: Record<string, unknown> }>('select metadata from assets where id=$1', [provenance.rows[0]!.asset_id]);
+    assert.equal(Number(imported.rows[0]?.metadata?.durationMs), 6_000);
   } finally { await db.query('delete from video_workspaces where id=$1', [workspaceId]); await db.end(); await rm(root, { recursive: true, force: true }); }
 });
 
