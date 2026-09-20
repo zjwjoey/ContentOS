@@ -53,7 +53,9 @@ export async function promoteStagedUpload(stagedPath: string, destination: strin
 }
 type PairStatus = 'READY' | 'MISSING_AUDIO' | 'MISSING_TEXT' | 'DUPLICATE_TEXT_BASENAME' | 'DUPLICATE_AUDIO_BASENAME' | 'DUPLICATE_BASENAME';
 function normalizedPairBasename(file: string): string {
-  const name = basename(file).normalize('NFKC').trim();
+  // Browser requests can contain Windows paths even when the API runs on Linux CI.
+  // Normalize both separator styles before applying the host-specific basename helper.
+  const name = basename(file.replaceAll('\\', '/')).normalize('NFKC').trim();
   return name.replace(extname(name), '').trim().toLocaleLowerCase();
 }
 export function pairByBasename(textFiles: string[], audioFiles: string[]): Array<{ ordinal: number; basename: string; textFile: string | null; audioFile: string | null; status: PairStatus }> {
