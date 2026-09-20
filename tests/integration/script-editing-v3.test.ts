@@ -64,6 +64,8 @@ test('V3 database workflow freezes pools, reuses Assets, and preserves locked cl
     await service.persistVisualProfile({ assetId: fileId, summary: '门店内部更新', tags: [{ tag: '商品特写', confidence: .8, timestampsMs: [2_000] }], recommendedTimestampsMs: [2_000], modelProvider: 'QWEN_VL', modelName: 'qwen', modelVersion: '1', promptVersion: 'p', analysisVersion: '1', createdAt: new Date().toISOString() }, originalFingerprint);
     const evidence = (await db.query<{ tag: string; evidence_kind: string }>('select tag,evidence_kind from asset_tag_evidence where asset_id=$1 order by evidence_kind,tag', [fileId])).rows;
     assert.deepEqual(evidence, [{ tag: '货架', evidence_kind: 'MANUAL' }, { tag: '商品特写', evidence_kind: 'QWEN_VL' }]);
+    assert.equal((await db.query('select count(*) from asset_visual_profiles where asset_id=$1', [fileId])).rows[0]?.count, '1');
+    assert.equal((await db.query("select count(*) from asset_tag_evidence where asset_id=$1 and evidence_kind='QWEN_VL'", [fileId])).rows[0]?.count, '1');
     assert.deepEqual((await service.getSnapshot(snapshot.id)).items.find((item) => item.assetId === fileId)?.tags.sort(), ['货架']);
     assert.equal((await service.getMaterialPoolHealth(snapshot.id)).aiReady, 1);
 
@@ -79,6 +81,7 @@ test('V3 database workflow freezes pools, reuses Assets, and preserves locked cl
     const session = await service.createSession({ workspaceId, snapshotId: snapshot.id, script: '顾客在货架购物。' });
     const generated = await service.generate(session.id);
     assert.ok(generated.manifestId);
+    const firstManifest = (await db.query<{ manifest: Record<string, unknown>; manifest_digest: string }>('select manifest,manifest_digest from edit_manifests where id=$1', [generated.manifestId])).rows[0];
     const sourceSegment = (await db.query<{ asset_id: string; source_in_ms: number; source_out_ms: number }>('select asset_id,source_in_ms,source_out_ms from source_segments where snapshot_id=$1', [snapshot.id])).rows[0];
     assert.equal(sourceSegment?.asset_id, fileId);
     assert.equal(Number(sourceSegment?.source_out_ms) - Number(sourceSegment?.source_in_ms), 3_000);
@@ -87,6 +90,11 @@ test('V3 database workflow freezes pools, reuses Assets, and preserves locked cl
     assert.ok(initial.cards[0]?.candidates[0]?.sourceSegmentId);
     assert.ok(Number.isFinite(initial.cards[0]?.candidates[0]?.recommendedTimestampMs));
     assert.ok((initial.cards[0]?.candidates || []).some((candidate) => candidate.assetId === fileId));
+
+    const regenerated = await service.generate(session.id);
+    const secondManifest = (await db.query<{ manifest: Record<string, unknown>; manifest_digest: string }>('select manifest,manifest_digest from edit_manifests where id=$1', [regenerated.manifestId])).rows[0];
+    assert.deepEqual(secondManifest?.manifest, firstManifest?.manifest);
+    assert.equal(secondManifest?.manifest_digest, firstManifest?.manifest_digest);
 
     const initialClip = initial.cards[0]?.clip;
     assert.ok(initialClip);
