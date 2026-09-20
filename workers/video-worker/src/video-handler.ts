@@ -4,7 +4,7 @@ import { access as accessFile, copyFile, mkdir, readdir, realpath, rename, rm, s
 import type { Pool } from 'pg';
 import { AssetCatalogService, type AssetService, type LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { JobLeaseCancellationHandler, JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
-import { planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, rerollEditorialClip, ScriptEditingV3Service, QwenVisualAnalysisProvider, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoJobPayload, type VideoService } from '../../../packages/modules/video/src/index.js';
+import { JianyingDraftImporter, materialSourceFingerprint, planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, rerollEditorialClip, ScriptEditingV3Service, QwenEmbeddingProvider, QwenVisualAnalysisProvider, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoJobPayload, type VideoService } from '../../../packages/modules/video/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import type { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
 import { generateRepresentativeFrames, renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
@@ -13,17 +13,22 @@ export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; ass
 
 export function createVisualAnalysisJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
   return async (job, _attemptId, signal) => {
-    if (job.type !== 'ANALYZE_ASSET_VISUAL') throw new Error('ANALYZE_ASSET_VISUAL_JOB_TYPE_INVALID');
+    if (job.type !== 'ANALYZE_ASSET_VISUAL' && job.type !== 'GENERATE_REPRESENTATIVE_FRAMES') throw new Error('ANALYZE_ASSET_VISUAL_JOB_TYPE_INVALID');
     if (signal.aborted) throw new Error('ANALYZE_ASSET_VISUAL_CANCELLED');
-    const payload = job.payload as { snapshotId?: string; assetId?: string };
+    const payload = job.payload as { snapshotId?: string; assetId?: string; analysisConfig?: string };
     if (!payload.snapshotId || !payload.assetId) throw new Error('ANALYZE_ASSET_VISUAL_PAYLOAD_INVALID');
     const row = (await deps.db.query('select source_path,duration_ms,file_size,modified_at from material_pool_items where snapshot_id=$1 and asset_id=$2', [payload.snapshotId, payload.assetId])).rows[0] as { source_path?: string; duration_ms?: number; file_size?: number | null; modified_at?: string | null } | undefined;
     if (!row?.source_path || !row.duration_ms) throw new Error('MATERIAL_POOL_ITEM_NOT_FOUND');
-    const fingerprint = `${row.file_size || 0}:${row.modified_at || ''}:${row.duration_ms}`;
-    const existing = await deps.db.query<{ frame_index: number; timestamp_ms: number; frame_key: string }>('select frame_index,timestamp_ms,frame_key from asset_representative_frames where asset_id=$1 and source_fingerprint=$2 order by frame_index', [payload.assetId, fingerprint]);
+    const modelName = process.env.QWEN_VL_MODEL || process.env.QWEN_MODEL || 'qwen-vl-max';
+    const modelVersion = process.env.QWEN_MODEL_VERSION || 'unknown';
+    const existingProfile = (await deps.db.query<{ status: string; model_name: string; model_version: string; prompt_version: string; analysis_version: string; source_fingerprint?: string | null; profile: Record<string, unknown> }>('select status,model_name,model_version,prompt_version,analysis_version,source_fingerprint,profile from asset_visual_profiles where asset_id=$1', [payload.assetId])).rows[0];
+    const fingerprint = materialSourceFingerprint({ fileSize: row.file_size, modifiedAt: row.modified_at, durationMs: Number(row.duration_ms) });
+    if (existingProfile?.status === 'READY' && existingProfile.source_fingerprint === fingerprint && existingProfile.model_name === modelName && existingProfile.model_version === modelVersion && existingProfile.prompt_version === 'qwen-visual-v1' && existingProfile.analysis_version === 'asset-profile-v1') return { assetId: payload.assetId, status: 'READY', cached: true, profile: existingProfile.profile };
+    const frameGenerationVersion = 'representative-frames-v1';
+    const existing = await deps.db.query<{ frame_index: number; timestamp_ms: number; frame_key: string }>('select frame_index,timestamp_ms,frame_key from asset_representative_frames where asset_id=$1 and source_fingerprint=$2 and frame_generation_version=$3 order by frame_index', [payload.assetId, fingerprint, frameGenerationVersion]);
     const safeAssetId = payload.assetId.replace(/[^a-zA-Z0-9._-]/gu, '_');
     const safeFingerprint = Buffer.from(fingerprint).toString('base64url');
-    const frameDirectory = `${deps.storage.root}/representative-frames/${safeAssetId}/${safeFingerprint}`;
+    const frameDirectory = `${deps.storage.root}/representative-frames/${frameGenerationVersion}/${safeAssetId}/${safeFingerprint}`;
     const cachedFrames = existing.rows.length === 5 && existing.rows.every((frame) => frame.frame_key) ? existing.rows.map((frame) => ({ index: Number(frame.frame_index), timestampMs: Number(frame.timestamp_ms), path: `${deps.storage.root}/representative-frames/${frame.frame_key}` })) : [];
     const generatedFrames = cachedFrames.length === 5 && (await Promise.all(cachedFrames.map((frame) => accessFile(frame.path).then(() => true).catch(() => false))).then((available) => available.every(Boolean))) ? cachedFrames : await generateRepresentativeFrames(row.source_path, frameDirectory, Number(row.duration_ms), deps.ffmpegPath, signal);
     if (cachedFrames.length !== 5 || generatedFrames.some((frame) => !cachedFrames.some((cached) => cached.path === frame.path))) {
@@ -31,21 +36,45 @@ export function createVisualAnalysisJobHandler(deps: VideoHandlerDeps): (job: Jo
       try {
         await client.query('begin');
         for (const frame of generatedFrames) {
-          const frameKey = `${safeAssetId}/${safeFingerprint}/${frame.index}.jpg`;
-          await client.query('insert into asset_representative_frames (asset_id,source_fingerprint,frame_index,timestamp_ms,frame_key) values ($1,$2,$3,$4,$5) on conflict (asset_id,source_fingerprint,frame_index) do update set timestamp_ms=excluded.timestamp_ms,frame_key=excluded.frame_key', [payload.assetId, fingerprint, frame.index, frame.timestampMs, frameKey]);
+          const frameKey = `${frameGenerationVersion}/${safeAssetId}/${safeFingerprint}/${frame.index}.jpg`;
+          await client.query('insert into asset_representative_frames (asset_id,source_fingerprint,frame_generation_version,frame_index,timestamp_ms,frame_key) values ($1,$2,$3,$4,$5,$6) on conflict (asset_id,source_fingerprint,frame_index) do update set frame_generation_version=excluded.frame_generation_version,timestamp_ms=excluded.timestamp_ms,frame_key=excluded.frame_key', [payload.assetId, fingerprint, frameGenerationVersion, frame.index, frame.timestampMs, frameKey]);
         }
         await client.query('commit');
       } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
     }
+    if (job.type === 'GENERATE_REPRESENTATIVE_FRAMES') return { assetId: payload.assetId, status: 'READY', frameCount: generatedFrames.length };
     try {
-      await deps.db.query('insert into asset_visual_profiles (asset_id,summary,profile,provider,model_name,model_version,prompt_version,analysis_version,status,error) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,null) on conflict (asset_id) do update set status=$9,error=null,updated_at=now()', [payload.assetId, '视觉分析排队中', {}, 'QWEN_VL', process.env.QWEN_MODEL || 'qwen-vl-max', process.env.QWEN_MODEL_VERSION || 'unknown', 'qwen-visual-v1', 'asset-profile-v1', 'PENDING']);
+      await deps.db.query('insert into asset_visual_profiles (asset_id,summary,profile,provider,model_name,model_version,prompt_version,analysis_version,status,error,source_fingerprint) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,null,$10) on conflict (asset_id) do update set summary=excluded.summary,profile=excluded.profile,provider=excluded.provider,model_name=excluded.model_name,model_version=excluded.model_version,prompt_version=excluded.prompt_version,analysis_version=excluded.analysis_version,status=excluded.status,error=null,source_fingerprint=excluded.source_fingerprint,updated_at=now()', [payload.assetId, '视觉分析排队中', {}, 'QWEN_VL', modelName, modelVersion, 'qwen-visual-v1', 'asset-profile-v1', 'PENDING', fingerprint]);
       const profile = await new QwenVisualAnalysisProvider().analyzeAssetFrames({ assetId: payload.assetId, framePaths: generatedFrames.map((frame) => frame.path), signal });
-      await new ScriptEditingV3Service(deps.db).persistVisualProfile(profile);
+      const v3Service = new ScriptEditingV3Service(deps.db);
+      await v3Service.persistVisualProfile(profile, fingerprint);
+      if ((process.env.QWEN_BASE_URL || process.env.QWEN_API_URL) && process.env.QWEN_API_KEY) {
+        try {
+          const embedding = await new QwenEmbeddingProvider().embed({ texts: [`${profile.summary} ${profile.tags.map((tag) => tag.tag).join(' ')}`], signal });
+          await v3Service.persistSemanticEmbedding({ assetId: payload.assetId, sourceFingerprint: fingerprint, provider: embedding.provider, model: embedding.model, vector: embedding.vectors[0]! });
+        } catch { /* Embeddings are an optimization; lexical retrieval remains available. */ }
+      }
       return { assetId: payload.assetId, status: 'READY', profile };
     } catch (error) {
-      if (job.attemptCount >= job.maxAttempts) await deps.db.query('update asset_visual_profiles set status=\'FAILED\',error=$2,updated_at=now() where asset_id=$1', [payload.assetId, { code: error instanceof Error ? error.message : 'ANALYZE_ASSET_VISUAL_FAILED' }]).catch(() => undefined);
+      if (job.attemptCount >= job.maxAttempts) await deps.db.query('update asset_visual_profiles set status=\'FAILED\',error=$2,updated_at=now() where asset_id=$1 and source_fingerprint=$3', [payload.assetId, { code: error instanceof Error ? error.message : 'ANALYZE_ASSET_VISUAL_FAILED' }, fingerprint]).catch(() => undefined);
       throw error;
     }
+  };
+}
+
+export function createJianyingImportJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
+  return async (job, _attemptId, signal) => {
+    if (job.type !== 'IMPORT_JIANYING_DRAFT') throw new Error('IMPORT_JIANYING_DRAFT_JOB_TYPE_INVALID');
+    if (signal.aborted) throw new Error('IMPORT_JIANYING_DRAFT_CANCELLED');
+    const payload = job.payload as { workspaceId?: string; draftPaths?: string[] };
+    if (!payload.workspaceId || !Array.isArray(payload.draftPaths) || !payload.draftPaths.length) throw new Error('IMPORT_JIANYING_DRAFT_PAYLOAD_INVALID');
+    const importer = new JianyingDraftImporter(deps.db);
+    const imports = [];
+    for (const draftPath of [...new Set(payload.draftPaths)]) {
+      if (signal.aborted) throw new Error('IMPORT_JIANYING_DRAFT_CANCELLED');
+      imports.push(await importer.importReadOnly(payload.workspaceId, draftPath));
+    }
+    return { imports, usageCount: imports.reduce((total, item) => total + item.usageCount, 0) };
   };
 }
 
@@ -329,7 +358,7 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
         if (v3SessionId && planned.manifest.workspaceId) {
           for (const assetId of [...new Set(planned.manifest.timeline.map((clip) => clip.assetId))]) {
             const event = await deps.db.query('insert into script_editing_v3_usage_events (id,workspace_id,session_id,manifest_id,render_id,asset_id) values ($1,$2,$3,$4,$5,$6) on conflict (render_id,asset_id) do nothing returning id', [`v3-usage-${randomUUID()}`, planned.manifest.workspaceId, v3SessionId, planned.manifestId, planned.renderId, assetId]);
-            if (event.rows[0]) await deps.db.query(`insert into script_editing_v3_asset_usage_stats (workspace_id,asset_id,final_use_count,recent_use_count,last_used_at) values ($1,$2,1,1,now()) on conflict (workspace_id,asset_id) do update set final_use_count=script_editing_v3_asset_usage_stats.final_use_count+1,recent_use_count=script_editing_v3_asset_usage_stats.recent_use_count+1,last_used_at=now(),updated_at=now()`, [planned.manifest.workspaceId, assetId]);
+            if (event.rows[0]) await deps.db.query(`insert into script_editing_v3_asset_usage_stats (workspace_id,asset_id,final_use_count,content_os_final_use_count,recent_use_count,last_used_at) values ($1,$2,1,1,1,now()) on conflict (workspace_id,asset_id) do update set final_use_count=script_editing_v3_asset_usage_stats.final_use_count+1,content_os_final_use_count=script_editing_v3_asset_usage_stats.content_os_final_use_count+1,recent_use_count=script_editing_v3_asset_usage_stats.recent_use_count+1,last_used_at=now(),updated_at=now()`, [planned.manifest.workspaceId, assetId]);
           }
         }
         return finalized.value;

@@ -9,6 +9,8 @@
     "dev": "pnpm --filter @contentos/api dev",
     "dev:operator": "tsx scripts/dev-operator.ts",
     "doctor": "tsx scripts/doctor.ts",
+    "benchmark:script-editing-v3": "tsx scripts/script-editing-v3-benchmark.ts",
+    "benchmark:script-editing-v3-ai": "tsx scripts/script-editing-v3-ai-benchmark.ts",
     "format": "tsx scripts/format-check.ts",
     "lint": "tsx scripts/lint.ts",
     "test:migrations": "tsx --test --test-concurrency=1 tests/integration/migration-matrix.test.ts",

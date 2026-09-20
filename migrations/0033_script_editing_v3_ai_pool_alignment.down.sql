@@ -1,0 +1,14 @@
+drop index if exists material_pool_items_availability_idx;
+drop table if exists asset_semantic_embeddings;
+alter table clip_instances drop column if exists review_status;
+alter table script_editing_v3_asset_usage_stats drop column if exists content_os_final_use_count;
+alter table asset_visual_profiles drop column if exists source_fingerprint;
+alter table source_segments drop constraint if exists source_segments_duration_check;
+alter table source_segments drop column if exists duration_ms;
+alter table source_segments drop column if exists origin;
+alter table material_pool_items drop constraint if exists material_pool_items_duration_ms_check;
+alter table material_pool_items drop column if exists duplicate_of_asset_id;
+alter table material_pool_items drop column if exists disabled;
+alter table material_pool_items drop column if exists error_message;
+alter table material_pool_items drop column if exists availability;
+alter table material_pool_items add constraint material_pool_items_duration_ms_check check (duration_ms > 0);

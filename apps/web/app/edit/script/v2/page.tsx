@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { defaultPresentationSettings, PresentationSettingsPanel, type PresentationSettingsValue } from '../../_components/presentation-settings';
+import { mergeScriptSegmentsV1, splitScriptSegmentV1, type ScriptSegment } from '../segmentation';
 
 type Clip = { id: string; durationMs: number; selectedAssetId?: string; selectedSource?: string; asset?: { id: string; path: string; source: string; originalName?: string; author?: string; thumbnailUrl?: string }; locked?: boolean };
 type Scene = { id: string; sceneIndex: number; text: string; role: string; startMs: number; endMs: number; clipSlots: Clip[] };
@@ -10,9 +11,6 @@ const roleLabels: Record<string, string> = { HOOK: '开头', BODY: '正文', EXP
 const sourceLabels: Record<string, string> = { LOCAL: '本地', PEXELS: 'Pexels', FAKE_PEXELS: '网络模拟' };
 function seconds(value: number): string { return `${(value / 1000).toFixed(1)}s`; }
 function warningLabel(value: string): string { return value === 'EDIT_BGM_UNAVAILABLE' ? '未找到匹配的本地背景音乐，成片将不带音乐' : '部分可选素材暂不可用'; }
-type ScriptSegment = { index: number; text: string; normalizedText: string };
-function mergeScriptSegmentsV1(items: ScriptSegment[], index: number): ScriptSegment[] { if (index < 0 || index >= items.length - 1) return items; const merged = `${items[index]!.text}${items[index + 1]!.text}`; return items.filter((_, itemIndex) => itemIndex !== index + 1).map((item, itemIndex) => itemIndex === index ? { ...item, text: merged, normalizedText: merged.normalize('NFKC').toLowerCase() } : { ...item, index: itemIndex }); }
-function splitScriptSegmentV1(items: ScriptSegment[], index: number, at: number): ScriptSegment[] { const item = items[index]; if (!item || at <= 0 || at >= item.text.length) return items; const left = item.text.slice(0, at).trim(); const right = item.text.slice(at).trim(); if (!left || !right) return items; return [...items.slice(0, index), { index, text: left, normalizedText: left.normalize('NFKC').toLowerCase() }, { index: index + 1, text: right, normalizedText: right.normalize('NFKC').toLowerCase() }, ...items.slice(index + 1).map((entry, offset) => ({ ...entry, index: index + offset + 2 }))]; }
 function segmentationChanged(previous: PresentationSettingsValue['segmentation'], next: PresentationSettingsValue['segmentation']): boolean {
   if (previous.mode !== next.mode) return true;
   const previousDelimiters = [...(previous.delimiters || [])].sort();

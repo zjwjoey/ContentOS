@@ -31,6 +31,7 @@ import { registerEditingWorkbenchRoutes } from './editing-workbench-routes.js';
 import { registerMediaProviderRoutes } from './media-provider-routes.js';
 import { registerScriptEditingV2Routes } from './script-editing-v2-routes.js';
 import { registerScriptEditingV3Routes } from './script-editing-v3-routes.js';
+import { registerQwenRoutes } from './qwen-routes.js';
 import { createExternalVideoProvider } from '../../../packages/modules/video/src/index.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -91,7 +92,8 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerLocalPathRoutes(app, { access: localPathAccess, picker: nativePathPicker });
   registerEditingWorkbenchRoutes(app, { db, localMedia, localPathAccess, quickEdit, video, jobs, assets, assetService, storage, maxUploadBytes: uploadMaxBytes, presets });
   registerScriptEditingV2Routes(app, { db, jobs, localPathAccess, video, assets, presets, storage });
-  registerScriptEditingV3Routes(app, { db, jobs, video, localMedia, localPathAccess, storage });
+  registerScriptEditingV3Routes(app, { db, jobs, video, assets: assetService, localMedia, localPathAccess, storage });
+  registerQwenRoutes(app);
   registerMediaProviderRoutes(app, createExternalVideoProvider(), db);
   registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs, allowFakePublisherControls: runtime.allowFakePublisherControls === true, ...(runtime.allowFakePublisherControls ? { fakeSimulations: new FakePublisherSimulationService(db) } : {}) });
   registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher, director: directorV1 });
