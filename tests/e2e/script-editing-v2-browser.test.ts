@@ -42,13 +42,34 @@ test('Script Editing V2 browser flows cover local, hybrid, reroll, BGM and histo
     await page.goto(`${baseUrl}/edit/script/v2`, { waitUntil: 'domcontentloaded' });
     const scriptInput = page.locator('#v2-script');
     await scriptInput.fill('');
-    await scriptInput.pressSequentially('最近看到一些针对MIZAN的不同声音。\n但是商业合作本来就会有不同观点。\n欢迎大家到店交流。\n市场会慢慢给出答案。');
+    await scriptInput.pressSequentially('如果你在欧洲做零售，一定绕不开一个品牌——Pepco。\n它本质上是一家折扣连锁零售，主打“非食品 + 低价 + 高周转”。');
     await page.locator('#v2-voice').fill(fixtureAudio!);
     await page.locator('#v2-output-root').fill(fixtureDir!);
     await page.locator('input[placeholder="高级模式：手动填写路径"]').first().fill(localRoot);
     await page.getByRole('button', { name: '整理文案' }).click();
     await page.locator('[data-segment-index="0"]').waitFor({ state: 'visible', timeout: 15_000 });
     const createButton = page.getByRole('button', { name: '生成剪辑方案' });
+    const segmentState = page.locator('[data-testid="v2-segment-state"]');
+    const assertConfirmedSegments = async (count: number): Promise<void> => {
+      await page.waitForFunction((expected) => { const state = document.querySelector('[data-testid="v2-segment-state"]'); return state?.getAttribute('data-segment-count') === String(expected) && state?.getAttribute('data-segmentation-confirmed') === 'true'; }, count);
+      assert.equal(await createButton.isEnabled(), true);
+    };
+    await assertConfirmedSegments(4);
+    await page.getByLabel('字号（20–120）').fill('56');
+    await assertConfirmedSegments(4);
+    await page.locator('label').filter({ hasText: /位置 Y/ }).locator('input[type="range"]').fill('0.5');
+    await assertConfirmedSegments(4);
+    await page.getByLabel('画面比例').selectOption('16:9');
+    await assertConfirmedSegments(4);
+    await page.getByLabel('分辨率').selectOption('1920x1080');
+    await assertConfirmedSegments(4);
+    await page.getByLabel('切分方式').selectOption('SENTENCE_ONLY');
+    await page.waitForFunction(() => { const state = document.querySelector('[data-testid="v2-segment-state"]'); return state?.getAttribute('data-segment-count') === '0' && state?.getAttribute('data-segmentation-confirmed') === 'false'; });
+    assert.equal(await createButton.isEnabled(), false);
+    await page.getByText('分段规则已修改，请重新整理文案。').waitFor({ state: 'visible' });
+    await page.getByLabel('切分方式').selectOption('COMMA_SENTENCE');
+    await page.getByRole('button', { name: '整理文案' }).click();
+    await assertConfirmedSegments(4);
     await page.waitForFunction(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('生成剪辑方案')); return Boolean(button && !(button as HTMLButtonElement).disabled); });
     await createButton.click();
     try { await page.getByRole('heading', { name: '剪辑方案' }).waitFor({ state: 'visible', timeout: 10_000 }); }
