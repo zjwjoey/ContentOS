@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { representativeFrameTimestamps } from '../../packages/infrastructure/ffmpeg/src/index.js';
 import { buildVisualQueriesV3, rankMaterialCandidateV3 } from '../../packages/modules/video/src/index.js';
 import { validateEditManifest, type EditManifestV0 } from '../../packages/contracts/src/index.js';
 
@@ -7,6 +8,12 @@ test('V3 visual queries are reproducible and bounded', () => {
   const queries = buildVisualQueriesV3('越来越多消费者走进低价门店');
   assert.ok(queries.length >= 3 && queries.length <= 5);
   assert.deepEqual(queries, buildVisualQueriesV3('越来越多消费者走进低价门店'));
+});
+
+test('V3 representative frames use five cached percentage timestamps', () => {
+  assert.deepEqual(representativeFrameTimestamps(10_000), [1_000, 3_000, 5_000, 7_000, 9_000]);
+  assert.deepEqual(representativeFrameTimestamps(1), [0, 0, 0, 0, 0]);
+  assert.deepEqual(representativeFrameTimestamps(0), []);
 });
 
 test('V3 candidate range preserves sentence duration', () => {

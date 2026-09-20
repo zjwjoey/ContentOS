@@ -7,6 +7,7 @@ import type { EditManifestV0 } from '../../../contracts/src/index.js';
 export interface RenderOptions { manifest: EditManifestV0; outputPath: string; ffmpegPath: string; ffprobePath: string; fontFile?: string; signal?: AbortSignal; }
 export interface RenderResult { outputPath: string; durationMs: number; width: number; height: number; format: string; audio: boolean; checksum?: string; }
 export interface ProbeResult { format: string; durationMs: number; width: number; height: number; audio: boolean; videoCodec?: string; audioCodec?: string; pixelFormat?: string; fps?: number; }
+export interface RepresentativeFrame { index: number; timestampMs: number; path: string; }
 export function subtitlePositionExpressions(positionX: number, positionY: number): { x: string; y: string } {
   const x = Math.min(1, Math.max(0, positionX));
   const y = Math.min(1, Math.max(0, positionY));
@@ -22,6 +23,34 @@ export async function generateVideoThumbnail(inputPath: string, outputPath: stri
   const seekMs = Math.min(1_000, Math.max(0, Math.round(durationMs * 0.25)));
   const tempOutput = `${outputPath}.${randomUUID()}.part.jpg`;
   try { await run(ffmpegPath, ['-y', '-ss', String(seekMs / 1000), '-i', inputPath, '-frames:v', '1', '-vf', 'scale=320:-2:force_original_aspect_ratio=decrease', '-q:v', '4', tempOutput], signal); await rename(tempOutput, outputPath); } catch (error) { await rm(tempOutput, { force: true }); throw error; }
+}
+
+export function representativeFrameTimestamps(durationMs: number): number[] {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return [];
+  const lastSafeMs = Math.max(0, Math.round(durationMs) - 1);
+  return [0.1, 0.3, 0.5, 0.7, 0.9].map((ratio) => Math.min(lastSafeMs, Math.max(0, Math.round(durationMs * ratio))));
+}
+
+export async function generateRepresentativeFrames(inputPath: string, outputDirectory: string, durationMs: number, ffmpegPath: string, signal?: AbortSignal): Promise<RepresentativeFrame[]> {
+  const timestamps = representativeFrameTimestamps(durationMs);
+  await mkdir(outputDirectory, { recursive: true });
+  const frames: RepresentativeFrame[] = [];
+  for (const [index, timestampMs] of timestamps.entries()) {
+    signal?.throwIfAborted();
+    const outputPath = join(outputDirectory, `${index}.jpg`);
+    if (!await access(outputPath, constants.F_OK).then(() => true).catch(() => false)) {
+      const tempOutput = `${outputPath}.${randomUUID()}.part.jpg`;
+      try {
+        await run(ffmpegPath, ['-y', '-ss', String(timestampMs / 1000), '-i', inputPath, '-frames:v', '1', '-vf', 'scale=640:-2:force_original_aspect_ratio=decrease', '-q:v', '4', tempOutput], signal);
+        await rename(tempOutput, outputPath);
+      } catch (error) {
+        await rm(tempOutput, { force: true });
+        throw error;
+      }
+    }
+    frames.push({ index, timestampMs, path: outputPath });
+  }
+  return frames;
 }
 
 function run(binary: string, args: string[], signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {

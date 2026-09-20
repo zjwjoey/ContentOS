@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { Pool } from 'pg';
 import { DEFAULT_PRESENTATION_SETTINGS_V1, validateEditManifest, type CandidateV3, type ClipInstanceV3, type EditManifestV0, type EditOperationV3, type ManifestClip, type MaterialPoolItemV3, type MaterialPoolSnapshotV3, type SentenceEditingCardV3 } from '../../../contracts/src/index.js';
 import { digestEditManifest } from './quick-edit.js';
@@ -18,7 +18,7 @@ function tokens(value: string): string[] {
 
 function mapPoolItem(row: PoolRow): MaterialPoolItemV3 {
   const sourceRef = row.source_ref && typeof row.source_ref === 'object' ? row.source_ref as Record<string, unknown> : {};
-  return { assetId: String(row.asset_id), sourcePath: String(row.source_path), fileName: String(row.file_name), durationMs: Number(row.duration_ms), width: Number(row.width || 0), height: Number(row.height || 0), ...(row.file_size == null ? {} : { fileSize: Number(row.file_size) }), ...(row.modified_at ? { modifiedAt: new Date(String(row.modified_at)).toISOString() } : {}), tags: Array.isArray(row.tags) ? row.tags.filter((tag): tag is string => typeof tag === 'string') : [], ...(row.thumbnail_key ? { thumbnailUrl: `/api/v1/video/local-media/thumbnails/${encodeURIComponent(String(row.asset_id))}` } : {}), gold: Boolean(row.gold), historyUseCount: Number(sourceRef.usageCount || 0), ...(sourceRef.lastUsedAt ? { lastUsedAt: String(sourceRef.lastUsedAt) } : {}) };
+  return { assetId: String(row.asset_id), sourcePath: String(row.source_path), fileName: String(row.file_name), durationMs: Number(row.duration_ms), width: Number(row.width || 0), height: Number(row.height || 0), ...(row.file_size == null ? {} : { fileSize: Number(row.file_size) }), ...(row.modified_at ? { modifiedAt: new Date(String(row.modified_at)).toISOString() } : {}), tags: Array.isArray(row.tags) ? row.tags.filter((tag): tag is string => typeof tag === 'string') : [], ...(row.thumbnail_key ? { thumbnailUrl: `/api/v1/video/local-media/thumbnails/${encodeURIComponent(String(row.asset_id))}` } : {}), gold: Boolean(row.stats_gold ?? row.gold), historyUseCount: Number(sourceRef.usageCount || 0), jianyingUseCount: Number(row.jianying_use_count || 0), candidateCount: Number(row.candidate_count || 0), selectedCount: Number(row.selected_count || 0), finalUseCount: Number(row.final_use_count || 0), replaceCount: Number(row.replace_count || 0), manualSelectCount: Number(row.manual_select_count || 0), recentUseCount: Number(row.recent_use_count || 0), ...(row.stats_last_used_at ? { lastUsedAt: new Date(String(row.stats_last_used_at)).toISOString() } : sourceRef.lastUsedAt ? { lastUsedAt: String(sourceRef.lastUsedAt) } : {}) };
 }
 
 function sentenceRows(value: unknown): SentenceV3[] {
@@ -57,9 +57,42 @@ export class JianyingDraftImporter {
   constructor(private readonly db: Pool) {}
 
   async importReadOnly(workspaceId: string, draftPath: string): Promise<{ id: string; draftId: string; draftName: string; usageCount: number }> {
-    const parsed = JSON.parse(await readFile(resolve(draftPath), 'utf8')) as Record<string, unknown>;
-    const draftId = String(parsed.draft_id || parsed.draftId || basename(draftPath));
-    const draftName = String(parsed.draft_name || parsed.draftName || basename(draftPath));
+    const absolutePath = resolve(draftPath);
+    const pathStat = await stat(absolutePath).catch(() => null);
+    if (!pathStat) throw new Error('JIANYING_DRAFT_NOT_FOUND');
+    const rootPath = pathStat.isDirectory() ? absolutePath : dirname(absolutePath);
+    const payloads: Record<string, unknown>[] = [];
+    if (pathStat.isDirectory()) {
+      for (const fileName of ['draft_content.json', 'draft_info.json']) {
+        const content = await readFile(join(absolutePath, fileName), 'utf8').catch(() => null);
+        if (content) {
+          try { payloads.push(JSON.parse(content) as Record<string, unknown>); } catch { throw new Error('JIANYING_DRAFT_INVALID_JSON'); }
+        }
+      }
+      if (!payloads.length) throw new Error('JIANYING_DRAFT_CONTENT_NOT_FOUND');
+    } else {
+      try { payloads.push(JSON.parse(await readFile(absolutePath, 'utf8')) as Record<string, unknown>); } catch { throw new Error('JIANYING_DRAFT_INVALID_JSON'); }
+    }
+    const parsed: Record<string, unknown> = Object.assign({}, ...payloads);
+    const draftId = String(parsed.draft_id || parsed.draftId || basename(absolutePath));
+    const draftName = String(parsed.draft_name || parsed.draftName || basename(rootPath));
+    const materialPaths = new Map<string, string>();
+    const pathValue = (row: Record<string, unknown>): string | undefined => {
+      const value = row.path || row.local_material_path || row.file_path || row.material_path;
+      if (typeof value !== 'string' || !value.trim()) return undefined;
+      const normalized = value.replace(/^file:\/\//u, '');
+      return isAbsolute(normalized) ? resolve(normalized) : resolve(rootPath, normalized);
+    };
+    const collectMaterials = (value: unknown): void => {
+      if (Array.isArray(value)) { value.forEach(collectMaterials); return; }
+      if (!value || typeof value !== 'object') return;
+      const row = value as Record<string, unknown>;
+      const materialId = row.material_id || row.materialId || (row.type === 'video' ? row.id : undefined);
+      const sourcePath = pathValue(row);
+      if (materialId && sourcePath) materialPaths.set(String(materialId), sourcePath);
+      Object.values(row).forEach(collectMaterials);
+    };
+    payloads.forEach(collectMaterials);
     const importId = `jianying-import-${randomUUID()}`;
     const usages: Array<{ assetId: string; materialId?: string; sourceInMs: number; sourceOutMs: number; timelineStartMs: number; timelineEndMs: number }> = [];
     const visit = (value: unknown, cursor = 0): void => {
@@ -74,12 +107,12 @@ export class JianyingDraftImporter {
       const sourceDurationMs = toMs(source.duration ?? source.duration_time);
       const timelineStartMs = toMs(target.start ?? target.start_time, cursor);
       const timelineDurationMs = toMs(target.duration ?? target.duration_time, sourceDurationMs);
-      const path = row.path || row.local_material_path || row.file_path || row.material_path;
-      if (materialId && (path || row.material_id) && sourceDurationMs > 0) usages.push({ assetId: String(path || materialId), materialId: String(materialId), sourceInMs, sourceOutMs: sourceInMs + sourceDurationMs, timelineStartMs, timelineEndMs: timelineStartMs + timelineDurationMs });
+      const sourcePath = pathValue(row) || (materialId ? materialPaths.get(String(materialId)) : undefined);
+      if (materialId && (sourcePath || row.material_id) && sourceDurationMs > 0) usages.push({ assetId: String(sourcePath || materialId), materialId: String(materialId), sourceInMs, sourceOutMs: sourceInMs + sourceDurationMs, timelineStartMs, timelineEndMs: timelineStartMs + timelineDurationMs });
       for (const [key, child] of Object.entries(row)) if (!['source_timerange', 'target_timerange'].includes(key)) visit(child, timelineStartMs + timelineDurationMs);
     };
-    visit(parsed);
-    await this.db.query('insert into jianying_draft_imports (id, workspace_id, draft_id, draft_name, draft_path) values ($1,$2,$3,$4,$5)', [importId, workspaceId, draftId, draftName, resolve(draftPath)]);
+    payloads.forEach((payload) => visit(payload));
+    await this.db.query('insert into jianying_draft_imports (id, workspace_id, draft_id, draft_name, draft_path) values ($1,$2,$3,$4,$5)', [importId, workspaceId, draftId, draftName, absolutePath]);
     for (const usage of usages) await this.db.query('insert into jianying_asset_usages (id,draft_import_id,asset_id,material_id,source_in_ms,source_out_ms,timeline_start_ms,timeline_end_ms) values ($1,$2,$3,$4,$5,$6,$7,$8)', [`jianying-usage-${randomUUID()}`, importId, usage.assetId, usage.materialId || null, usage.sourceInMs, usage.sourceOutMs, usage.timelineStartMs, usage.timelineEndMs]);
     return { id: importId, draftId, draftName, usageCount: usages.length };
   }
@@ -87,6 +120,19 @@ export class JianyingDraftImporter {
 
 export class ScriptEditingV3Service {
   constructor(private readonly db: Pool) {}
+
+  private async incrementUsageStats(workspaceId: string, assetId: string, delta: { candidateCount?: number; selectedCount?: number; replaceCount?: number; manualSelectCount?: number }): Promise<void> {
+    await this.db.query(`insert into script_editing_v3_asset_usage_stats (workspace_id,asset_id,candidate_count,selected_count,replace_count,manual_select_count)
+      values ($1,$2,$3,$4,$5,$6)
+      on conflict (workspace_id,asset_id) do update set candidate_count=script_editing_v3_asset_usage_stats.candidate_count+excluded.candidate_count,selected_count=script_editing_v3_asset_usage_stats.selected_count+excluded.selected_count,replace_count=script_editing_v3_asset_usage_stats.replace_count+excluded.replace_count,manual_select_count=script_editing_v3_asset_usage_stats.manual_select_count+excluded.manual_select_count,updated_at=now()`, [workspaceId, assetId, delta.candidateCount || 0, delta.selectedCount || 0, delta.replaceCount || 0, delta.manualSelectCount || 0]);
+  }
+
+  async setGold(snapshotId: string, assetId: string, gold: boolean): Promise<void> {
+    const snapshot = await this.getSnapshot(snapshotId);
+    if (!snapshot.items.some((item) => item.assetId === assetId)) throw new Error('MATERIAL_NOT_FOUND');
+    await this.db.query(`insert into script_editing_v3_asset_usage_stats (workspace_id,asset_id,gold) values ($1,$2,$3)
+      on conflict (workspace_id,asset_id) do update set gold=excluded.gold,updated_at=now()`, [snapshot.workspaceId, assetId, gold]);
+  }
 
   async persistVisualProfile(profile: AssetVisualProfileV3): Promise<void> {
     await this.db.query('insert into asset_visual_profiles (asset_id,summary,profile,provider,model_name,model_version,prompt_version,analysis_version,status,error) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,null) on conflict (asset_id) do update set summary=excluded.summary,profile=excluded.profile,provider=excluded.provider,model_name=excluded.model_name,model_version=excluded.model_version,prompt_version=excluded.prompt_version,analysis_version=excluded.analysis_version,status=excluded.status,error=null,updated_at=now()', [profile.assetId, profile.summary, profile, profile.modelProvider, profile.modelName, profile.modelVersion, profile.promptVersion, profile.analysisVersion, 'READY']);
@@ -116,7 +162,7 @@ export class ScriptEditingV3Service {
   async getSnapshot(snapshotId: string): Promise<MaterialPoolSnapshotV3> {
     const header = (await this.db.query('select * from material_pool_snapshots where id=$1', [snapshotId])).rows[0] as PoolRow | undefined;
     if (!header) throw new Error('MATERIAL_POOL_SNAPSHOT_NOT_FOUND');
-    const rows = await this.db.query('select * from material_pool_items where snapshot_id=$1 order by file_name,asset_id', [snapshotId]);
+    const rows = await this.db.query('select i.*,u.jianying_use_count,u.candidate_count,u.selected_count,u.final_use_count,u.replace_count,u.manual_select_count,u.recent_use_count,u.gold as stats_gold,u.last_used_at as stats_last_used_at from material_pool_items i left join script_editing_v3_asset_usage_stats u on u.workspace_id=$2 and u.asset_id=i.asset_id where i.snapshot_id=$1 order by i.file_name,i.asset_id', [snapshotId, header.workspace_id]);
     return { id: String(header.id), workspaceId: String(header.workspace_id), revision: Number(header.revision), items: (rows.rows as PoolRow[]).map(mapPoolItem), createdAt: new Date(String(header.created_at)).toISOString() };
   }
 
@@ -135,7 +181,10 @@ export class ScriptEditingV3Service {
   private async rankCandidates(sessionId: string, snapshot: MaterialPoolSnapshotV3, sentences: SentenceV3[]): Promise<void> {
     for (const sentence of sentences) {
       const ranked = snapshot.items.filter((item) => item.durationMs >= sentence.durationMs).map((item) => scoreCandidate(sentence, item)).sort((a, b) => b.finalScore - a.finalScore || a.assetId.localeCompare(b.assetId)).slice(0, 5);
-      for (const ranking of ranked) await this.db.query('insert into candidate_rankings (id,session_id,sentence_id,asset_id,ranking) values ($1,$2,$3,$4,$5) on conflict (session_id,sentence_id,asset_id) do update set ranking=excluded.ranking,created_at=now()', [`candidate-${randomUUID()}`, sessionId, sentence.id, ranking.assetId, ranking]);
+      for (const ranking of ranked) {
+        const inserted = await this.db.query('insert into candidate_rankings (id,session_id,sentence_id,asset_id,ranking) values ($1,$2,$3,$4,$5) on conflict (session_id,sentence_id,asset_id) do update set ranking=excluded.ranking,created_at=now() returning (xmax = 0) as inserted', [`candidate-${randomUUID()}`, sessionId, sentence.id, ranking.assetId, ranking]);
+        if (inserted.rows[0]?.inserted) await this.incrementUsageStats(snapshot.workspaceId, ranking.assetId, { candidateCount: 1 });
+      }
     }
   }
 
@@ -214,7 +263,13 @@ export class ScriptEditingV3Service {
     }
     next.metadata = { ...(next.metadata || {}), v3Revision: Number(current.session.revision) + 1 };
     validateEditManifest(next);
-    return this.persistManifest(sessionId, next, operation);
+    const result = await this.persistManifest(sessionId, next, operation);
+    if (operation.type === 'REPLACE_CLIP') {
+      await this.incrementUsageStats(String(current.session.workspace_id), currentClip.assetId, { replaceCount: 1 });
+      await this.incrementUsageStats(String(current.session.workspace_id), operation.assetId, { selectedCount: 1 });
+    }
+    if (operation.type === 'MANUAL_SELECT_CLIP') await this.incrementUsageStats(String(current.session.workspace_id), operation.assetId, { selectedCount: 1, manualSelectCount: 1 });
+    return result;
   }
 
   private async persistManifest(sessionId: string, manifest: EditManifestV0, operation?: EditOperationV3): Promise<{ manifestId: string; revision: number }> {

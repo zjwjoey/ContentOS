@@ -15,6 +15,13 @@ export interface MaterialPoolItemV3 {
   thumbnailUrl?: string;
   gold?: boolean;
   historyUseCount?: number;
+  jianyingUseCount?: number;
+  candidateCount?: number;
+  selectedCount?: number;
+  finalUseCount?: number;
+  replaceCount?: number;
+  manualSelectCount?: number;
+  recentUseCount?: number;
   lastUsedAt?: string;
 }
 
