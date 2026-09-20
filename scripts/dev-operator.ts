@@ -41,6 +41,22 @@ function launch(args: string[], env: NodeJS.ProcessEnv): void {
   });
 }
 
+function launchDirect(packageName: string, entry: string, env: NodeJS.ProcessEnv, cwd = root, args: string[] = []): void {
+  const node = process.execPath;
+  const runner = packageName === '@contentos/web'
+    ? resolve(root, 'apps/web/node_modules/next/dist/bin/next')
+    : resolve(root, 'node_modules/tsx/dist/cli.mjs');
+  const child = spawn(node, [runner, ...(packageName === '@contentos/web' ? args : [entry, ...args])], { cwd, env, stdio: 'inherit', windowsHide: true });
+  children.push(child);
+  child.once('exit', (code) => {
+    if (!stopping && code !== 0) {
+      console.error(`ContentOS operator child exited with code ${code ?? 'unknown'}`);
+      process.exitCode = code ?? 1;
+      stopChildren();
+    }
+  });
+}
+
 function stopChildren(): void {
   if (stopping) return;
   stopping = true;
@@ -51,12 +67,27 @@ function stopChildren(): void {
 process.once('SIGINT', stopChildren);
 process.once('SIGTERM', stopChildren);
 
-launch(['--filter', '@contentos/api', 'dev'], { ...commonEnv, PORT: process.env.PORT ?? '3000' });
-const webMode = process.env.CONTENTOS_WEB_PRODUCTION === '1' ? 'start' : 'dev';
-launch(['--filter', '@contentos/web', 'exec', 'next', webMode, '-p', process.env.WEB_PORT ?? '3001'], { ...commonEnv, ...(webMode === 'start' ? { NODE_ENV: 'production' } : {}), CONTENTOS_API_URL: process.env.CONTENTOS_API_URL ?? `http://127.0.0.1:${process.env.PORT ?? '3000'}`, PORT: process.env.WEB_PORT ?? '3001' });
-launch(['--filter', '@contentos/director-worker', 'dev'], { ...commonEnv, PORT: process.env.DIRECTOR_WORKER_PORT ?? '3010' });
-launch(['--filter', '@contentos/asset-worker', 'dev'], { ...commonEnv, PORT: process.env.ASSET_WORKER_PORT ?? '3012' });
-launch(['--filter', '@contentos/worker-video', 'dev'], { ...commonEnv, PORT: process.env.VIDEO_WORKER_PORT ?? '3015' });
-launch(['--filter', '@contentos/worker-publisher', 'dev'], { ...commonEnv, PORT: process.env.PUBLISHER_WORKER_PORT ?? '3020' });
-launch(['--filter', '@contentos/review-worker', 'dev'], { ...commonEnv, PORT: process.env.REVIEW_WORKER_PORT ?? '3025' });
-launch(['--filter', '@contentos/benchmark-worker', 'dev'], { ...commonEnv, PORT: process.env.BENCHMARK_WORKER_PORT ?? '3026' });
+const direct = process.env.CONTENTOS_OPERATOR_DIRECT === '1';
+if (direct) {
+  launchDirect('@contentos/api', 'apps/api/src/main.ts', { ...commonEnv, PORT: process.env.PORT ?? '3000' });
+} else launch(['--filter', '@contentos/api', 'dev'], { ...commonEnv, PORT: process.env.PORT ?? '3000' });
+const webMode: 'start' | 'dev' = process.env.CONTENTOS_WEB_PRODUCTION === '1' ? 'start' : 'dev';
+const webNodeEnv: NodeJS.ProcessEnv = webMode === 'start' ? { NODE_ENV: 'production' } : { NODE_ENV: 'development' };
+const webEnv: NodeJS.ProcessEnv = { ...commonEnv, ...webNodeEnv, CONTENTOS_API_URL: process.env.CONTENTOS_API_URL ?? `http://127.0.0.1:${process.env.PORT ?? '3000'}`, PORT: process.env.WEB_PORT ?? '3001' };
+if (direct) {
+  launchDirect('@contentos/web', '', webEnv, resolve(root, 'apps/web'), [webMode, '-p', process.env.WEB_PORT ?? '3001']);
+  launchDirect('@contentos/director-worker', 'workers/director-worker/src/dev-main.ts', { ...commonEnv, PORT: process.env.DIRECTOR_WORKER_PORT ?? '3010' });
+  launchDirect('@contentos/asset-worker', 'workers/asset-worker/src/main.ts', { ...commonEnv, PORT: process.env.ASSET_WORKER_PORT ?? '3012' });
+  launchDirect('@contentos/worker-video', 'workers/video-worker/src/main.ts', { ...commonEnv, PORT: process.env.VIDEO_WORKER_PORT ?? '3015' });
+  launchDirect('@contentos/worker-publisher', 'workers/publisher-worker/src/dev-main.ts', { ...commonEnv, PORT: process.env.PUBLISHER_WORKER_PORT ?? '3020' });
+  launchDirect('@contentos/review-worker', 'workers/review-worker/src/dev-main.ts', { ...commonEnv, PORT: process.env.REVIEW_WORKER_PORT ?? '3025' });
+  launchDirect('@contentos/benchmark-worker', 'workers/benchmark-worker/src/dev-main.ts', { ...commonEnv, PORT: process.env.BENCHMARK_WORKER_PORT ?? '3026' });
+} else {
+  launch(['--filter', '@contentos/web', 'exec', 'next', webMode, '-p', process.env.WEB_PORT ?? '3001'], webEnv);
+  launch(['--filter', '@contentos/director-worker', 'dev'], { ...commonEnv, PORT: process.env.DIRECTOR_WORKER_PORT ?? '3010' });
+  launch(['--filter', '@contentos/asset-worker', 'dev'], { ...commonEnv, PORT: process.env.ASSET_WORKER_PORT ?? '3012' });
+  launch(['--filter', '@contentos/worker-video', 'dev'], { ...commonEnv, PORT: process.env.VIDEO_WORKER_PORT ?? '3015' });
+  launch(['--filter', '@contentos/worker-publisher', 'dev'], { ...commonEnv, PORT: process.env.PUBLISHER_WORKER_PORT ?? '3020' });
+  launch(['--filter', '@contentos/review-worker', 'dev'], { ...commonEnv, PORT: process.env.REVIEW_WORKER_PORT ?? '3025' });
+  launch(['--filter', '@contentos/benchmark-worker', 'dev'], { ...commonEnv, PORT: process.env.BENCHMARK_WORKER_PORT ?? '3026' });
+}

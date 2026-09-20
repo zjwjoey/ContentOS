@@ -246,7 +246,10 @@ export class ScriptEditingV3Service {
     for (const sentence of sentences) {
       const locked = previousBySentence.get(sentence.id);
       if (locked?.locked) { timeline.push({ ...locked }); cursor += locked.durationMs; continue; }
-      const candidate = snapshot.items.filter((item) => item.durationMs >= sentence.durationMs).map((item) => scoreCandidate(sentence, item)).sort((a, b) => b.finalScore - a.finalScore)[0];
+      const eligible = snapshot.items.filter((item) => item.durationMs >= sentence.durationMs);
+      const previousAssetId = timeline.at(-1)?.assetId;
+      const distinctEligible = eligible.filter((item) => item.assetId !== previousAssetId);
+      const candidate = (distinctEligible.length ? distinctEligible : eligible).map((item) => scoreCandidate(sentence, item)).sort((a, b) => b.finalScore - a.finalScore)[0];
       if (!candidate) throw new Error(`NO_CANDIDATE_FOR_${sentence.id}`);
       const asset = snapshot.items.find((item) => item.assetId === candidate.assetId)!;
       const sourceInMs = candidate.recommendedSourceInMs;
