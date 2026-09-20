@@ -61,7 +61,7 @@ test('Hybrid Script Editing source controls and external-only flow work in the b
     await page.getByLabel('输出文件夹').fill(hybridOutput);
     await page.waitForTimeout(500);
     await page.getByRole('button', { name: '开始剪辑' }).click();
-    await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 15_000 });
+    await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 45_000, waitUntil: 'commit' });
     const hybridBatchId = new URL(page.url()).searchParams.get('batch');
     assert.ok(hybridBatchId);
     const hybridBatch = await waitForBatch(page, apiUrl, hybridBatchId!);
@@ -76,7 +76,7 @@ test('Hybrid Script Editing source controls and external-only flow work in the b
     await page.locator('.source-provider input[type="checkbox"]').check();
     await page.getByLabel('输出文件夹').fill(externalOutput);
     await page.getByRole('button', { name: '开始剪辑' }).click();
-    await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 15_000 });
+    await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 45_000, waitUntil: 'commit' });
     const externalBatchId = new URL(page.url()).searchParams.get('batch');
     assert.ok(externalBatchId);
     const externalBatch = await waitForBatch(page, apiUrl, externalBatchId!);

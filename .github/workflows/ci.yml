@@ -139,8 +139,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Install Chromium
         run: pnpm exec playwright install --with-deps chromium
-      - name: Build web for browser acceptance
-        run: pnpm --dir apps/web build
       - name: Browser E2E
         run: |
           set +e

@@ -142,6 +142,10 @@ async function main(): Promise<void> {
       CONTENTOS_MUSIC_ROOTS: temporaryRoot,
       CONTENTOS_OUTPUT_ROOTS: temporaryRoot,
     };
+    if (process.env.CONTENTOS_WEB_PRODUCTION === '1') {
+      const buildInvocation = pnpmInvocation(['--filter', '@contentos/web', 'exec', 'next', 'build']);
+      await run(buildInvocation.command, buildInvocation.args, environment);
+    }
     operator = spawnPnpm(['dev:operator'], environment);
     await waitForHealth(apiUrl);
     const testArgs = ['tsx', '--test', '--test-concurrency=1'];
