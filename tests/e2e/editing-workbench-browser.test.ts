@@ -55,6 +55,10 @@ test('独立剪辑工作台完成脚本、测试混剪与批量失败重试流�
   const roots = await makeSourceRoots();
   const browser = await chromium.launch({ headless: true, ...(process.env.CONTENTOS_BROWSER_EXECUTABLE ? { executablePath: process.env.CONTENTOS_BROWSER_EXECUTABLE } : {}) });
   const page = await browser.newPage();
+  let sessionResponse = 'not requested';
+  page.on('response', (response) => {
+    if (response.url().includes('/api/v1/edit/sessions')) sessionResponse = `${response.status()} ${response.url()}`;
+  });
   const database = new pg.Pool({ connectionString: process.env.CONTENTOS_BROWSER_DATABASE_URL });
   try {
     // Flow A: script edit, uploaded audio, two source roots, export and preview.
@@ -73,7 +77,7 @@ test('独立剪辑工作台完成脚本、测试混剪与批量失败重试流�
     await page.getByLabel('输出文件夹').fill(roots.output);
     await page.getByRole('button', { name: '开始剪辑' }).click();
     try { await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 45_000 }); }
-    catch (error) { const values = await page.locator('input,textarea').evaluateAll((elements) => elements.map((element) => ({ tag: element.tagName, aria: element.getAttribute('aria-label'), value: (element as HTMLInputElement).value }))); throw new Error(`脚本剪辑未进入历史页：${JSON.stringify(values)}\n${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
+    catch (error) { const values = await page.locator('input,textarea').evaluateAll((elements) => elements.map((element) => ({ tag: element.tagName, aria: element.getAttribute('aria-label'), value: (element as HTMLInputElement).value }))); throw new Error(`脚本剪辑未进入历史页（${sessionResponse}）：${JSON.stringify(values)}\n${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     const scriptBatchId = new URL(page.url()).searchParams.get('batch'); assert.ok(scriptBatchId);
     await waitForBatch(page, scriptBatchId!);
     await exportBatch(page, scriptBatchId!);
