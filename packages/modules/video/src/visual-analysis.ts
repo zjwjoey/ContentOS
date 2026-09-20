@@ -1,11 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
-import type { AssetVisualProfileV3 } from '../../../contracts/src/index.js';
+import { CONTROLLED_VISUAL_TAGS_V3, type AssetVisualProfileV3 } from '../../../contracts/src/index.js';
 import { validateAssetVisualProfileV3 } from '../../../contracts/src/index.js';
 
 export interface VisualAnalysisProvider { analyzeAssetFrames(input: { assetId: string; framePaths: string[]; model?: string; signal?: AbortSignal }): Promise<AssetVisualProfileV3>; }
 
 const responseSchema = z.object({ summary: z.string().trim().min(1), tags: z.array(z.object({ tag: z.string().trim().min(1), confidence: z.number().min(0).max(1), timestampsMs: z.array(z.number().nonnegative()).default([]) })).default([]), recommendedTimestampsMs: z.array(z.number().nonnegative()).default([]) });
+const controlledTags = new Set<string>(CONTROLLED_VISUAL_TAGS_V3);
 
 export class QwenVisualAnalysisProvider implements VisualAnalysisProvider {
   constructor(private readonly options: { endpoint?: string; apiKey?: string; model?: string; modelVersion?: string; promptVersion?: string; timeoutMs?: number; fetch?: typeof fetch } = {}) {}
@@ -33,7 +34,7 @@ export class QwenVisualAnalysisProvider implements VisualAnalysisProvider {
     let parsed: unknown;
     try { parsed = JSON.parse(content.replace(/^```json\s*/u, '').replace(/\s*```$/u, '')); } catch { throw new Error('QWEN_INVALID_JSON'); }
     const value = responseSchema.parse(parsed);
-    const profile: AssetVisualProfileV3 = { assetId: input.assetId, ...value, modelProvider: 'QWEN_VL', modelName: input.model || this.options.model || process.env.QWEN_MODEL || 'qwen-vl-max', modelVersion: this.options.modelVersion || process.env.QWEN_MODEL_VERSION || 'unknown', promptVersion: this.options.promptVersion || 'qwen-visual-v1', analysisVersion: 'asset-profile-v1', createdAt: new Date().toISOString() };
+    const profile: AssetVisualProfileV3 = { assetId: input.assetId, ...value, tags: value.tags.filter((tag) => controlledTags.has(tag.tag)), modelProvider: 'QWEN_VL', modelName: input.model || this.options.model || process.env.QWEN_MODEL || 'qwen-vl-max', modelVersion: this.options.modelVersion || process.env.QWEN_MODEL_VERSION || 'unknown', promptVersion: this.options.promptVersion || 'qwen-visual-v1', analysisVersion: 'asset-profile-v1', createdAt: new Date().toISOString() };
     validateAssetVisualProfileV3(profile);
     return profile;
   }

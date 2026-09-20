@@ -1,6 +1,7 @@
 export type MaterialPoolSource = 'MANUAL' | 'JIANYING_DRAFT';
 export type TagEvidenceKind = 'MANUAL' | 'QWEN_VL' | 'FOLDER' | 'JIANYING_HISTORY';
 export type SelectionSourceV3 = 'AUTO' | 'HISTORY' | 'MANUAL';
+export const CONTROLLED_VISUAL_TAGS_V3 = ['门店外景', '门店内部', '货架', '商品特写', '顾客购物', '人多', '人少', '收银台', '街景', '仓库', '物流', '卡车', '展厅', '客户交流', '会议', '办公室', '工作人员', '产品', '装箱'] as const;
 
 export interface MaterialPoolItemV3 {
   assetId: string;
@@ -50,12 +51,15 @@ export interface VisualQueryV3 { sentenceId: string; query: string; model: strin
 
 export interface CandidateV3 {
   assetId: string;
+  fileName?: string;
   recommendedSourceInMs: number;
   recommendedSourceOutMs: number;
   semanticScore: number;
   matchingQueries: string[];
   visualEvidence: string[];
   historyBonus: number;
+  historyUseCount?: number;
+  gold?: boolean;
   finalScore: number;
 }
 

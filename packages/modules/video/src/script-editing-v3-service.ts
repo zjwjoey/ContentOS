@@ -39,16 +39,17 @@ function buildQueries(sentence: SentenceV3): string[] {
 
 export function buildVisualQueriesV3(text: string): string[] { return buildQueries({ id: 'sentence', index: 0, text, startMs: 0, endMs: 3_000, durationMs: 3_000 }); }
 
-function scoreCandidate(sentence: SentenceV3, item: MaterialPoolItemV3): CandidateV3 {
+function scoreCandidate(sentence: SentenceV3, item: MaterialPoolItemV3, profile?: AssetVisualProfileV3): CandidateV3 {
   const queryTokens = new Set(tokens(`${sentence.text} ${buildQueries(sentence).join(' ')}`));
-  const haystack = new Set(tokens(`${item.fileName} ${item.tags.join(' ')}`));
+  const profileTags = profile?.tags.map((tag) => tag.tag) || [];
+  const haystack = new Set(tokens(`${item.fileName} ${item.tags.join(' ')} ${profile?.summary || ''} ${profileTags.join(' ')}`));
   const matchingQueries = buildQueries(sentence).filter((query) => tokens(query).some((token) => haystack.has(token)));
   const matched = [...queryTokens].filter((token) => haystack.has(token));
   const semanticScore = queryTokens.size ? Math.min(100, Math.round((matched.length / queryTokens.size) * 100)) : 0;
   const historyBonus = item.historyUseCount ? Math.max(0, 8 - item.historyUseCount) : 8;
   const finalScore = semanticScore + historyBonus + (item.gold ? 12 : 0);
   const sourceInMs = Math.max(0, Math.min(item.durationMs - sentence.durationMs, Math.round(item.durationMs * 0.25)));
-  return { assetId: item.assetId, recommendedSourceInMs: sourceInMs, recommendedSourceOutMs: sourceInMs + sentence.durationMs, semanticScore, matchingQueries, visualEvidence: item.tags.filter((tag) => matched.includes(tag.toLowerCase())).slice(0, 5), historyBonus, finalScore };
+  return { assetId: item.assetId, fileName: item.fileName, recommendedSourceInMs: sourceInMs, recommendedSourceOutMs: sourceInMs + sentence.durationMs, semanticScore, matchingQueries, visualEvidence: [...item.tags, ...profileTags].filter((tag) => matched.includes(tag.toLowerCase())).slice(0, 5), historyBonus, ...(item.historyUseCount === undefined ? {} : { historyUseCount: item.historyUseCount }), ...(item.gold === undefined ? {} : { gold: item.gold }), finalScore };
 }
 
 export function rankMaterialCandidateV3(input: { text: string; durationMs: number }, item: MaterialPoolItemV3): CandidateV3 { return scoreCandidate({ id: 'sentence', index: 0, text: input.text, startMs: 0, endMs: input.durationMs, durationMs: input.durationMs }, item); }
@@ -194,8 +195,10 @@ export class ScriptEditingV3Service {
   }
 
   private async rankCandidates(sessionId: string, snapshot: MaterialPoolSnapshotV3, sentences: SentenceV3[]): Promise<void> {
+    const profileRows = await this.db.query<{ asset_id: string; profile: AssetVisualProfileV3 }>('select asset_id,profile from asset_visual_profiles where asset_id = any($1::text[]) and status=\'READY\'', [snapshot.items.map((item) => item.assetId)]);
+    const profiles = new Map(profileRows.rows.map((row) => [row.asset_id, row.profile]));
     for (const sentence of sentences) {
-      const ranked = snapshot.items.filter((item) => item.durationMs >= sentence.durationMs).map((item) => scoreCandidate(sentence, item)).sort((a, b) => b.finalScore - a.finalScore || a.assetId.localeCompare(b.assetId)).slice(0, 5);
+      const ranked = snapshot.items.filter((item) => item.durationMs >= sentence.durationMs).map((item) => scoreCandidate(sentence, item, profiles.get(item.assetId))).sort((a, b) => b.finalScore - a.finalScore || a.assetId.localeCompare(b.assetId)).slice(0, 5);
       for (const ranking of ranked) {
         const inserted = await this.db.query('insert into candidate_rankings (id,session_id,sentence_id,asset_id,ranking) values ($1,$2,$3,$4,$5) on conflict (session_id,sentence_id,asset_id) do update set ranking=excluded.ranking,created_at=now() returning (xmax = 0) as inserted', [`candidate-${randomUUID()}`, sessionId, sentence.id, ranking.assetId, ranking]);
         if (inserted.rows[0]?.inserted) await this.incrementUsageStats(snapshot.workspaceId, ranking.assetId, { candidateCount: 1 });

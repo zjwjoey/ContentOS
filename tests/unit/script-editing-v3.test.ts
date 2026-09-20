@@ -42,6 +42,17 @@ test('Qwen invalid JSON is rejected before a visual profile can be accepted', as
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test('Qwen visual tags are bounded by the controlled catalog', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'contentos-v3-qwen-tags-'));
+  const framePath = join(directory, 'frame.jpg');
+  await writeFile(framePath, 'fixture');
+  try {
+    const provider = new QwenVisualAnalysisProvider({ endpoint: 'https://qwen.test', apiKey: 'test-key', fetch: async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: '门店内部', tags: [{ tag: '门店内部', confidence: 0.9, timestampsMs: [100] }, { tag: 'MIZAN', confidence: 0.99, timestampsMs: [100] }], recommendedTimestampsMs: [100] }) } }] }), { status: 200 }) });
+    const profile = await provider.analyzeAssetFrames({ assetId: 'asset-1', framePaths: [framePath] });
+    assert.deepEqual(profile.tags.map((tag) => tag.tag), ['门店内部']);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('Qwen timeout is normalized for the durable job retry boundary', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'contentos-v3-qwen-timeout-'));
   const framePath = join(directory, 'frame.jpg');
