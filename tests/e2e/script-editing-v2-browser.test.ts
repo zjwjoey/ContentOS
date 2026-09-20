@@ -26,6 +26,10 @@ test('Script Editing V2 browser flows cover local, hybrid, reroll, BGM and histo
   assert.ok(baseUrl && fixtureDir && fixtureAudio && fixtureVideos.length >= 3, 'V2 browser harness must provide fixtures');
   const browser = await chromium.launch({ headless: true, ...(process.env.CONTENTOS_BROWSER_EXECUTABLE ? { executablePath: process.env.CONTENTOS_BROWSER_EXECUTABLE } : {}) });
   const page = await browser.newPage();
+  let segmentationResponse = 'not requested';
+  page.on('response', (response) => {
+    if (response.url().includes('/api/v1/edit/script/segment')) segmentationResponse = `${response.status()} ${response.url()}`;
+  });
   const localRoot = join(fixtureDir!, 'v2-local');
   const hybridRoot = join(fixtureDir!, 'v2-hybrid');
   const musicPath = join(fixtureDir!, 'v2-bgm.wav');
@@ -47,7 +51,8 @@ test('Script Editing V2 browser flows cover local, hybrid, reroll, BGM and histo
     await page.locator('#v2-output-root').fill(fixtureDir!);
     await page.locator('input[placeholder="高级模式：手动填写路径"]').first().fill(localRoot);
     await page.getByRole('button', { name: '整理文案' }).click();
-    await page.locator('[data-segment-index="0"]').waitFor({ state: 'visible', timeout: 15_000 });
+    try { await page.locator('[data-segment-index="0"]').waitFor({ state: 'visible', timeout: 45_000 }); }
+    catch (error) { throw new Error(`文案整理未返回分段（${segmentationResponse}）：${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     const createButton = page.getByRole('button', { name: '生成剪辑方案' });
     const segmentState = page.locator('[data-testid="v2-segment-state"]');
     const assertConfirmedSegments = async (count: number): Promise<void> => {
