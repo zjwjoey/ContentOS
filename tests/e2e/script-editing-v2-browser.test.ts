@@ -52,7 +52,7 @@ test('Script Editing V2 browser flows cover local, hybrid, reroll, BGM and histo
     await page.locator('input[placeholder="高级模式：手动填写路径"]').first().fill(localRoot);
     await page.getByRole('button', { name: '整理文案' }).click();
     try { await page.locator('[data-segment-index="0"]').waitFor({ state: 'visible', timeout: 45_000 }); }
-    catch (error) { throw new Error(`文案整理未返回分段（${segmentationResponse}）：${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
+    catch (error) { throw new Error(`文案整理未返回分段：${await page.locator('body').innerText()}\n诊断摘要：segmentationResponse=${segmentationResponse} url=${page.url()}\n${error instanceof Error ? error.message : String(error)}`); }
     const createButton = page.getByRole('button', { name: '生成剪辑方案' });
     const segmentState = page.locator('[data-testid="v2-segment-state"]');
     const assertConfirmedSegments = async (count: number): Promise<void> => {

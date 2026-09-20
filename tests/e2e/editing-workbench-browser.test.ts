@@ -76,8 +76,8 @@ test('独立剪辑工作台完成脚本、测试混剪与批量失败重试流�
     await page.getByRole('button', { name: '高级模式：手动添加路径' }).click(); await sourceLabels.nth(0).fill(roots.first); await sourceLabels.nth(1).fill(roots.second);
     await page.getByLabel('输出文件夹').fill(roots.output);
     await page.getByRole('button', { name: '开始剪辑' }).click();
-    try { await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 45_000 }); }
-    catch (error) { const values = await page.locator('input,textarea').evaluateAll((elements) => elements.map((element) => ({ tag: element.tagName, aria: element.getAttribute('aria-label'), value: (element as HTMLInputElement).value }))); throw new Error(`脚本剪辑未进入历史页（${sessionResponse}）：${JSON.stringify(values)}\n${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
+    try { await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 45_000, waitUntil: 'commit' }); }
+    catch (error) { const values = await page.locator('input,textarea').evaluateAll((elements) => elements.map((element) => ({ tag: element.tagName, aria: element.getAttribute('aria-label'), value: (element as HTMLInputElement).value }))); throw new Error(`脚本剪辑未进入历史页（${sessionResponse}）：${JSON.stringify(values)}\n${await page.locator('body').innerText()}\n诊断摘要：sessionResponse=${sessionResponse} url=${page.url()}\n${error instanceof Error ? error.message : String(error)}`); }
     const scriptBatchId = new URL(page.url()).searchParams.get('batch'); assert.ok(scriptBatchId);
     await waitForBatch(page, scriptBatchId!);
     await exportBatch(page, scriptBatchId!);
@@ -94,15 +94,15 @@ test('独立剪辑工作台完成脚本、测试混剪与批量失败重试流�
     }
     await page.locator('.folder-row input').first().fill(roots.first); await page.getByLabel('输出文件夹').fill(roots.output);
     await page.getByRole('button', { name: '生成 1 条测试' }).click();
-    await page.waitForURL(/\/edit\/history\?batch=/u);
+    await page.waitForURL(/\/edit\/history\?batch=/u, { waitUntil: 'commit' });
     const testBatchId = new URL(page.url()).searchParams.get('batch'); assert.ok(testBatchId);
     await waitForBatch(page, testBatchId!); await exportBatch(page, testBatchId!);
     await page.getByRole('link', { name: '满意，开始全部混剪' }).click();
-    await page.waitForURL(/\/edit\/mix\?copy=/u);
+    await page.waitForURL(/\/edit\/mix\?copy=/u, { waitUntil: 'commit' });
     await page.locator('.batch-row').nth(2).waitFor({ state: 'visible', timeout: 10_000 });
     await page.getByRole('button', { name: '开始全部混剪' }).click();
-    try { await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 45_000 }); }
-    catch (error) { throw new Error(`全部混剪未进入历史页：${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
+    try { await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 45_000, waitUntil: 'commit' }); }
+    catch (error) { throw new Error(`全部混剪未进入历史页：${await page.locator('body').innerText()}\n诊断摘要：sessionResponse=${sessionResponse} url=${page.url()}\n${error instanceof Error ? error.message : String(error)}`); }
     const mixBatchId = new URL(page.url()).searchParams.get('batch'); assert.ok(mixBatchId);
     const mixBatch = await waitForBatch(page, mixBatchId!); assert.equal(mixBatch.totalCount, 3);
     await exportBatch(page, mixBatchId!, 3);
