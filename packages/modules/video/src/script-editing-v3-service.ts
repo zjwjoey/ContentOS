@@ -18,7 +18,7 @@ function tokens(value: string): string[] {
 
 function mapPoolItem(row: PoolRow): MaterialPoolItemV3 {
   const sourceRef = row.source_ref && typeof row.source_ref === 'object' ? row.source_ref as Record<string, unknown> : {};
-  return { assetId: String(row.asset_id), sourcePath: String(row.source_path), fileName: String(row.file_name), durationMs: Number(row.duration_ms), width: Number(row.width || 0), height: Number(row.height || 0), ...(row.file_size == null ? {} : { fileSize: Number(row.file_size) }), ...(row.modified_at ? { modifiedAt: new Date(String(row.modified_at)).toISOString() } : {}), tags: Array.isArray(row.tags) ? row.tags.filter((tag): tag is string => typeof tag === 'string') : [], ...(row.thumbnail_key ? { thumbnailUrl: `/api/v1/video/local-media/thumbnails/${encodeURIComponent(String(row.asset_id))}` } : {}), gold: Boolean(row.stats_gold ?? row.gold), historyUseCount: Number(sourceRef.usageCount || 0), jianyingUseCount: Number(row.jianying_use_count || 0), candidateCount: Number(row.candidate_count || 0), selectedCount: Number(row.selected_count || 0), finalUseCount: Number(row.final_use_count || 0), replaceCount: Number(row.replace_count || 0), manualSelectCount: Number(row.manual_select_count || 0), recentUseCount: Number(row.recent_use_count || 0), ...(row.stats_last_used_at ? { lastUsedAt: new Date(String(row.stats_last_used_at)).toISOString() } : sourceRef.lastUsedAt ? { lastUsedAt: String(sourceRef.lastUsedAt) } : {}) };
+  return { assetId: String(row.asset_id), sourcePath: String(row.source_path), fileName: String(row.file_name), durationMs: Number(row.duration_ms), width: Number(row.width || 0), height: Number(row.height || 0), ...(row.file_size == null ? {} : { fileSize: Number(row.file_size) }), ...(row.modified_at ? { modifiedAt: new Date(String(row.modified_at)).toISOString() } : {}), tags: Array.isArray(row.tags) ? row.tags.filter((tag): tag is string => typeof tag === 'string') : [], ...(row.thumbnail_key ? { thumbnailUrl: `/api/v1/video/local-media/thumbnails/${encodeURIComponent(String(row.asset_id))}` } : {}), gold: Boolean(row.stats_gold ?? row.gold), historyUseCount: Number(sourceRef.usageCount || 0), jianyingUseCount: Number(row.jianying_use_count || sourceRef.jianyingUseCount || 0), candidateCount: Number(row.candidate_count || 0), selectedCount: Number(row.selected_count || 0), finalUseCount: Number(row.final_use_count || 0), replaceCount: Number(row.replace_count || 0), manualSelectCount: Number(row.manual_select_count || 0), recentUseCount: Number(row.recent_use_count || 0), ...(row.stats_last_used_at ? { lastUsedAt: new Date(String(row.stats_last_used_at)).toISOString() } : sourceRef.lastUsedAt ? { lastUsedAt: String(sourceRef.lastUsedAt) } : {}) };
 }
 
 function sentenceRows(value: unknown): SentenceV3[] {
@@ -113,7 +113,12 @@ export class JianyingDraftImporter {
     };
     payloads.forEach((payload) => visit(payload));
     await this.db.query('insert into jianying_draft_imports (id, workspace_id, draft_id, draft_name, draft_path) values ($1,$2,$3,$4,$5)', [importId, workspaceId, draftId, draftName, absolutePath]);
-    for (const usage of usages) await this.db.query('insert into jianying_asset_usages (id,draft_import_id,asset_id,material_id,source_in_ms,source_out_ms,timeline_start_ms,timeline_end_ms) values ($1,$2,$3,$4,$5,$6,$7,$8)', [`jianying-usage-${randomUUID()}`, importId, usage.assetId, usage.materialId || null, usage.sourceInMs, usage.sourceOutMs, usage.timelineStartMs, usage.timelineEndMs]);
+    for (const usage of usages) {
+      await this.db.query('insert into jianying_asset_usages (id,draft_import_id,asset_id,material_id,source_in_ms,source_out_ms,timeline_start_ms,timeline_end_ms) values ($1,$2,$3,$4,$5,$6,$7,$8)', [`jianying-usage-${randomUUID()}`, importId, usage.assetId, usage.materialId || null, usage.sourceInMs, usage.sourceOutMs, usage.timelineStartMs, usage.timelineEndMs]);
+      const localAsset = (await this.db.query<{ file_id: string }>('select f.file_id from local_media_scan_files f join local_media_scans s on s.id=f.scan_id where s.workspace_id=$1 and s.status=\'SUCCEEDED\' and f.available=true and lower(f.source_path)=lower($2) order by s.scanned_at desc nulls last limit 1', [workspaceId, usage.assetId])).rows[0];
+      if (localAsset) await this.db.query(`insert into script_editing_v3_asset_usage_stats (workspace_id,asset_id,jianying_use_count) values ($1,$2,1)
+        on conflict (workspace_id,asset_id) do update set jianying_use_count=script_editing_v3_asset_usage_stats.jianying_use_count+1,updated_at=now()`, [workspaceId, localAsset.file_id]);
+    }
     return { id: importId, draftId, draftName, usageCount: usages.length };
   }
 }
@@ -144,12 +149,22 @@ export class ScriptEditingV3Service {
     const params: unknown[] = [input.workspaceId];
     const rootPlaceholder = roots.length ? `$${params.push(roots)}::text[]` : undefined;
     const rootClause = rootPlaceholder ? ` and s.source_root_id = any(${rootPlaceholder})` : '';
-    const result = await this.db.query(`select distinct on (f.file_id) f.file_id, f.file_name, f.source_path, f.duration_ms, f.width, f.height, f.file_size, f.modified_at, coalesce(i.tags, f.tags) as tags, i.thumbnail_key, i.usage_count, i.last_used_at, s.source_root_id from local_media_scan_files f join local_media_scans s on s.id=f.scan_id left join local_media_index i on i.file_id=f.file_id where s.workspace_id=$1 and s.status='SUCCEEDED' and f.available=true${rootClause} order by f.file_id, s.scanned_at desc nulls last`, params);
+    const result = input.sourceKind === 'JIANYING_DRAFT' ? { rows: [] as PoolRow[] } : await this.db.query(`select distinct on (f.file_id) f.file_id, f.file_name, f.source_path, f.duration_ms, f.width, f.height, f.file_size, f.modified_at, coalesce(i.tags, f.tags) as tags, i.thumbnail_key, i.usage_count, i.last_used_at, s.source_root_id from local_media_scan_files f join local_media_scans s on s.id=f.scan_id left join local_media_index i on i.file_id=f.file_id where s.workspace_id=$1 and s.status='SUCCEEDED' and f.available=true${rootClause} order by f.file_id, s.scanned_at desc nulls last`, params);
     const deduped = new Map<string, PoolRow>();
     for (const row of result.rows as PoolRow[]) {
       const canonical = resolve(String(row.source_path)).toLowerCase();
       const key = `${canonical}:${Number(row.file_size || 0)}:${Number(row.duration_ms)}`;
       if (!deduped.has(key)) deduped.set(key, { ...row, canonical_path: canonical, asset_id: String(row.file_id), source_ref: { sourceRootId: String(row.source_root_id), usageCount: Number(row.usage_count || 0), ...(row.last_used_at ? { lastUsedAt: new Date(String(row.last_used_at)).toISOString() } : {}) }, gold: false });
+    }
+    if (input.sourceKind === 'JIANYING_DRAFT') {
+      const draftRows = await this.db.query(`select distinct on (f.file_id) f.file_id,f.file_name,f.source_path,f.duration_ms,f.width,f.height,f.file_size,f.modified_at,coalesce(i.tags,f.tags) as tags,i.thumbnail_key,i.usage_count,i.last_used_at,s.source_root_id,count(*) over (partition by f.file_id)::int as jianying_usage_count,d.draft_id,d.draft_name
+        from jianying_asset_usages u join jianying_draft_imports d on d.id=u.draft_import_id join local_media_scan_files f on lower(f.source_path)=lower(u.asset_id) join local_media_scans s on s.id=f.scan_id left join local_media_index i on i.file_id=f.file_id
+        where d.workspace_id=$1 and d.status='IMPORTED' and s.status='SUCCEEDED' and f.available=true order by f.file_id,d.imported_at desc nulls last,s.scanned_at desc nulls last`, [input.workspaceId]);
+      for (const row of draftRows.rows as PoolRow[]) {
+        const canonical = resolve(String(row.source_path)).toLowerCase();
+        const key = `${canonical}:${Number(row.file_size || 0)}:${Number(row.duration_ms)}`;
+        if (!deduped.has(key)) deduped.set(key, { ...row, canonical_path: canonical, asset_id: String(row.file_id), source_ref: { sourceRootId: String(row.source_root_id), usageCount: Number(row.usage_count || 0), jianyingUseCount: Number(row.jianying_usage_count || 0), draftId: String(row.draft_id), draftName: String(row.draft_name), ...(row.last_used_at ? { lastUsedAt: new Date(String(row.last_used_at)).toISOString() } : {}) }, gold: false });
+      }
     }
     if (!deduped.size) throw new Error('MATERIAL_POOL_EMPTY');
     const nextRevision = Number((await this.db.query<{ revision: number }>('select coalesce(max(revision),0)+1 as revision from material_pool_snapshots where workspace_id=$1', [input.workspaceId])).rows[0]?.revision || 1);
