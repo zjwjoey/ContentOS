@@ -69,6 +69,8 @@ export function normalizePresentationSettings(value?: Partial<PresentationSettin
   style.position = { ...DEFAULT_SUBTITLE_STYLE_V1.position, ...(value?.subtitleStyle?.position || {}) };
   style.outline = { ...DEFAULT_SUBTITLE_STYLE_V1.outline, ...(value?.subtitleStyle?.outline || {}) };
   style.shadow = { ...DEFAULT_SUBTITLE_STYLE_V1.shadow, ...(value?.subtitleStyle?.shadow || {}) };
+  // V1 renderer does not expose a stable blur primitive; keep the contract field for forward compatibility but never promise a fake effect.
+  style.shadow.blur = 0;
   style.background = { ...DEFAULT_SUBTITLE_STYLE_V1.background, ...(value?.subtitleStyle?.background || {}) };
   style.position.x = Math.min(1, Math.max(0, Number(style.position.x)));
   style.position.y = Math.min(1, Math.max(0, Number(style.position.y)));

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { access, constants, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { EditManifestV0 } from '../../../contracts/src/index.js';
@@ -7,6 +7,16 @@ import type { EditManifestV0 } from '../../../contracts/src/index.js';
 export interface RenderOptions { manifest: EditManifestV0; outputPath: string; ffmpegPath: string; ffprobePath: string; fontFile?: string; signal?: AbortSignal; }
 export interface RenderResult { outputPath: string; durationMs: number; width: number; height: number; format: string; audio: boolean; checksum?: string; }
 export interface ProbeResult { format: string; durationMs: number; width: number; height: number; audio: boolean; videoCodec?: string; audioCodec?: string; pixelFormat?: string; fps?: number; }
+export function subtitlePositionExpressions(positionX: number, positionY: number): { x: string; y: string } {
+  const x = Math.min(1, Math.max(0, positionX));
+  const y = Math.min(1, Math.max(0, positionY));
+  return { x: `max(0\\,min(w-text_w\\,w*${x}-text_w/2))`, y: `max(0\\,min(h-text_h\\,h*${y}-text_h/2))` };
+}
+export function blurBackgroundBranches(canvasWidth: number, canvasHeight: number): { background: string; foreground: string } {
+  const background = `scale=${canvasWidth}:${canvasHeight}:force_original_aspect_ratio=increase,crop=${canvasWidth}:${canvasHeight},boxblur=12:2`;
+  const foreground = `scale=${canvasWidth}:${canvasHeight}:force_original_aspect_ratio=decrease`;
+  return { background, foreground };
+}
 export async function generateVideoThumbnail(inputPath: string, outputPath: string, ffmpegPath: string, durationMs: number, signal?: AbortSignal): Promise<void> {
   await mkdir(dirname(outputPath), { recursive: true });
   const seekMs = Math.min(1_000, Math.max(0, Math.round(durationMs * 0.25)));
@@ -65,6 +75,7 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   options.signal?.throwIfAborted();
   const renderFontFile = options.fontFile || manifest.presentationSettings?.subtitleStyle.fontFile || manifest.metadata?.presentationSettings?.subtitleStyle.fontFile;
   if ((manifest.subtitles?.length || manifest.textOverlays?.length) && !renderFontFile) throw new Error('RENDER_SUBTITLE_FONT_UNAVAILABLE');
+  if (renderFontFile && (manifest.subtitles?.length || manifest.textOverlays?.length) && !await access(renderFontFile, constants.F_OK).then(() => true).catch(() => false)) throw new Error('RENDER_SUBTITLE_FONT_UNAVAILABLE');
   if (fixture?.generateFixtureInput && fixture.fixturePath) await generateFixtureVideo(fixture.fixturePath, ffmpegPath);
   await mkdir(dirname(outputPath), { recursive: true });
   const tempOutput = `${outputPath}.${randomUUID()}.part.mp4`;
@@ -111,8 +122,9 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
         const presentation = manifest.subtitleStyle || manifest.presentationSettings?.subtitleStyle || manifest.metadata?.presentationSettings?.subtitleStyle;
         if (presentation && !presentation.enabled) return '';
         const baseScale = canvasWidth / 1080;
-        const x = presentation ? `(w-text_w)*${presentation.position.x}` : '(w-text_w)/2';
-        const y = presentation ? `(h-text_h)*${presentation.position.y}` : (item.position === 'top' ? '180' : item.position === 'center' ? '(h-text_h)/2' : 'h-220');
+        const anchored = presentation ? subtitlePositionExpressions(presentation.position.x, presentation.position.y) : undefined;
+        const x = anchored?.x || '(w-text_w)/2';
+        const y = anchored?.y || (item.position === 'top' ? '180' : item.position === 'center' ? '(h-text_h)/2' : 'h-220');
         const color = presentation?.color ? presentation.color.replace('#', '0x') : (kind === 'hero' || item.style === 'emphasis' ? 'white' : item.style === 'commercial' ? '0xEAF4FF' : 'white');
         const size = Math.max(1, Math.round((presentation?.fontSize ?? item.fontSize ?? (kind === 'hero' ? 64 : 48)) * baseScale));
         const outline = presentation?.outline.enabled ? `:borderw=${Math.max(1, Math.round(presentation.outline.width * baseScale))}:bordercolor=${ffmpegColor(presentation.outline.color)}` : (item.style === 'commercial' || kind === 'hero' ? `:borderw=${Math.max(1, Math.round(2 * baseScale))}:bordercolor=black@0.75` : '');
@@ -121,7 +133,7 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
         const background = presentation?.background.enabled ? `:box=1:boxcolor=${ffmpegColor(presentation.background.color)}@${presentation.background.opacity}:boxborderw=${Math.round(presentation.background.padding * baseScale)}` : (item.style === 'simple' ? '' : `:box=1:boxcolor=black@0.45:boxborderw=${Math.round(12 * baseScale)}`);
         const animation = presentation?.animation || 'NONE';
         const animationDuration = Math.min((end - start) / 2, Math.max(.05, (presentation?.animationDurationMs ?? 250) / 1000));
-        const animationExpr = animation === 'SLIDE_UP' ? `:y='${y}+if(lt(t-${start},${animationDuration.toFixed(3)}),${Math.round(40 * baseScale)}*(1-(t-${start})/${animationDuration.toFixed(3)}),0)'` : '';
+        const animationExpr = animation === 'SLIDE_UP' ? `:y='max(0\\,min(h-text_h\\,${y}+if(lt(t-${start}\\,${animationDuration.toFixed(3)})\\,${Math.round(40 * baseScale)}*(1-(t-${start})/${animationDuration.toFixed(3)})\\,0)))'` : '';
         const textSource = textFile ? `textfile='${escapeFilterPath(textFile)}':expansion=none` : `text='${escapeFilterText(item.text)}'`;
         const fade = animation === 'FADE_IN' ? `:alpha='if(lt(t-${start},${animationDuration.toFixed(3)}),(t-${start})/${animationDuration.toFixed(3)},1)'` : animation === 'FADE_OUT' ? `:alpha='if(gt(${end}-t,${animationDuration.toFixed(3)}),1,(${end}-t)/${animationDuration.toFixed(3)})'` : animation === 'FADE_IN_OUT' ? `:alpha='if(lt(t-${start},${animationDuration.toFixed(3)}),(t-${start})/${animationDuration.toFixed(3)},if(gt(${end}-t,${animationDuration.toFixed(3)}),1,(${end}-t)/${animationDuration.toFixed(3)}))'` : '';
         return `,drawtext=fontfile='${escapeFilterPath(renderFontFile)}':${textSource}:fontcolor=${color}:fontsize=${size}:x=${x}:y=${y}${outline}${shadow}${background}${animationExpr}${fade}:enable='between(t\\,${start.toFixed(3)}\\,${end.toFixed(3)})'`;
@@ -133,10 +145,12 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
     const pad = padMs > 0 ? `,tpad=stop_mode=clone:stop_duration=${padMs / 1000}` : '';
     const clipDurationSeconds = Math.max(0.001, clip.durationMs / 1000).toFixed(6);
     const fill = `scale=${canvasWidth}:${canvasHeight}:force_original_aspect_ratio=increase,crop=${canvasWidth}:${canvasHeight}`;
-    const contain = `scale=${canvasWidth}:${canvasHeight}:force_original_aspect_ratio=decrease,pad=${canvasWidth}:${canvasHeight}:(ow-iw)/2:(oh-ih)/2:color=black`;
-    const normalized = fitMode === 'CONTAIN' ? contain : fill;
+    const contain = blurBackgroundBranches(canvasWidth, canvasHeight).foreground;
+    const containWithPad = `${contain},pad=${canvasWidth}:${canvasHeight}:(ow-iw)/2:(oh-ih)/2:color=black`;
+    const normalized = fitMode === 'CONTAIN' ? containWithPad : fill;
     if (fitMode === 'BLUR_BACKGROUND') {
-      filters.push(`[${i}:v]split=2[bg${i}][fg${i}];[bg${i}]${fill},boxblur=12:2[bgf${i}];[fg${i}]${contain}[fgf${i}];[bgf${i}][fgf${i}]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p,fps=${outputFps}:round=up,trim=duration=${clipDurationSeconds},setpts=PTS-STARTPTS${overlays}${pad},fps=${outputFps}:round=up,setpts=PTS-STARTPTS[v${i}]`);
+      const branches = blurBackgroundBranches(canvasWidth, canvasHeight);
+      filters.push(`[${i}:v]split=2[bg${i}][fg${i}];[bg${i}]${branches.background}[bgf${i}];[fg${i}]${branches.foreground}[fgf${i}];[bgf${i}][fgf${i}]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p,fps=${outputFps}:round=up,trim=duration=${clipDurationSeconds},setpts=PTS-STARTPTS${overlays}${pad},fps=${outputFps}:round=up,setpts=PTS-STARTPTS[v${i}]`);
     } else {
       filters.push(`[${i}:v]${normalized},setsar=1,format=yuv420p,fps=${outputFps}:round=up,trim=duration=${clipDurationSeconds},setpts=PTS-STARTPTS${overlays}${pad},fps=${outputFps}:round=up,setpts=PTS-STARTPTS[v${i}]`);
     }

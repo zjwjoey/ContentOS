@@ -11,9 +11,8 @@ function protectedDelimiter(text: string, index: number): boolean {
   if (c === ',' || c === '，') {
     const prev = text[index - 1] || ''; const next = text[index + 1] || '';
     if (/\d/u.test(prev) && /\d/u.test(next)) return true;
-    if (/[A-Za-z]/u.test(prev) && /[A-Za-z]/u.test(next)) return true;
   }
-  if (c === '.' || c === '。') {
+  if (c === '.') {
     const prev = text[index - 1] || ''; const next = text[index + 1] || '';
     if (/\d/u.test(prev) && /\d/u.test(next)) return true;
     const around = text.slice(Math.max(0, index - 16), Math.min(text.length, index + 24));

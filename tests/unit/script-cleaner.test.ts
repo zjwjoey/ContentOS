@@ -17,6 +17,13 @@ test('number and amount punctuation stays within one segment', () => {
   assert.deepEqual(result.segments.map((item) => item.text), ['价格是1,000欧元', '增长14.5%', '表现不错']);
 });
 
+test('canonical cleaner keeps mixed Unicode, URLs, amounts, names and dash punctuation deterministic', () => {
+  const input = 'MIZAN：价格是1,000欧元，增长14.5%。访问 https://example.com/a.b，www.xxx.com。H.264 与 A/B——Te esperamos en Mizan！';
+  const expected = ['MIZAN:价格是1,000欧元', '增长14.5%', '访问 https://example.com/a.b', 'www.xxx.com', 'H.264 与 A/B——Te esperamos en Mizan!'];
+  assert.deepEqual(cleanAndSegmentScriptV1(input).segments.map((item) => item.text), expected);
+  assert.deepEqual(cleanAndSegmentScriptV1(input).segments.map((item) => item.text), expected);
+});
+
 test('sentence-only and custom modes are deterministic', () => {
   assert.equal(cleanAndSegmentScriptV1('甲，乙。丙！', { mode: 'SENTENCE_ONLY' }).segments.length, 2);
   assert.deepEqual(cleanAndSegmentScriptV1('甲|乙|丙', { mode: 'CUSTOM', delimiters: ['|'] }).segments.map((item) => item.text), ['甲', '乙', '丙']);

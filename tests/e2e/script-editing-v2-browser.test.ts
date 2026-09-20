@@ -46,6 +46,8 @@ test('Script Editing V2 browser flows cover local, hybrid, reroll, BGM and histo
     await page.locator('#v2-voice').fill(fixtureAudio!);
     await page.locator('#v2-output-root').fill(fixtureDir!);
     await page.locator('input[placeholder="高级模式：手动填写路径"]').first().fill(localRoot);
+    await page.getByRole('button', { name: '整理文案' }).click();
+    await page.locator('[data-segment-index="0"]').waitFor({ state: 'visible', timeout: 15_000 });
     const createButton = page.getByRole('button', { name: '生成剪辑方案' });
     await page.waitForFunction(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('生成剪辑方案')); return Boolean(button && !(button as HTMLButtonElement).disabled); });
     await createButton.click();

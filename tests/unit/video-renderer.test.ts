@@ -3,13 +3,27 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateFixtureAudio, generateFixtureVideo, renderEditManifest, probeMedia } from '../../packages/infrastructure/ffmpeg/src/index.js';
+import { blurBackgroundBranches, generateFixtureAudio, generateFixtureVideo, renderEditManifest, probeMedia, subtitlePositionExpressions } from '../../packages/infrastructure/ffmpeg/src/index.js';
 import { buildVideoManifest, type PlannerAsset } from '../../packages/modules/video/src/index.js';
 import type { EditManifestV0 } from '../../packages/contracts/src/index.js';
 import { DEFAULT_PRESENTATION_SETTINGS_V1 } from '../../packages/contracts/src/index.js';
 
 const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
 const ffprobe = process.env.FFPROBE_PATH || 'ffprobe';
+
+test('subtitle renderer uses normalized center-anchor expressions with bounds', () => {
+  assert.deepEqual(subtitlePositionExpressions(.5, .5), { x: 'max(0\\,min(w-text_w\\,w*0.5-text_w/2))', y: 'max(0\\,min(h-text_h\\,h*0.5-text_h/2))' });
+  assert.match(subtitlePositionExpressions(.2, .2).x, /text_w\/2/);
+  assert.match(subtitlePositionExpressions(.8, .82).y, /text_h\/2/);
+});
+
+test('blur background foreground branch preserves source aspect without black padding', () => {
+  const branches = blurBackgroundBranches(1080, 1920);
+  assert.match(branches.background, /force_original_aspect_ratio=increase/);
+  assert.match(branches.background, /boxblur/);
+  assert.match(branches.foreground, /force_original_aspect_ratio=decrease/);
+  assert.doesNotMatch(branches.foreground, /pad=/);
+});
 
 test('FFmpeg renderer creates a playable vertical MP4 and probe validates it', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-render-test-'));
@@ -61,6 +75,14 @@ test('FFmpeg renderer fails loudly when text is enabled without a font', async (
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('FFmpeg renderer rejects an unavailable configured font before spawning FFmpeg', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-render-invalid-font-test-')); const output = join(root, 'output.mp4');
+  try {
+    const manifest = { ...buildVideoManifest({ projectId: 'project-render-invalid-font-test', seed: 11, assets: [{ id: 'source-1', storageKey: 'objects/source-1', sourcePath: join(root, 'clip.mp4'), durationMs: 1200 } satisfies PlannerAsset], targetDurationMs: 1000 }), subtitles: [{ text: '字幕', startMs: 0, endMs: 500 }], presentationSettings: { ...DEFAULT_PRESENTATION_SETTINGS_V1, subtitleStyle: { ...DEFAULT_PRESENTATION_SETTINGS_V1.subtitleStyle, fontFile: join(root, 'missing.ttf') } } };
+    await assert.rejects(renderEditManifest({ manifest, outputPath: output, ffmpegPath: ffmpeg, ffprobePath: ffprobe }), /RENDER_SUBTITLE_FONT_UNAVAILABLE/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('FFmpeg renderer terminates active work and removes partial output on abort', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-render-active-cancel-test-'));
   const clip = join(root, 'clip.mp4');
@@ -106,6 +128,17 @@ test('FFmpeg renderer honors dynamic canvas ratios and fit modes', async () => {
     const blurManifest: EditManifestV0 = { ...base, canvas: { ...base.canvas, fitMode: 'BLUR_BACKGROUND' }, metadata: { presentationSettings: presentation }, subtitles: [{ text: '字幕测试', startMs: 0, endMs: 900 }] };
     const blur = await renderEditManifest({ manifest: blurManifest, outputPath: join(root, 'blur.mp4'), ffmpegPath: ffmpeg, ffprobePath: ffprobe, fontFile: process.env.FFMPEG_FONT_FILE || 'C:\\Windows\\Fonts\\msyh.ttc' });
     assert.equal(blur.width, 1920); assert.equal(blur.height, 1080);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('FFmpeg BLUR_BACKGROUND keeps a clear centered foreground over a blurred 640x360 source', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-render-blur-portrait-test-')); const clip = join(root, 'clip.mp4'); const output = join(root, 'blur.mp4');
+  try {
+    await generateFixtureVideo(clip, ffmpeg, 'navy', 2);
+    const manifest: EditManifestV0 = { schemaVersion: 'EDIT_MANIFEST_V0', workspaceId: 'workspace-blur-portrait', seed: 1, canvas: { width: 1080, height: 1920, aspectRatio: '9:16', fps: 30, fitMode: 'BLUR_BACKGROUND' }, timeline: [{ assetId: 'clip', sourcePath: clip, sourceInMs: 0, durationMs: 1_000, transition: 'cut' }], audio: { volume: 1 }, output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' } };
+    await renderEditManifest({ manifest, outputPath: output, ffmpegPath: ffmpeg, ffprobePath: ffprobe });
+    const probe = await probeMedia(output, ffprobe);
+    assert.equal(probe.width, 1080); assert.equal(probe.height, 1920); assert.equal(probe.pixelFormat, 'yuv420p'); assert.equal(probe.videoCodec, 'h264'); assert.ok(Math.abs((probe.fps || 0) - 30) < .1); assert.ok(probe.durationMs >= 900 && probe.durationMs <= 1_200);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
