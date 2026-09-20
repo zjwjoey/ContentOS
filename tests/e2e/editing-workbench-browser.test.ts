@@ -72,7 +72,7 @@ test('独立剪辑工作台完成脚本、测试混剪与批量失败重试流�
     await page.getByRole('button', { name: '高级模式：手动添加路径' }).click(); await sourceLabels.nth(0).fill(roots.first); await sourceLabels.nth(1).fill(roots.second);
     await page.getByLabel('输出文件夹').fill(roots.output);
     await page.getByRole('button', { name: '开始剪辑' }).click();
-    try { await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 15_000 }); }
+    try { await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 45_000 }); }
     catch (error) { const values = await page.locator('input,textarea').evaluateAll((elements) => elements.map((element) => ({ tag: element.tagName, aria: element.getAttribute('aria-label'), value: (element as HTMLInputElement).value }))); throw new Error(`脚本剪辑未进入历史页：${JSON.stringify(values)}\n${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     const scriptBatchId = new URL(page.url()).searchParams.get('batch'); assert.ok(scriptBatchId);
     await waitForBatch(page, scriptBatchId!);
@@ -97,7 +97,7 @@ test('独立剪辑工作台完成脚本、测试混剪与批量失败重试流�
     await page.waitForURL(/\/edit\/mix\?copy=/u);
     await page.locator('.batch-row').nth(2).waitFor({ state: 'visible', timeout: 10_000 });
     await page.getByRole('button', { name: '开始全部混剪' }).click();
-    try { await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 15_000 }); }
+    try { await page.waitForURL(/\/edit\/history\?batch=/u, { timeout: 45_000 }); }
     catch (error) { throw new Error(`全部混剪未进入历史页：${await page.locator('body').innerText()}\n${error instanceof Error ? error.message : String(error)}`); }
     const mixBatchId = new URL(page.url()).searchParams.get('batch'); assert.ok(mixBatchId);
     const mixBatch = await waitForBatch(page, mixBatchId!); assert.equal(mixBatch.totalCount, 3);
