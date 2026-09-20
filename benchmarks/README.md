@@ -45,6 +45,15 @@ $env:CONTENTOS_V3_GOLD_SET_PATH = 'F:\path\to\gold-set.json'
 node node_modules/tsx/dist/cli.mjs scripts/script-editing-v3-ai-benchmark.ts
 ```
 
+If a real material-pool snapshot already exists, export an annotation starter without changing the database:
+
+```powershell
+$env:DATABASE_URL = 'postgresql://...'
+node node_modules/tsx/dist/cli.mjs scripts/script-editing-v3-gold-set-export.ts '<snapshot-id>' 'F:\path\to\gold-set.json'
+```
+
+The exporter only includes valid materials with a persisted `QWEN_VL` profile, leaves `queries` empty, and refuses to overwrite an existing output file. A human must add 10–20 queries and their `usableAssetIds` / `forbiddenAssetIds` before the AI benchmark can run.
+
 The AI comparison also requires a real Qwen endpoint and API key. Without them the command returns `BLOCKED_BY_DATA`; it does not report the profile-only lexical fallback as Qwen semantic retrieval.
 
 UI candidate loading is measured by the real browser acceptance flow, from opening
