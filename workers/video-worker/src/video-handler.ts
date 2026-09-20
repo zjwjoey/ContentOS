@@ -39,7 +39,7 @@ export function createVisualAnalysisJobHandler(deps: VideoHandlerDeps): (job: Jo
     }
     try {
       await deps.db.query('insert into asset_visual_profiles (asset_id,summary,profile,provider,model_name,model_version,prompt_version,analysis_version,status,error) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,null) on conflict (asset_id) do update set status=$9,error=null,updated_at=now()', [payload.assetId, '视觉分析排队中', {}, 'QWEN_VL', process.env.QWEN_MODEL || 'qwen-vl-max', process.env.QWEN_MODEL_VERSION || 'unknown', 'qwen-visual-v1', 'asset-profile-v1', 'PENDING']);
-      const profile = await new QwenVisualAnalysisProvider().analyzeAssetFrames({ assetId: payload.assetId, framePaths: generatedFrames.map((frame) => frame.path) });
+      const profile = await new QwenVisualAnalysisProvider().analyzeAssetFrames({ assetId: payload.assetId, framePaths: generatedFrames.map((frame) => frame.path), signal });
       await new ScriptEditingV3Service(deps.db).persistVisualProfile(profile);
       return { assetId: payload.assetId, status: 'READY', profile };
     } catch (error) {

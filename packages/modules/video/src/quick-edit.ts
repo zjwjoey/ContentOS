@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
-import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
+import { validateEditManifest, type EditManifestV0, type EditOperationV3 } from '../../../contracts/src/index.js';
+
+export type { EditOperationV3 } from '../../../contracts/src/index.js';
 
 export type QuickEditOperation =
   | { type: 'TRIM'; clipIndex: number; sourceInMs: number; durationMs: number }
@@ -12,7 +14,8 @@ export type QuickEditOperation =
   | { type: 'UNLOCK_CLIP'; clipIndex: number }
   | { type: 'MANUAL_SELECT_CLIP'; clipIndex: number; assetId: string; sourceInMs?: number }
   | { type: 'REROLL'; clipIndex: number; seed?: number }
-  | { type: 'REMATCH'; clipIndex: number; seed?: number };
+  | { type: 'REMATCH'; clipIndex: number; seed?: number }
+  | EditOperationV3;
 
 export interface AdjustmentAsset { id: string; durationMs: number; sourcePath?: string; originalName?: string; tags?: string[]; usageCount?: number; recentUsageCount?: number; lastUsedAt?: string; metadata?: Record<string, unknown>; }
 
@@ -37,8 +40,26 @@ function requireInteger(value: unknown, field: string, minimum = 0): number {
   return value;
 }
 
+function parseSentenceOperation(value: Record<string, unknown>): EditOperationV3 {
+  if (typeof value.sentenceId !== 'string' || !value.sentenceId.trim()) throw new Error('Quick Edit sentenceId is required');
+  if (value.type === 'LOCK_CLIP' || value.type === 'UNLOCK_CLIP') return { type: value.type, sentenceId: value.sentenceId.trim() };
+  if (value.type === 'TRIM_SOURCE') {
+    const sourceInMs = requireInteger(value.sourceInMs, 'sourceInMs');
+    const sourceOutMs = requireInteger(value.sourceOutMs, 'sourceOutMs', 1);
+    if (sourceOutMs <= sourceInMs) throw new Error('Quick Edit sourceOutMs must be after sourceInMs');
+    return { type: 'TRIM_SOURCE', sentenceId: value.sentenceId.trim(), sourceInMs, sourceOutMs };
+  }
+  if (value.type === 'REPLACE_CLIP' || value.type === 'MANUAL_SELECT_CLIP') {
+    if (typeof value.assetId !== 'string' || !value.assetId.trim()) throw new Error(`Quick Edit ${value.type} assetId is required`);
+    const sourceInMs = value.sourceInMs === undefined ? undefined : requireInteger(value.sourceInMs, 'sourceInMs');
+    return { type: value.type, sentenceId: value.sentenceId.trim(), assetId: value.assetId.trim(), ...(sourceInMs === undefined ? {} : { sourceInMs }) };
+  }
+  throw new Error(`Unknown Quick Edit sentence operation: ${String(value.type)}`);
+}
+
 function parseOperation(value: unknown): QuickEditOperation {
   if (!isRecord(value) || typeof value.type !== 'string') throw new Error('Quick Edit operation must have a type');
+  if (typeof value.sentenceId === 'string') return parseSentenceOperation(value);
   if (value.type === 'TRIM') {
     return {
       type: 'TRIM',
@@ -67,12 +88,18 @@ function parseOperation(value: unknown): QuickEditOperation {
     const sourceInMs = value.sourceInMs === undefined ? undefined : requireInteger(value.sourceInMs, 'sourceInMs');
     return { type: 'REPLACE', clipIndex: requireInteger(value.clipIndex, 'clipIndex'), assetId: value.assetId.trim(), ...(sourceInMs === undefined ? {} : { sourceInMs }) };
   }
-  if (value.type === 'REPLACE_CLIP' || value.type === 'MANUAL_SELECT_CLIP') {
+  if (value.type === 'REPLACE_CLIP') {
     if (typeof value.assetId !== 'string' || !value.assetId.trim()) throw new Error(`Quick Edit ${value.type} assetId is required`);
     const sourceInMs = value.sourceInMs === undefined ? undefined : requireInteger(value.sourceInMs, 'sourceInMs');
-    return { type: value.type, clipIndex: requireInteger(value.clipIndex, 'clipIndex'), assetId: value.assetId.trim(), ...(sourceInMs === undefined ? {} : { sourceInMs }) };
+    return { type: 'REPLACE_CLIP', clipIndex: requireInteger(value.clipIndex, 'clipIndex'), assetId: value.assetId.trim(), ...(sourceInMs === undefined ? {} : { sourceInMs }) };
   }
-  if (value.type === 'LOCK_CLIP' || value.type === 'UNLOCK_CLIP') return { type: value.type, clipIndex: requireInteger(value.clipIndex, 'clipIndex') };
+  if (value.type === 'MANUAL_SELECT_CLIP') {
+    if (typeof value.assetId !== 'string' || !value.assetId.trim()) throw new Error(`Quick Edit ${value.type} assetId is required`);
+    const sourceInMs = value.sourceInMs === undefined ? undefined : requireInteger(value.sourceInMs, 'sourceInMs');
+    return { type: 'MANUAL_SELECT_CLIP', clipIndex: requireInteger(value.clipIndex, 'clipIndex'), assetId: value.assetId.trim(), ...(sourceInMs === undefined ? {} : { sourceInMs }) };
+  }
+  if (value.type === 'LOCK_CLIP') return { type: 'LOCK_CLIP', clipIndex: requireInteger(value.clipIndex, 'clipIndex') };
+  if (value.type === 'UNLOCK_CLIP') return { type: 'UNLOCK_CLIP', clipIndex: requireInteger(value.clipIndex, 'clipIndex') };
   if (value.type === 'REROLL') {
     const seed = value.seed === undefined ? undefined : requireInteger(value.seed, 'seed');
     return { type: 'REROLL', clipIndex: requireInteger(value.clipIndex, 'clipIndex'), ...(seed === undefined ? {} : { seed }) };
@@ -122,6 +149,19 @@ function assertPermutation(indexes: number[], length: number): void {
   }
 }
 
+type ClipIndexedQuickEditOperation = Exclude<QuickEditOperation, EditOperationV3>;
+
+function normalizeOperation(operation: QuickEditOperation, manifest: EditManifestV0): ClipIndexedQuickEditOperation {
+  if (!('sentenceId' in operation)) return operation;
+  const clipIndex = manifest.timeline.findIndex((clip) => clip.sentenceId === operation.sentenceId);
+  if (clipIndex < 0) throw new Error(`Quick Edit sentenceId ${operation.sentenceId} was not found`);
+  if (operation.type === 'TRIM_SOURCE') return { type: 'TRIM_SOURCE', clipIndex, sourceInMs: operation.sourceInMs, sourceOutMs: operation.sourceOutMs };
+  if (operation.type === 'LOCK_CLIP') return { type: 'LOCK_CLIP', clipIndex };
+  if (operation.type === 'UNLOCK_CLIP') return { type: 'UNLOCK_CLIP', clipIndex };
+  if (operation.type === 'REPLACE_CLIP') return { type: 'REPLACE_CLIP', clipIndex, assetId: operation.assetId, ...(operation.sourceInMs === undefined ? {} : { sourceInMs: operation.sourceInMs }) };
+  return { type: 'MANUAL_SELECT_CLIP', clipIndex, assetId: operation.assetId, ...(operation.sourceInMs === undefined ? {} : { sourceInMs: operation.sourceInMs }) };
+}
+
 function seededRandom(seed: number): () => number {
   let state = (seed >>> 0) || 1;
   return () => { state = (Math.imul(1664525, state) + 1013904223) >>> 0; return state / 0x1_0000_0000; };
@@ -132,7 +172,8 @@ function sameSourceFamily(currentId: string, candidateId: string): boolean { ret
 export function applyQuickEditOperations(parent: EditManifestV0, operations: QuickEditOperation[], assets: AdjustmentAsset[] = [], candidateAssets: AdjustmentAsset[] = assets): EditManifestV0 {
   const next = structuredClone(parent);
   const assetById = new Map(assets.map((asset) => [asset.id, asset]));
-  for (const operation of operations) {
+  for (const rawOperation of operations) {
+    const operation = normalizeOperation(rawOperation, next);
     if (operation.type === 'TRIM') {
       assertClipIndex(operation.clipIndex, next.timeline.length);
       const clip = next.timeline[operation.clipIndex]!;
