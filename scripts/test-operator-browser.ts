@@ -149,6 +149,7 @@ async function main(): Promise<void> {
       const browserTests = (process.env.CONTENTOS_BROWSER_TEST_FILES || 'tests/e2e/auto-edit-v1-browser.test.ts;tests/e2e/editing-workbench-browser.test.ts;tests/e2e/hybrid-script-edit-browser.test.ts;tests/e2e/script-editing-v2-browser.test.ts').split(';').map((file) => file.trim()).filter(Boolean);
     testArgs.push(...browserTests);
     const invocation = pnpmInvocation(testArgs);
+    const browserExecutable = process.env.CONTENTOS_BROWSER_EXECUTABLE || (process.platform === 'win32' ? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' : undefined);
     await run(invocation.command, invocation.args, {
       ...environment,
       CONTENTOS_OPERATOR_URL: webUrl,
@@ -158,7 +159,7 @@ async function main(): Promise<void> {
       CONTENTOS_LOCAL_MEDIA_ROOTS: temporaryRoot,
       CONTENTOS_BROWSER_FIXTURE_DIR: temporaryRoot,
       CONTENTOS_BROWSER_DATABASE_URL: databaseUrl,
-      CONTENTOS_BROWSER_EXECUTABLE: process.env.CONTENTOS_BROWSER_EXECUTABLE || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+      ...(browserExecutable ? { CONTENTOS_BROWSER_EXECUTABLE: browserExecutable } : {}),
     });
   } finally {
     if (operator) await stopOwnedTree(operator);
