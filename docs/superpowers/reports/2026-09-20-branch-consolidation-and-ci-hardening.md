@@ -23,7 +23,7 @@ Feature and merge-rehearsal gates passed:
 - browser acceptance: 4/4
 - doctor and `git diff --check`: passed (doctor only reports the existing pnpm global-bin PATH warning)
 
-The feature was fast-forward merged through `codex/main-script-v2-merge-rehearsal` at `efa3b90`, then fast-forwarded into main. The CI hardening investigation also found and separately fixed host-independent Windows-path normalization in `apps/api/src/editing-workbench-routes.ts`; that follow-up is commit `8342962` on main. After this report commit, final `origin/main` is `c6ef372`.
+The feature was fast-forward merged through `codex/main-script-v2-merge-rehearsal` at `efa3b90`, then fast-forwarded into main. The CI hardening investigation also found and separately fixed host-independent Windows-path normalization in `apps/api/src/editing-workbench-routes.ts`; that follow-up is commit `8342962` on main. The report and final main revisions are pushed to `origin/main`.
 
 **MERGED TO MAIN**
 
