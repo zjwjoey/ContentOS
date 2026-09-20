@@ -50,6 +50,8 @@ jobs:
       - run: pnpm format
       - run: pnpm lint
       - run: pnpm typecheck
+      - name: Test database reset safety
+        run: pnpm exec tsx --test tests/unit/test-database-safety.test.ts
 
   database-and-tests:
     name: Database and tests
@@ -92,10 +94,16 @@ jobs:
           fi
           exit "$status"
       - name: Reset database before Auto Edit V1
+        env:
+          CONTENTOS_ALLOW_TEST_DB_RESET: '1'
+          CONTENTOS_EXPECTED_TEST_DATABASE_NAME: contentos_test
         run: pnpm exec tsx scripts/reset-test-database.ts
       - name: Auto Edit V1
         run: pnpm test:auto-edit-v1 2>&1 | tee auto-edit-v1-output.log
       - name: Reset database before Auto Edit V1.5
+        env:
+          CONTENTOS_ALLOW_TEST_DB_RESET: '1'
+          CONTENTOS_EXPECTED_TEST_DATABASE_NAME: contentos_test
         run: pnpm exec tsx scripts/reset-test-database.ts
       - name: Auto Edit V1.5
         run: pnpm test:auto-edit-v15 2>&1 | tee auto-edit-v15-output.log
