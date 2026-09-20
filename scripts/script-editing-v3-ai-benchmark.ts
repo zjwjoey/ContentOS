@@ -3,7 +3,7 @@ import { performance } from 'node:perf_hooks';
 import { InMemoryMaterialSemanticIndex, QwenEmbeddingProvider } from '../packages/modules/video/src/index.js';
 import type { AssetVisualProfileV3, MaterialPoolItemV3 } from '../packages/contracts/src/index.js';
 
-type GoldItem = { assetId: string; fileName: string; summary?: string; tags?: string[]; durationMs?: number; width?: number; height?: number };
+type GoldItem = { assetId: string; fileName: string; summary?: string; tags?: string[]; durationMs?: number; width?: number; height?: number; visualProfile?: AssetVisualProfileV3 };
 type GoldQuery = { id: string; text: string; usableAssetIds: string[]; forbiddenAssetIds?: string[] };
 type GoldSet = { schemaVersion: 'SCRIPT_EDITING_V3_GOLD_SET_V1'; items: GoldItem[]; queries: GoldQuery[] };
 
@@ -75,12 +75,17 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ status: 'BLOCKED_BY_DATA', reason: 'Gold Set 必须包含 100–300 条唯一素材、10–20 条 Visual Needs，且所有人工标签必须引用已存在的 assetId。', items: goldSet.items?.length, queries: goldSet.queries?.length }, null, 2));
     return;
   }
+  const missingProfiles = goldSet.items.filter((item) => item.visualProfile?.assetId !== item.assetId || item.visualProfile?.modelProvider !== 'QWEN_VL');
+  if (missingProfiles.length) {
+    console.log(JSON.stringify({ status: 'BLOCKED_BY_DATA', reason: '每条素材必须携带由 Qwen-VL 生成并缓存的 visualProfile；不能用 Gold Set 人工摘要或标签伪造 AI Profile。', missingProfileCount: missingProfiles.length }, null, 2));
+    return;
+  }
   if (!process.env.QWEN_API_KEY || !(process.env.QWEN_BASE_URL || process.env.QWEN_API_URL)) {
     console.log(JSON.stringify({ status: 'BLOCKED_BY_DATA', reason: 'AI 检索 benchmark 需要真实 Qwen API 配置；没有配置时不把 Profile 词法回退冒充 semantic 结果。', itemCount: goldSet.items.length, queryCount: goldSet.queries.length }, null, 2));
     return;
   }
   const items: MaterialPoolItemV3[] = goldSet.items.map((item) => ({ assetId: item.assetId, sourcePath: item.fileName, fileName: item.fileName, durationMs: item.durationMs || 5_000, width: item.width || 1_920, height: item.height || 1_080, tags: item.tags || [], availability: 'VALID' }));
-  const profiles = new Map<string, AssetVisualProfileV3>(goldSet.items.map((item) => [item.assetId, { assetId: item.assetId, summary: item.summary || '', tags: (item.tags || []).map((tag) => ({ tag, confidence: 1, timestampsMs: [] })), recommendedTimestampsMs: [1_000], modelProvider: 'GOLD_SET', modelName: 'provided-profile', modelVersion: '1', promptVersion: 'gold-set', analysisVersion: 'gold-set-v1', createdAt: new Date(0).toISOString() }]));
+  const profiles = new Map<string, AssetVisualProfileV3>(goldSet.items.map((item) => [item.assetId, item.visualProfile!]));
   const embeddingProvider = new QwenEmbeddingProvider();
   const documentEmbeddings = await embedInBatches(embeddingProvider, goldSet.items.map((item) => `${item.summary || ''} ${(item.tags || []).join(' ')}`));
   const queryEmbeddings = await embedInBatches(embeddingProvider, goldSet.queries.map((query) => query.text));

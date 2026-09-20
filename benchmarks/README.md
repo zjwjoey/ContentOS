@@ -11,8 +11,20 @@ Create a JSON file with this shape:
     {
       "assetId": "asset-001",
       "fileName": "真实文件名.mp4",
-      "summary": "人工确认或已缓存的视觉摘要",
-      "tags": ["货架", "商品特写"]
+      "summary": "可选：用于 keyword baseline 的人工摘要",
+      "tags": ["货架", "商品特写"],
+      "visualProfile": {
+        "assetId": "asset-001",
+        "summary": "Qwen-VL 缓存的视觉摘要",
+        "tags": [{ "tag": "货架", "confidence": 0.94, "timestampsMs": [1200] }],
+        "recommendedTimestampsMs": [1200],
+        "modelProvider": "QWEN_VL",
+        "modelName": "实际使用的 VL model",
+        "modelVersion": "实际版本",
+        "promptVersion": "实际 prompt 版本",
+        "analysisVersion": "实际分析版本",
+        "createdAt": "2026-01-01T00:00:00.000Z"
+      }
     }
   ],
   "queries": [
@@ -26,7 +38,7 @@ Create a JSON file with this shape:
 }
 ```
 
-The acceptance set must contain 100–300 real local materials and 10–20 manually reviewed visual needs. `usableAssetIds` and `forbiddenAssetIds` are the human labels; they are not generated from filenames. Run it with:
+The acceptance set must contain 100–300 real local materials and 10–20 manually reviewed visual needs. Every item must also include the actual cached `visualProfile` produced by Qwen-VL with `modelProvider: "QWEN_VL"`; the script refuses to turn human summaries or tags into fake AI profiles. `usableAssetIds` and `forbiddenAssetIds` are the human labels; they are not generated from filenames. Run it with:
 
 ```powershell
 $env:CONTENTOS_V3_GOLD_SET_PATH = 'F:\path\to\gold-set.json'
