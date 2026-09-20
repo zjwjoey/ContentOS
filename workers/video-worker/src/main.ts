@@ -10,7 +10,7 @@ import { probeMedia } from '../../../packages/infrastructure/ffmpeg/src/index.js
 import { createDatabase } from '../../../packages/database/src/index.js';
 import { loadConfig } from '../../../packages/config/src/index.js';
 import { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
-import { createEditExportJobHandler, createEditPrepareJobHandler, createLocalMediaScanJobHandler, createScriptPlanJobHandler, createVideoJobHandler, createVideoLeaseCancellationHandler, type VideoHandlerDeps } from './video-handler.js';
+import { createEditExportJobHandler, createEditPrepareJobHandler, createLocalMediaScanJobHandler, createScriptPlanJobHandler, createVisualAnalysisJobHandler, createVideoJobHandler, createVideoLeaseCancellationHandler, type VideoHandlerDeps } from './video-handler.js';
 
 export interface VideoWorkerOptions extends VideoHandlerDeps { workerId?: string; reconcileIntervalMs?: number; pollIntervalMs?: number; concurrency?: number; }
 
@@ -133,6 +133,7 @@ export function createVideoWorker(options?: VideoWorkerOptions): WorkerRuntime {
   const exportHandler = createEditExportJobHandler(options);
   const scriptPlanHandler = createScriptPlanJobHandler(options);
   const localMediaHandler = createLocalMediaScanJobHandler(options);
+  const visualAnalysisHandler = createVisualAnalysisJobHandler(options);
   const videoCancellation = createVideoLeaseCancellationHandler(options.video, options.storage);
   const recoverCancellation = async (job: Parameters<typeof videoCancellation>[0], scope: Parameters<typeof videoCancellation>[1]): Promise<boolean> => {
     if (job.type === 'LOCAL_MEDIA_SCAN') {
@@ -155,11 +156,12 @@ export function createVideoWorker(options?: VideoWorkerOptions): WorkerRuntime {
       if (payload.planId) await options.db.query("update edit_script_plans set status='FAILED',updated_at=now() where id=$1", [payload.planId]);
       return true;
     }
+    if (job.type === 'ANALYZE_ASSET_VISUAL') return true;
     return videoCancellation(job, scope);
   };
   const consume = async (): Promise<void> => {
-    const runnable = await options.jobs.listRunnable(['VIDEO_RENDER', 'LOCAL_MEDIA_SCAN', 'EDIT_PREPARE_ITEM', 'EDIT_EXPORT', 'EDIT_SCRIPT_PLAN'], concurrency);
-    await Promise.all(runnable.map((job) => runner.run(job.id, job.type === 'LOCAL_MEDIA_SCAN' ? localMediaHandler : job.type === 'EDIT_PREPARE_ITEM' ? prepareHandler : job.type === 'EDIT_EXPORT' ? exportHandler : job.type === 'EDIT_SCRIPT_PLAN' ? scriptPlanHandler : handler)));
+    const runnable = await options.jobs.listRunnable(['VIDEO_RENDER', 'LOCAL_MEDIA_SCAN', 'EDIT_PREPARE_ITEM', 'EDIT_EXPORT', 'EDIT_SCRIPT_PLAN', 'ANALYZE_ASSET_VISUAL'], concurrency);
+    await Promise.all(runnable.map((job) => runner.run(job.id, job.type === 'LOCAL_MEDIA_SCAN' ? localMediaHandler : job.type === 'EDIT_PREPARE_ITEM' ? prepareHandler : job.type === 'EDIT_EXPORT' ? exportHandler : job.type === 'EDIT_SCRIPT_PLAN' ? scriptPlanHandler : job.type === 'ANALYZE_ASSET_VISUAL' ? visualAnalysisHandler : handler)));
   };
   const reconcile = async (): Promise<void> => { await options.jobs.reconcileExpiredLeases(new Date(), recoverCancellation); await recoverEditWorkbenchItems(options, concurrency * 4); };
   const runtime = new VideoWorkerRuntime(options.workerId || 'video-worker', reconcile, consume, reconcileIntervalMs, pollIntervalMs);

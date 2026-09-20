@@ -82,7 +82,11 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   const overlayDir = renderFontFile && (manifest.subtitles?.length || manifest.textOverlays?.length) ? join(dirname(outputPath), `.text-${randomUUID()}`) : undefined;
   if (overlayDir) { await mkdir(overlayDir, { recursive: true }); const textItems = [...(manifest.subtitles ?? []), ...(manifest.textOverlays ?? [])]; await Promise.all(textItems.map((item, index) => writeFile(join(overlayDir, `${index}.txt`), item.text.replaceAll('\r\n', '\n'), 'utf8'))); }
   const args: string[] = ['-y'];
-  for (const clip of manifest.timeline) args.push('-ss', String(clip.sourceInMs / 1000), '-t', String(clip.durationMs / 1000), '-i', clip.sourcePath);
+  for (const clip of manifest.timeline) {
+    const sourceDurationMs = clip.sourceOutMs === undefined ? clip.durationMs : clip.sourceOutMs - clip.sourceInMs;
+    if (sourceDurationMs <= 0 || sourceDurationMs !== clip.durationMs) throw new Error('RENDER_SOURCE_RANGE_DURATION_MISMATCH');
+    args.push('-ss', String(clip.sourceInMs / 1000), '-t', String(sourceDurationMs / 1000), '-i', clip.sourcePath);
+  }
   const voiceIndex = manifest.audio.voicePath ? manifest.timeline.length : -1;
   if (manifest.audio.voicePath) args.push('-i', manifest.audio.voicePath);
   const musicIndex = manifest.audio.backgroundMusic?.path ? manifest.timeline.length + (voiceIndex >= 0 ? 1 : 0) : -1;

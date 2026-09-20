@@ -4,12 +4,29 @@ import { copyFile, mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/pr
 import type { Pool } from 'pg';
 import { AssetCatalogService, type AssetService, type LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { JobLeaseCancellationHandler, JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
-import { planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, rerollEditorialClip, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoJobPayload, type VideoService } from '../../../packages/modules/video/src/index.js';
+import { planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, rerollEditorialClip, ScriptEditingV3Service, QwenVisualAnalysisProvider, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoJobPayload, type VideoService } from '../../../packages/modules/video/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import type { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
 import { renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 
 export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; localMedia?: LocalMediaSourceService; localPathAccess?: LocalPathAccessService; mediaProvider?: ExternalVideoProvider; }
+
+export function createVisualAnalysisJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
+  return async (job, _attemptId, signal) => {
+    if (job.type !== 'ANALYZE_ASSET_VISUAL') throw new Error('ANALYZE_ASSET_VISUAL_JOB_TYPE_INVALID');
+    if (signal.aborted) throw new Error('ANALYZE_ASSET_VISUAL_CANCELLED');
+    const payload = job.payload as { assetId?: string };
+    if (!payload.assetId) throw new Error('ANALYZE_ASSET_VISUAL_PAYLOAD_INVALID');
+    if (!deps.localMedia) throw new Error('LOCAL_MEDIA_SERVICE_UNAVAILABLE');
+    const generated = await deps.localMedia.generateThumbnail(payload.assetId, deps.ffmpegPath).catch(() => null);
+    const row = (await deps.db.query('select thumbnail_key from local_media_index where file_id=$1 and availability=\'AVAILABLE\'', [payload.assetId])).rows[0] as { thumbnail_key?: string } | undefined;
+    const framePath = generated?.path || (row?.thumbnail_key ? `${deps.storage.root}/thumbnails/${row.thumbnail_key}` : undefined);
+    if (!framePath) throw new Error('REPRESENTATIVE_FRAME_NOT_READY');
+    const profile = await new QwenVisualAnalysisProvider().analyzeAssetFrames({ assetId: payload.assetId, framePaths: [framePath] });
+    await new ScriptEditingV3Service(deps.db).persistVisualProfile(profile);
+    return { assetId: payload.assetId, status: 'READY', profile };
+  };
+}
 
 async function chooseLocalMusic(category: string | undefined, seed: number): Promise<string | undefined> {
   const roots = (process.env.CONTENTOS_MUSIC_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean); const files: string[] = []; const wanted = category?.toLocaleLowerCase();

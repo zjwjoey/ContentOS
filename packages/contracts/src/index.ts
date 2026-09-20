@@ -27,6 +27,8 @@ export type { ApprovalDecisionV0, ApprovalStatus, ApprovalTargetType } from './a
 export type { ProjectCenterAction, ProjectCenterActionKind, ProjectCenterHealthLevel, ProjectCenterJobSummary, ProjectCenterSeverity, ProjectCenterSnapshot, ProjectCenterStage, ProjectCenterStageKey, ProjectCenterStageStatus } from './project-center.js';
 export { validateAssetImportV0, validateAssetSummaryV0 } from './asset.js';
 export type { AssetImportKind, AssetImportState, AssetImportV0, AssetSummaryV0 } from './asset.js';
+export type { AssetVisualProfileV3, CandidateV3, ClipInstanceV3, EditOperationV3, MaterialPoolItemV3, MaterialPoolSnapshotV3, MaterialPoolSource, SelectionSourceV3, SentenceEditingCardV3, TagEvidenceKind, VisualQueryV3 } from './script-editing-v3.js';
+export { validateAssetVisualProfileV3 } from './script-editing-v3.js';
 export { validateVideoWorkspaceSnapshotV0 } from './video.js';
 export type { VideoWorkspaceSnapshotV0 } from './video.js';
 export { validateBenchmarkAccountV1, validateBenchmarkContentV1, validateBenchmarkAnalysisV1 } from './benchmark.js';
