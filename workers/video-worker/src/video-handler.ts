@@ -301,6 +301,8 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
         const outputAsset = await deps.assets.commitPrepared(outputInput, preparedOutput, scope);
         const completed = await deps.video.completeRender(planned.renderId, scope, outputAsset.id, { durationMs: rendered.durationMs, width: rendered.width, height: rendered.height, format: rendered.format, outputAssetId: outputAsset.id });
         if (!completed) throw Object.assign(new Error('Current Job attempt could not complete its Render'), { code: 'RENDER_FENCE_REJECTED', retryable: true });
+        const v3SessionId = planned.manifest.metadata?.v3SessionId;
+        if (v3SessionId) await scope.query("update script_editing_v3_sessions set status='RENDERED',updated_at=now() where id=$1 and current_manifest_id=$2", [v3SessionId, planned.manifestId]);
         const editorialPlanId = planned.manifest.metadata?.editorialPlanId;
         if (editorialPlanId) await scope.query("update edit_script_plans set status='RENDERED',settings=settings || $2::jsonb,updated_at=now() where id=$1", [editorialPlanId, JSON.stringify(copiedOutputPath ? { outputPath: copiedOutputPath } : {})]);
         const item = await scope.query<{ id: string; batch_id: string }>("update edit_batch_items set state='SUCCEEDED',output_asset_id=$2,error=null,updated_at=now() where job_id=$1 returning id,batch_id", [job.id, outputAsset.id]);
@@ -343,7 +345,9 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
       const failedJob = await deps.jobs.fail(job.id, attemptId, diagnostics, true, async (scope) => {
         await deps.video.failRender(planned.renderId, scope, diagnostics);
         const editorialPlanId = planned.manifest.metadata?.editorialPlanId;
+        const v3SessionId = planned.manifest.metadata?.v3SessionId;
         if (editorialPlanId && job.attemptCount >= job.maxAttempts) await scope.query("update edit_script_plans set status='FAILED',updated_at=now() where id=$1", [editorialPlanId]);
+        if (v3SessionId && job.attemptCount >= job.maxAttempts) await scope.query("update script_editing_v3_sessions set status='FAILED',updated_at=now() where id=$1 and current_manifest_id=$2", [v3SessionId, planned.manifestId]);
         if (job.attemptCount >= job.maxAttempts) {
           const item = await scope.query<{ id: string; batch_id: string }>("update edit_batch_items set state='FAILED',error=$2,updated_at=now() where job_id=$1 returning id,batch_id", [job.id, diagnostics]);
           if (item.rows[0]) {
