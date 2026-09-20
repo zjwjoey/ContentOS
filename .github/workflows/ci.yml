@@ -1,0 +1,170 @@
+name: ContentOS CI
+
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: 10.32.1
+  DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/contentos_test
+  CONTENTOS_TEST_ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/contentos_test
+  CONTENTOS_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/contentos_test
+  STORAGE_ROOT: storage/ci
+  FFMPEG_PATH: /usr/bin/ffmpeg
+  FFPROBE_PATH: /usr/bin/ffprobe
+  FFMPEG_FONT_FILE: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Install media dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+      - name: Verify media toolchain
+        run: |
+          ffmpeg -version
+          ffprobe -version
+          ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])libx264([[:space:]]|$)'
+          ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])aac([[:space:]]|$)'
+          test -r "$FFMPEG_FONT_FILE"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format
+      - run: pnpm lint
+      - run: pnpm typecheck
+
+  database-and-tests:
+    name: Database and tests
+    runs-on: ubuntu-latest
+    needs: quality
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: contentos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d contentos_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Install media dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+      - run: pnpm install --frozen-lockfile
+      - name: Migrations
+        run: pnpm test:migrations 2>&1 | tee migrations-output.log
+      - name: Full test suite
+        run: |
+          set +e
+          pnpm test 2>&1 | tee test-output.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            summary=$(awk '/✖ failing tests:/{capture=1; next} capture {print}' test-output.log | head -c 6000 | tr '\n' ' ')
+            echo "::error title=ContentOS test failures::$summary"
+          fi
+          exit "$status"
+      - name: Auto Edit V1
+        run: pnpm test:auto-edit-v1 2>&1 | tee auto-edit-v1-output.log
+      - name: Auto Edit V1.5
+        run: pnpm test:auto-edit-v15 2>&1 | tee auto-edit-v15-output.log
+      - name: Script Editing V2 and FFmpeg
+        run: pnpm test:script-edit-v2 2>&1 | tee script-edit-v2-output.log
+      - name: Upload test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-test-logs
+          path: '*-output.log'
+          if-no-files-found: ignore
+
+  browser-and-render:
+    name: Browser and render acceptance
+    runs-on: ubuntu-latest
+    needs: database-and-tests
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: contentos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d contentos_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Install media dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+      - run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Browser E2E
+        run: |
+          set +e
+          timeout --signal=TERM 5m pnpm test:browser 2>&1 | tee browser-output.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            summary=$(tail -c 6000 browser-output.log | tr '\n' ' ')
+            echo "::error title=ContentOS browser failures::$summary"
+          fi
+          exit "$status"
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-logs
+          path: browser-output.log
+          if-no-files-found: ignore
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --dir apps/web build
