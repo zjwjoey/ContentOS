@@ -47,7 +47,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 
 - Targeted TypeScript compilation: passed.
 - Digital Human/config/worker unit tests and provider contract checks: passed.
-- Digital Human/API/provider suite: 19 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, the Worker-to-Asset vertical slice, probed Speech Asset duration, API cancellation, Worker preflight failure recording, oversized-result protection, concurrent Speech/Avatar idempotency and retry checks, signed staging, subtitle Asset persistence, authenticated capability health-checks, public-staging URL validation, fail-closed capability checks, external-task cancellation, and terminal-task replacement.
+- Digital Human/API/provider suite: 19 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, the Worker-to-Asset vertical slice, probed Speech Asset duration, API cancellation with remote `cancelTask` invocation, Worker preflight failure recording, oversized-result protection, concurrent Speech/Avatar idempotency and retry checks, signed staging, subtitle Asset persistence, authenticated capability health-checks, public-staging URL validation, fail-closed capability checks, external-task cancellation, and terminal-task replacement.
 - The Digital Human API integration suite also verifies subtitle generation creates a `TEXT` Asset and that the stored subtitle can be downloaded through the project Asset route.
 - Format check: passed (468 files).
 - Lint check: passed (176 TypeScript files).
