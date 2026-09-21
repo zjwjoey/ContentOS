@@ -107,3 +107,30 @@ test('Digital Human worker records Avatar preflight failures on the Generation',
   await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-avatar-preflight', new AbortController().signal), /Avatar source video is not ready/);
   assert.deepEqual(failures, [{ id: 'generation-avatar-preflight', code: 'AVATAR_CLIP_ASSET_NOT_READY' }]);
 });
+
+test('Digital Human worker rejects an oversized remote Avatar result before importing it', async () => {
+  const failures: Array<{ id: string; code: string }> = [];
+  const deps = {
+    digitalHuman: {
+      getAvatarGeneration: async () => ({ id: 'generation-avatar-large', status: 'PENDING', outputAssetId: null, externalTaskId: null, avatarClipId: 'clip-1', speechAssetId: 'audio-1', avatarProfileId: 'profile-1', model: null, provenance: { parameters: {} } }),
+      markAvatarRunning: async () => undefined,
+      getAvatarClip: async () => ({ id: 'clip-1', assetId: 'video-1' }),
+      markAvatarWaiting: async () => undefined,
+      failAvatar: async (id: string, error: { code: string }) => { failures.push({ id, code: error.code }); },
+    },
+    assets: {
+      getProjectAsset: async (_projectId: string, id: string) => id === 'video-1' ? { id, kind: 'VIDEO', lifecycle: 'READY', storageKey: 'video.mp4', metadata: { durationMs: 2_000, format: 'mp4' } } : { id, kind: 'AUDIO', lifecycle: 'READY', storageKey: 'audio.wav', metadata: { durationMs: 2_000, format: 'wav' } },
+    },
+    avatarProvider: {
+      getCapabilities: async () => ({ providerId: 'hzagent', local: false, videoToVideo: true, imageToVideo: false, requiresPublicUrl: true, supportedFormats: ['mp4'] }),
+      submitLipSync: async () => ({ externalTaskId: 'remote-large', providerId: 'hzagent', status: 'SUCCEEDED', outputUrl: 'https://provider.test/result.mp4' }),
+    },
+    staging: { stageAsset: async (id: string) => ({ assetId: id, publicUrl: `https://provider.test/${id}`, expiresAt: new Date(Date.now() + 60_000).toISOString() }) },
+    storage: { root: 'C:/contentos-test-storage' },
+    fetchImpl: async () => new Response(Buffer.from('large'), { status: 200, headers: { 'content-length': '5' } }),
+    maxRemoteResultBytes: 4,
+  } as never;
+  const job = { id: 'job-avatar-large', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-avatar-large', projectId: 'project-1', correlationId: 'corr-large' } } as never;
+  await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-avatar-large', new AbortController().signal), /exceeds the configured size limit/);
+  assert.deepEqual(failures, [{ id: 'generation-avatar-large', code: 'AVATAR_RESULT_TOO_LARGE' }]);
+});

@@ -1,5 +1,8 @@
-import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
 import { join } from 'node:path';
+import { Transform, Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { JobRunner, type JobRecord, type JobService } from '../../../packages/modules/job/src/index.js';
 import { DigitalHumanProviderError, DigitalHumanService } from '../../../packages/modules/digital-human/src/index.js';
 import type { AvatarProvider, ProviderMediaStaging, SpeechProvider } from '../../../packages/contracts/src/index.js';
@@ -15,6 +18,8 @@ export interface DigitalHumanWorkerDependencies {
   speechProvider: SpeechProvider;
   avatarProvider: AvatarProvider;
   staging: ProviderMediaStaging;
+  fetchImpl?: typeof fetch;
+  maxRemoteResultBytes?: number;
 }
 export interface DigitalHumanWorkerInvocation { jobId: string; }
 
@@ -23,6 +28,29 @@ function payloadOf(job: JobRecord): { generationId: string; projectId: string; k
   if (payload.schemaVersion !== 'DIGITAL_HUMAN_JOB_PAYLOAD_V1' || typeof payload.generationId !== 'string' || typeof payload.projectId !== 'string' || typeof payload.correlationId !== 'string' || !['SPEECH', 'AVATAR'].includes(String(payload.kind))) throw Object.assign(new Error('Invalid Digital Human Job payload'), { code: 'DIGITAL_HUMAN_PAYLOAD_INVALID', retryable: false });
   if (payload.projectId !== job.projectId) throw Object.assign(new Error('Digital Human Job project mismatch'), { code: 'DIGITAL_HUMAN_PROJECT_MISMATCH', retryable: false });
   return { generationId: payload.generationId, projectId: payload.projectId, kind: payload.kind as 'SPEECH' | 'AVATAR', correlationId: payload.correlationId };
+}
+
+const DEFAULT_MAX_REMOTE_RESULT_BYTES = 500 * 1024 * 1024;
+
+function remoteResultLimit(deps: DigitalHumanWorkerDependencies): number {
+  const value = deps.maxRemoteResultBytes ?? DEFAULT_MAX_REMOTE_RESULT_BYTES;
+  if (!Number.isSafeInteger(value) || value <= 0) throw Object.assign(new Error('Invalid remote result size limit'), { code: 'AVATAR_RESULT_LIMIT_INVALID', retryable: false });
+  return value;
+}
+
+async function streamRemoteResult(response: Response, tempPath: string, maxBytes: number): Promise<void> {
+  const contentLength = Number(response.headers.get('content-length') || '');
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) throw Object.assign(new Error('Avatar provider result exceeds the configured size limit'), { code: 'AVATAR_RESULT_TOO_LARGE', retryable: false });
+  if (!response.body) throw Object.assign(new Error('Avatar provider returned an empty response body'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: true });
+  let total = 0;
+  const limiter = new Transform({ transform(chunk: Buffer, _encoding, callback) { total += chunk.byteLength; if (total > maxBytes) callback(Object.assign(new Error('Avatar provider result exceeds the configured size limit'), { code: 'AVATAR_RESULT_TOO_LARGE', retryable: false })); else callback(null, chunk); } });
+  try {
+    await pipeline(Readable.fromWeb(response.body as globalThis.ReadableStream<Uint8Array>), limiter, createWriteStream(tempPath, { flags: 'wx' }));
+  } catch (error) {
+    await rm(tempPath, { force: true });
+    throw error;
+  }
+  if (total === 0) { await rm(tempPath, { force: true }); throw Object.assign(new Error('Avatar provider returned an empty response body'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: true }); }
 }
 
 async function processSpeech(job: JobRecord, attemptId: string, signal: AbortSignal, payload: ReturnType<typeof payloadOf>, deps: DigitalHumanWorkerDependencies): Promise<unknown> {
@@ -78,8 +106,8 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
     if (task.status === 'FAILED' || task.status === 'CANCELLED' || !task.outputUrl) throw Object.assign(new Error(taskError.errorMessage || 'Avatar provider task failed'), { code: taskError.errorCode || 'AVATAR_PROVIDER_FAILED', retryable: false });
     signal.throwIfAborted();
     if (!/^https?:\/\//i.test(task.outputUrl)) throw Object.assign(new Error('Avatar provider returned an unsafe output URL'), { code: 'AVATAR_RESULT_URL_INVALID', retryable: false });
-    const response = await fetch(task.outputUrl, { signal }); if (!response.ok) throw Object.assign(new Error('Unable to download avatar result'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: response.status >= 500 });
-    const bytes = Buffer.from(await response.arrayBuffer()); const tempPath = join(deps.storage.root, 'staging', `${generation.id}.avatar.mp4`); await mkdir(join(deps.storage.root, 'staging'), { recursive: true }); await writeFile(tempPath, bytes);
+    const fetchImpl = deps.fetchImpl || fetch; const response = await fetchImpl(task.outputUrl, { signal }); if (!response.ok) throw Object.assign(new Error('Unable to download avatar result'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: response.status >= 500 });
+    const tempPath = join(deps.storage.root, 'staging', `${generation.id}.avatar.mp4`); await mkdir(join(deps.storage.root, 'staging'), { recursive: true }); await streamRemoteResult(response, tempPath, remoteResultLimit(deps));
     try {
       const asset = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: tempPath, kind: 'VIDEO', role: 'OUTPUT', metadata: { digitalHuman: { generationId: generation.id, provider: task.providerId, externalTaskId: task.externalTaskId } } });
       const imported = await deps.assets.getReadySourceAsset(payload.projectId, asset.id, 'VIDEO'); const metadata = imported?.metadata || {};
