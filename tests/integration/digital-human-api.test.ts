@@ -65,7 +65,11 @@ test('Avatar output enters the existing EditManifest and VIDEO_RENDER path idemp
     assert.equal(avatarResults.filter((result) => result.created).length, 1);
     const clipUsage = await db.query<{ usage_count: number; last_used_at: string | null }>('select usage_count, last_used_at from avatar_clips where id = $1', [avatarClipId]);
     assert.equal(Number(clipUsage.rows[0]?.usage_count), 1); assert.ok(clipUsage.rows[0]?.last_used_at);
-    const avatarJobCount = await db.query<{ count: string }>('select count(*)::text as count from jobs where project_id = $1 and type = $2', [project.id, 'AVATAR_LIPSYNC_GENERATE']); assert.equal(avatarJobCount.rows[0]?.count, '3');
+    const secondAvatar = await digitalHuman.createAvatarProfile({ projectId: project.id, name: 'Second Avatar Profile', status: 'READY' });
+    const secondClip = await digitalHuman.createAvatarClip({ projectId: project.id, avatarProfileId: secondAvatar.id, assetId: clipAssetId, name: 'Same Source, Different Profile' });
+    const distinctProfileGeneration = await digitalHuman.createAvatarGeneration({ projectId: project.id, avatarProfileId: secondAvatar.id, avatarClipId: secondClip.id, speechAssetId, correlationId: 'distinct-profile' });
+    assert.equal(distinctProfileGeneration.created, true); assert.notEqual(distinctProfileGeneration.generation.id, avatarResults[0]!.generation.id);
+    const avatarJobCount = await db.query<{ count: string }>('select count(*)::text as count from jobs where project_id = $1 and type = $2', [project.id, 'AVATAR_LIPSYNC_GENERATE']); assert.equal(avatarJobCount.rows[0]?.count, '4');
     await db.query("update speech_generations set status = 'FAILED', error = '{\"code\":\"TEST_FAILURE\"}'::jsonb where id = $1", [speechResults[0]!.generation.id]);
     await db.query("update jobs set state = 'FAILED', error = '{\"code\":\"TEST_FAILURE\"}'::jsonb where id = $1", [speechResults[0]!.job.id]);
     const speechRetry = await digitalHuman.createSpeechGeneration({ projectId: project.id, voiceProfileId: raceVoiceId, text: '并发幂等测试。', correlationId: 'retry-speech' });

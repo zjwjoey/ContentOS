@@ -88,7 +88,7 @@ export class DigitalHumanService {
     if (!speech || speech.kind !== 'AUDIO' || speech.lifecycle !== 'READY') throw new Error('SPEECH_ASSET_NOT_READY');
     if (!positiveDuration(sourceVideo.metadata)) throw new Error('AVATAR_CLIP_DURATION_INVALID');
     if (!positiveDuration(speech.metadata)) throw new Error('SPEECH_ASSET_DURATION_INVALID');
-    const provider = input.provider || 'hzagent'; const model = input.model || null; const parameters = input.parameters || {}; const requestHash = hash({ provider, model, clipAssetChecksum: sourceVideo.checksum, speechAssetChecksum: speech.checksum, parameters });
+    const provider = input.provider || 'hzagent'; const model = input.model || null; const parameters = input.parameters || {}; const requestHash = hash({ provider, model, avatarProfileId: profile.id, avatarClipId: clip.id, speechAssetId: input.speechAssetId, clipAssetChecksum: sourceVideo.checksum, speechAssetChecksum: speech.checksum, parameters });
     const existing = await this.db.query('select * from avatar_generations where project_id = $1 and request_hash = $2', [input.projectId, requestHash]);
     if (existing.rows[0]) {
       let generation = mapAvatarGeneration(existing.rows[0] as Record<string, unknown>); let job = await this.jobs.get(generation.jobId); if (!job) throw new Error('AVATAR_GENERATION_JOB_NOT_FOUND');

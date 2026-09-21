@@ -124,7 +124,7 @@ test('Digital Human worker prefers probed Speech Asset duration for completion',
     assets: { getProjectAsset: async () => ({ id: 'audio-output', projectId: 'project-1', kind: 'AUDIO', lifecycle: 'READY', storageKey: 'audio.wav', checksum: 'checksum', metadata: { durationMs: 1_234, format: 'wav' } }) },
     assetService: { importFile: async () => ({ id: 'audio-output' }) },
     storage: { objectPath: (value: string) => value },
-    speechProvider: { generateSpeech: async () => ({ providerId: 'indextts25', model: 'indextts-2.5', modelVersion: '2.5', outputPath: 'audio.wav', durationMs: 2_000, latencyMs: 10, provenance: {} }) },
+    speechProvider: { getCapabilities: async () => ({ providerId: 'indextts25', local: true, voiceClone: true, emotion: true, speed: true, languages: ['zh'], supportsReferenceAudio: true, requiresReferenceAudio: false, supportsVoiceId: false }), generateSpeech: async () => ({ providerId: 'indextts25', model: 'indextts-2.5', modelVersion: '2.5', outputPath: 'audio.wav', durationMs: 2_000, latencyMs: 10, provenance: {} }) },
   } as never;
   const job = { id: 'job-speech-duration', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'SPEECH', generationId: 'generation-speech-duration', projectId: 'project-1', correlationId: 'corr-duration' } } as never;
   const result = await createDigitalHumanJobHandler(deps)(job, 'attempt-speech-duration', new AbortController().signal);

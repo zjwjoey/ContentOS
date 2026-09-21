@@ -17,6 +17,8 @@ ContentOS needs a production path from script text to speech, avatar lip-sync, s
 - Treat READY project `OUTPUT` AUDIO/VIDEO Assets as valid renderer inputs so generated Speech output can flow through the existing Video Worker without a second media pipeline.
 - Use the existing project-scoped `edit_manifests.idempotency_key` plus a transaction advisory lock for Digital Human handoff, so concurrent requests converge on one Edit Manifest and one idempotent render Job.
 - Preserve remote billing quantity and unit alongside amount/currency when the provider reports them; absent provider billing data remains nullable.
+- Include the selected Avatar Profile/Clip and Speech Asset identity, as well as their checksums, in the Avatar request hash so the same media reused under different profiles is not incorrectly merged.
+- Validate provider-declared speech limits and capabilities at both API submission and Worker execution boundaries, including reference audio, provider voice IDs, language, speed, emotion, and maximum text length.
 - Use `SyntheticTimingProvider` in V1; leave ASR/forced alignment as a replaceable provider.
 
 ## Consequences

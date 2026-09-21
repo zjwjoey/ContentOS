@@ -4,7 +4,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { DigitalHumanService, SyntheticTimingProvider, subtitleTimelineToAss, subtitleTimelineToManifestCues, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../../packages/modules/digital-human/src/index.js';
+import { DigitalHumanService, SyntheticTimingProvider, speechCapabilityError, subtitleTimelineToAss, subtitleTimelineToManifestCues, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../../packages/modules/digital-human/src/index.js';
 import type { RuntimeDigitalHumanProviders } from '../../../packages/modules/digital-human/src/index.js';
 import { DEFAULT_PRESENTATION_SETTINGS_V1, type EditManifestV0 } from '../../../packages/contracts/src/index.js';
 import { AssetService, type AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
@@ -76,7 +76,8 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
       if (!profile) return fail(reply, 404, 'VOICE_PROFILE_NOT_FOUND', 'Voice Profile not found');
       try {
         const capabilities = await deps.providers.speech.getCapabilities();
-        if (capabilities.requiresReferenceAudio && !profile.referenceAssetId) return fail(reply, 409, 'VOICE_REFERENCE_REQUIRED', 'This speech provider requires a ready reference audio Asset');
+        const capabilityError = speechCapabilityError(capabilities, { text: parsed.data.text, language: parsed.data.language || profile.language, speed: parsed.data.speed ?? profile.defaultSpeed, emotion: parsed.data.emotion || profile.defaultEmotion, hasReferenceAudio: Boolean(profile.referenceAssetId), hasProviderVoiceId: Boolean(profile.providerVoiceId) });
+        if (capabilityError) return fail(reply, 409, capabilityError.code, capabilityError.message);
       } catch (error) { return fail(reply, 503, 'SPEECH_PROVIDER_UNAVAILABLE', error instanceof Error ? error.message : 'Speech provider is unavailable'); }
     }
     try { const result = await deps.digitalHuman.createSpeechGeneration({ projectId: id, ...parsed.data, correlationId: parsed.data.correlationId || `api-${randomUUID()}` }); return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: !result.created }); } catch (error) { return fail(reply, 409, 'SPEECH_GENERATION_CONFLICT', error instanceof Error ? error.message : 'Unable to create Speech Generation'); }
@@ -98,7 +99,7 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
     if (deps.providers) {
       const profile = await deps.digitalHuman.getVoiceProfile(params.projectId, generation.voiceProfileId);
       if (!profile) return fail(reply, 404, 'VOICE_PROFILE_NOT_FOUND', 'Voice Profile not found');
-      try { const capabilities = await deps.providers.speech.getCapabilities(); if (capabilities.requiresReferenceAudio && !profile.referenceAssetId) return fail(reply, 409, 'VOICE_REFERENCE_REQUIRED', 'This speech provider requires a ready reference audio Asset'); }
+      try { const capabilities = await deps.providers.speech.getCapabilities(); const capabilityError = speechCapabilityError(capabilities, { text: generation.text, language: typeof generation.parameters.language === 'string' ? generation.parameters.language : profile.language, speed: typeof generation.parameters.speed === 'number' ? generation.parameters.speed : profile.defaultSpeed, emotion: typeof generation.parameters.emotion === 'string' ? generation.parameters.emotion : profile.defaultEmotion, hasReferenceAudio: Boolean(profile.referenceAssetId), hasProviderVoiceId: Boolean(profile.providerVoiceId) }); if (capabilityError) return fail(reply, 409, capabilityError.code, capabilityError.message); }
       catch (error) { return fail(reply, 503, 'SPEECH_PROVIDER_UNAVAILABLE', error instanceof Error ? error.message : 'Speech provider is unavailable'); }
     }
     try {

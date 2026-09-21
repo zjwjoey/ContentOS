@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateAvatarGenerationRequest, validateSpeechGenerationRequest } from '../../packages/contracts/src/index.js';
-import { DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging, SyntheticTimingProvider, createRuntimeDigitalHumanProviders, isPublicHttpUrl, subtitleTimelineToAss, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../packages/modules/digital-human/src/index.js';
+import { DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging, SyntheticTimingProvider, createRuntimeDigitalHumanProviders, isPublicHttpUrl, speechCapabilityError, subtitleTimelineToAss, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../packages/modules/digital-human/src/index.js';
 
 test('digital human contracts reject unsafe generation requests', () => {
   assert.doesNotThrow(() => validateSpeechGenerationRequest({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', text: '你好', language: 'zh', speed: 1, emotion: 'natural' }));
@@ -53,6 +53,15 @@ test('HTTP adapters preserve provider capability, task status, model version, an
   assert.equal(submitted.status, 'RUNNING'); assert.equal(submitted.modelVersion, '2026.09'); assert.equal(submitted.costAmount, 1.25); assert.equal(submitted.billingQuantity, 63); assert.equal(submitted.billingUnit, 'second');
   const completed = await avatar.getTask('task-1'); assert.equal(completed.status, 'SUCCEEDED'); assert.equal(completed.outputUrl, 'https://cdn.test/result.mp4'); assert.equal(completed.costCurrency, 'RMB'); assert.equal(completed.billingQuantity, 63); assert.equal(completed.billingUnit, 'second');
   assert.equal((requests[0]?.headers as Record<string, string>)['x-api-key'], 'test-only'); assert.equal((requests[0]?.headers as Record<string, string>)['Idempotency-Key'], 'r'); assert.equal((requests[1]?.headers as Record<string, string>)['x-api-key'], 'test-only');
+});
+
+test('speech capability preflight rejects unsupported provider inputs before generation', () => {
+  const capabilities = { providerId: 'indextts25', local: true, voiceClone: true, emotion: false, speed: true, languages: ['zh'], supportsReferenceAudio: true, requiresReferenceAudio: true, supportsVoiceId: false, maxTextCharacters: 5 };
+  assert.equal(speechCapabilityError(capabilities, { text: '你好', language: 'zh', speed: 1, emotion: 'natural', hasReferenceAudio: false, hasProviderVoiceId: false })?.code, 'VOICE_REFERENCE_REQUIRED');
+  assert.equal(speechCapabilityError(capabilities, { text: '你好', language: 'en', speed: 1, emotion: 'natural', hasReferenceAudio: true, hasProviderVoiceId: false })?.code, 'SPEECH_LANGUAGE_UNSUPPORTED');
+  assert.equal(speechCapabilityError(capabilities, { text: '你好', language: 'zh', speed: 1, emotion: 'happy', hasReferenceAudio: true, hasProviderVoiceId: false })?.code, 'SPEECH_EMOTION_UNSUPPORTED');
+  assert.equal(speechCapabilityError(capabilities, { text: '超过五个字符', language: 'zh', speed: 1, emotion: 'natural', hasReferenceAudio: true, hasProviderVoiceId: false })?.code, 'SPEECH_TEXT_TOO_LONG');
+  assert.equal(speechCapabilityError({ ...capabilities, supportsVoiceId: true }, { text: '你好', language: 'zh', speed: 1, emotion: 'natural', hasReferenceAudio: true, hasProviderVoiceId: true }), null);
 });
 
 test('HTTP avatar capabilities are health-checked with provider authentication', async () => {

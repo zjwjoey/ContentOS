@@ -12,6 +12,7 @@ export interface SpeechCapabilities {
   supportsReferenceAudio: boolean;
   requiresReferenceAudio: boolean;
   supportsVoiceId: boolean;
+  maxTextCharacters?: number;
 }
 
 export interface SpeechGenerationRequest {

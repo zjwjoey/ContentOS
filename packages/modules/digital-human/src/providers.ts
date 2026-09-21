@@ -60,6 +60,31 @@ export function isPublicHttpUrl(value: string): boolean {
   } catch { return false; }
 }
 
+export interface SpeechCapabilityRequest {
+  text: string;
+  language: string;
+  speed: number;
+  emotion: string;
+  hasReferenceAudio: boolean;
+  hasProviderVoiceId: boolean;
+}
+
+export interface SpeechCapabilityError {
+  code: 'VOICE_REFERENCE_REQUIRED' | 'VOICE_REFERENCE_UNSUPPORTED' | 'PROVIDER_VOICE_ID_UNSUPPORTED' | 'SPEECH_LANGUAGE_UNSUPPORTED' | 'SPEECH_SPEED_UNSUPPORTED' | 'SPEECH_EMOTION_UNSUPPORTED' | 'SPEECH_TEXT_TOO_LONG';
+  message: string;
+}
+
+export function speechCapabilityError(capabilities: SpeechCapabilities, request: SpeechCapabilityRequest): SpeechCapabilityError | null {
+  if (capabilities.requiresReferenceAudio && !request.hasReferenceAudio) return { code: 'VOICE_REFERENCE_REQUIRED', message: 'This speech provider requires a ready reference audio Asset' };
+  if (request.hasReferenceAudio && !capabilities.supportsReferenceAudio) return { code: 'VOICE_REFERENCE_UNSUPPORTED', message: 'This speech provider does not support reference audio' };
+  if (request.hasProviderVoiceId && !capabilities.supportsVoiceId) return { code: 'PROVIDER_VOICE_ID_UNSUPPORTED', message: 'This speech provider does not support provider voice IDs' };
+  if (capabilities.languages.length > 0 && !capabilities.languages.includes(request.language)) return { code: 'SPEECH_LANGUAGE_UNSUPPORTED', message: `This speech provider does not support ${request.language}` };
+  if (!capabilities.speed && request.speed !== 1) return { code: 'SPEECH_SPEED_UNSUPPORTED', message: 'This speech provider does not support custom speed' };
+  if (!capabilities.emotion && !['natural', 'neutral'].includes(request.emotion.trim().toLowerCase())) return { code: 'SPEECH_EMOTION_UNSUPPORTED', message: 'This speech provider does not support custom emotion' };
+  if (capabilities.maxTextCharacters !== undefined && request.text.length > capabilities.maxTextCharacters) return { code: 'SPEECH_TEXT_TOO_LONG', message: `Speech text exceeds the provider limit of ${capabilities.maxTextCharacters} characters` };
+  return null;
+}
+
 export interface IndexTTS25SpeechProviderOptions {
   baseUrl: string;
   modelVersion?: string;
@@ -81,11 +106,13 @@ export class IndexTTS25SpeechProvider implements SpeechProvider {
     if (!response.ok) throw responseError(response.status);
     const body = jsonObject(await response.json());
     const capabilities = jsonObject(body.capabilities);
+    const maxTextCharacters = optionalNumber(capabilities.maxTextCharacters ?? capabilities.max_text_characters);
     return {
       providerId: this.providerId, local: true,
       voiceClone: capabilities.voiceClone !== false, emotion: capabilities.emotion !== false, speed: capabilities.speed !== false,
       languages: Array.isArray(capabilities.languages) ? capabilities.languages.filter((value): value is string => typeof value === 'string') : ['zh'],
       supportsReferenceAudio: capabilities.supportsReferenceAudio !== false, requiresReferenceAudio: capabilities.requiresReferenceAudio === true, supportsVoiceId: capabilities.supportsVoiceId === true,
+      ...(maxTextCharacters === undefined ? {} : { maxTextCharacters }),
     };
   }
   async generateSpeech(request: SpeechGenerationRequest): Promise<SpeechGenerationResult> {
@@ -109,7 +136,7 @@ export class IndexTTS25SpeechProvider implements SpeechProvider {
 export class FakeSpeechProvider implements SpeechProvider {
   readonly providerId = 'fake-speech';
   constructor(private readonly outputPath: string) {}
-  async getCapabilities(): Promise<SpeechCapabilities> { return { providerId: this.providerId, local: true, voiceClone: true, emotion: true, speed: true, languages: ['zh', 'en'], supportsReferenceAudio: true, requiresReferenceAudio: false, supportsVoiceId: false }; }
+  async getCapabilities(): Promise<SpeechCapabilities> { return { providerId: this.providerId, local: true, voiceClone: true, emotion: true, speed: true, languages: ['zh', 'en'], supportsReferenceAudio: true, requiresReferenceAudio: false, supportsVoiceId: false, maxTextCharacters: 20_000 }; }
   async generateSpeech(_request: SpeechGenerationRequest): Promise<SpeechGenerationResult> { return { providerId: this.providerId, model: 'fake-speech', modelVersion: '1', outputPath: this.outputPath, durationMs: 1_000, latencyMs: 1, provenance: { fake: true } }; }
 }
 

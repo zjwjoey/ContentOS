@@ -155,6 +155,7 @@ class Runtime:
             "supportsReferenceAudio": True,
             "requiresReferenceAudio": True,
             "supportsVoiceId": False,
+            "maxTextCharacters": 5000,
         }
 
 
