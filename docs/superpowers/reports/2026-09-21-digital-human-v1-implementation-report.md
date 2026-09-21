@@ -19,6 +19,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Runtime provider selection through environment/config, with fail-closed unavailable providers when production credentials or gateways are missing.
 - Synthetic subtitle timeline export as Edit Manifest cues, SRT, and ASS through the Speech Generation API.
 - Capability endpoint at `/api/v1/projects/:projectId/digital-human/capabilities`, with the UI displaying live speech/avatar availability instead of assuming a provider is configured.
+- Successful Avatar Generations can now create an idempotent `EDIT_MANIFEST_V0` plus the existing `VIDEO_RENDER` Job; the workspace redirects to the existing video editor, preserving generated speech, synthetic subtitle cues, 9:16 canvas, and FFmpeg rendering.
 - Loopback IndexTTS gateway source at `tools/indextts-gateway/gateway.py` with input-root allowlisting, output-root isolation, request correlation logging, and `/health`, `/capabilities`, and `/v1/speech/generate` endpoints.
 - Workspace UI actions for Voice Profile, Avatar Profile, Avatar Clip, speech generation, avatar generation, output preview, and subtitle download.
 - Contract/provider/worker/config tests and a proposed ADR.

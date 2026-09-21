@@ -82,17 +82,19 @@ export class AssetCatalogService {
 
   async listReadySourceAssets(projectId: string, assetIds: string[], kind: SourceAssetKind): Promise<ReadySourceAsset[]> {
     if (assetIds.length === 0) return [];
-    const result = await this.db.query('select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and pa.role = $5 where a.id = any($2::text[]) and a.kind = $3 and a.lifecycle = $4', [projectId, assetIds, kind, 'READY', 'SOURCE']);
+    const roleClause = kind === 'VIDEO' ? "pa.role in ('SOURCE','OUTPUT')" : "pa.role = 'SOURCE'";
+    const result = await this.db.query(`select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and ${roleClause} where a.id = any($2::text[]) and a.kind = $3 and a.lifecycle = $4`, [projectId, assetIds, kind, 'READY']);
     return result.rows.map((row) => mapSourceAsset(row as Record<string, unknown>));
   }
 
   async getReadySourceAsset(projectId: string, assetId: string, kind: SourceAssetKind): Promise<ReadySourceAsset | null> {
-    const result = await this.db.query('select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and pa.role = $5 where a.id = $2 and a.kind = $3 and a.lifecycle = $4', [projectId, assetId, kind, 'READY', 'SOURCE']);
+    const roleClause = kind === 'VIDEO' ? "pa.role in ('SOURCE','OUTPUT')" : "pa.role = 'SOURCE'";
+    const result = await this.db.query(`select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and ${roleClause} where a.id = $2 and a.kind = $3 and a.lifecycle = $4`, [projectId, assetId, kind, 'READY']);
     return result.rows[0] ? mapSourceAsset(result.rows[0] as Record<string, unknown>) : null;
   }
 
   async listReadyVideoAssets(projectId: string): Promise<ReadySourceAsset[]> {
-    const result = await this.db.query('select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and pa.role = $2 where a.kind = $3 and a.lifecycle = $4 order by a.created_at, a.id', [projectId, 'SOURCE', 'VIDEO', 'READY']);
+    const result = await this.db.query("select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and pa.role in ('SOURCE','OUTPUT') where a.kind = $2 and a.lifecycle = $3 order by a.created_at, a.id", [projectId, 'VIDEO', 'READY']);
     return result.rows.map((row) => mapSourceAsset(row as Record<string, unknown>));
   }
 

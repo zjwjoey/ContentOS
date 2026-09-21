@@ -3,6 +3,10 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { DigitalHumanService, SyntheticTimingProvider, subtitleTimelineToAss, subtitleTimelineToManifestCues, subtitleTimelineToSrt } from '../../../packages/modules/digital-human/src/index.js';
 import type { RuntimeDigitalHumanProviders } from '../../../packages/modules/digital-human/src/index.js';
+import { DEFAULT_PRESENTATION_SETTINGS_V1, type EditManifestV0 } from '../../../packages/contracts/src/index.js';
+import type { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
+import type { VideoAdjustmentService, VideoService } from '../../../packages/modules/video/src/index.js';
+import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
 
 const voiceInput = z.object({ name: z.string().trim().min(1).max(200), provider: z.string().trim().min(1).max(100).default('indextts25'), referenceAssetId: z.string().trim().min(1).max(200).optional(), providerVoiceId: z.string().trim().min(1).max(200).optional(), language: z.string().trim().min(1).max(20).default('zh'), defaultSpeed: z.number().min(.25).max(4).default(1), defaultEmotion: z.string().trim().min(1).max(100).default('natural') }).strict();
@@ -10,8 +14,9 @@ const avatarInput = z.object({ name: z.string().trim().min(1).max(200), ownerNam
 const clipInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), assetId: z.string().trim().min(1).max(200), name: z.string().trim().min(1).max(200), durationMs: z.number().int().positive().optional(), width: z.number().int().positive().optional(), height: z.number().int().positive().optional(), fps: z.number().positive().optional(), sceneType: z.string().trim().max(100).optional(), gestureLevel: z.string().trim().max(100).optional(), tags: z.array(z.string().trim().min(1).max(100)).max(64).optional() }).strict();
 const speechInput = z.object({ voiceProfileId: z.string().trim().min(1).max(200), text: z.string().trim().min(1).max(100_000), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), language: z.string().trim().min(1).max(20).optional(), speed: z.number().min(.25).max(4).optional(), emotion: z.string().trim().min(1).max(100).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
 const avatarGenerationInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), avatarClipId: z.string().trim().min(1).max(200), speechAssetId: z.string().trim().min(1).max(200), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), parameters: z.record(z.string(), z.unknown()).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
+const editManifestInput = z.object({ seed: z.number().int().default(1), includeSubtitles: z.boolean().default(true) }).strict();
 
-export interface DigitalHumanRouteDependencies { digitalHuman: DigitalHumanService; projects: ProjectService; providers?: RuntimeDigitalHumanProviders; }
+export interface DigitalHumanRouteDependencies { digitalHuman: DigitalHumanService; projects: ProjectService; providers?: RuntimeDigitalHumanProviders; quickEdit?: VideoAdjustmentService; video?: VideoService; assets?: AssetCatalogService; storage?: LocalStorageProvider; }
 function fail(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, status: number, code: string, message: string): unknown { return reply.code(status).send({ error: { code, message, details: [] } }); }
 function invalid(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, details: unknown): unknown { return reply.code(422).send({ error: { code: 'DIGITAL_HUMAN_VALIDATION_ERROR', message: 'Invalid digital human input', details } }); }
 function projectId(request: { params: unknown }): string { return (request.params as { projectId: string }).projectId; }
@@ -24,6 +29,26 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
       speech: speech.status === 'fulfilled' ? { status: 'READY', ...speech.value } : { status: 'UNAVAILABLE', providerId: deps.providers.speech.providerId },
       avatar: avatar.status === 'fulfilled' ? { status: 'READY', ...avatar.value } : { status: 'UNAVAILABLE', providerId: deps.providers.avatar.providerId },
     };
+  });
+  app.post('/api/v1/projects/:projectId/digital-human/avatar-generations/:generationId/edit-manifest', async (request, reply) => {
+    const parsed = editManifestInput.safeParse(request.body || {}); if (!parsed.success) return invalid(reply, parsed.error.issues);
+    if (!deps.quickEdit || !deps.video || !deps.assets || !deps.storage) return fail(reply, 503, 'VIDEO_EDIT_INTEGRATION_UNAVAILABLE', 'Video editing integration is not configured');
+    const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getAvatarGeneration(params.projectId, params.generationId);
+    if (!generation) return fail(reply, 404, 'AVATAR_GENERATION_NOT_FOUND', 'Avatar Generation not found');
+    if (generation.status !== 'SUCCEEDED' || !generation.outputAssetId) return fail(reply, 409, 'AVATAR_GENERATION_NOT_READY', 'Avatar Generation has no output video yet');
+    const existing = (await deps.quickEdit.listManifests(params.projectId)).find((item) => item.manifest.metadata?.digitalHumanGenerationId === generation.id);
+    if (existing) { const job = await deps.video.createManifestRenderJob(params.projectId, existing.id); return { manifestId: existing.id, jobId: job.id, deduplicated: true, editUrl: `/projects/${params.projectId}/video` }; }
+    const videoAsset = await deps.assets.getReadyAssetContent(params.projectId, generation.outputAssetId); const speechAsset = await deps.assets.getReadyAssetContent(params.projectId, generation.speechAssetId);
+    if (!videoAsset || videoAsset.kind !== 'VIDEO') return fail(reply, 409, 'AVATAR_OUTPUT_ASSET_NOT_READY', 'Avatar output video asset is not ready');
+    if (!speechAsset || speechAsset.kind !== 'AUDIO') return fail(reply, 409, 'SPEECH_OUTPUT_ASSET_NOT_READY', 'Speech output audio asset is not ready');
+    const speech = (await deps.digitalHuman.listSpeechGenerations(params.projectId)).find((item) => item.outputAssetId === generation.speechAssetId);
+    if (!speech) return fail(reply, 409, 'SPEECH_GENERATION_NOT_FOUND', 'Speech generation for avatar output was not found');
+    const durationMs = Number(videoAsset.metadata.durationMs || generation.durationMs || speech.durationMs || 0); if (!Number.isFinite(durationMs) || durationMs <= 0) return fail(reply, 409, 'AVATAR_OUTPUT_DURATION_UNAVAILABLE', 'Avatar output video has no valid duration');
+    const timeline = await new SyntheticTimingProvider().align({ text: speech.text, durationMs, language: String(speech.parameters.language || 'zh') });
+    const presentation = structuredClone(DEFAULT_PRESENTATION_SETTINGS_V1); presentation.subtitleStyle = { ...presentation.subtitleStyle, ...(process.env.FFMPEG_FONT_FILE ? { fontFile: process.env.FFMPEG_FONT_FILE } : {}) };
+    const manifest: EditManifestV0 = { schemaVersion: 'EDIT_MANIFEST_V0', projectId: params.projectId, seed: parsed.data.seed, canvas: presentation.canvas, timeline: [{ assetId: videoAsset.id, sourcePath: deps.storage.objectPath(videoAsset.storageKey), sourceInMs: 0, durationMs, transition: 'cut', role: 'CONTENT', reviewStatus: 'GOOD' }], audio: { voiceAssetId: speechAsset.id, voicePath: deps.storage.objectPath(speechAsset.storageKey), volume: 1 }, ...(parsed.data.includeSubtitles ? { subtitles: subtitleTimelineToManifestCues(timeline) } : {}), subtitleStyle: presentation.subtitleStyle, presentationSettings: presentation, metadata: { editMode: 'SCRIPT', digitalHumanGenerationId: generation.id, rawScript: speech.text, cleanedScript: speech.text, confirmedSegments: [speech.text] }, output: presentation.output };
+    const record = await deps.quickEdit.createPlannedManifest({ projectId: params.projectId, manifest, createdBy: 'digital-human' }); const job = await deps.video.createManifestRenderJob(params.projectId, record.id);
+    return reply.code(201).send({ manifestId: record.id, jobId: job.id, deduplicated: false, editUrl: `/projects/${params.projectId}/video` });
   });
   app.get('/api/v1/projects/:projectId/digital-human/voices', async (request, reply) => { const id = projectId(request); return { items: await deps.digitalHuman.listVoiceProfiles(id) }; });
   app.post('/api/v1/projects/:projectId/digital-human/voices', async (request, reply) => { const parsed = voiceInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues); const id = projectId(request); if (!(await deps.projects.get(id))) return fail(reply, 404, 'PROJECT_NOT_FOUND', 'Project not found'); try { return reply.code(201).send(await deps.digitalHuman.createVoiceProfile({ projectId: id, ...parsed.data })); } catch (error) { return fail(reply, 409, 'VOICE_PROFILE_CONFLICT', error instanceof Error ? error.message : 'Unable to create Voice Profile'); } });
