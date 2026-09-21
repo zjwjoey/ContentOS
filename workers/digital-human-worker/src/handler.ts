@@ -62,8 +62,10 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
     const videoDurationMs = Number(video.metadata.durationMs); const audioDurationMs = Number(audio.metadata.durationMs);
     if (!Number.isFinite(videoDurationMs) || videoDurationMs <= 0) throw Object.assign(new Error('Avatar source video duration is invalid'), { code: 'AVATAR_CLIP_DURATION_INVALID', retryable: false });
     if (!Number.isFinite(audioDurationMs) || audioDurationMs <= 0) throw Object.assign(new Error('Speech asset duration is invalid'), { code: 'SPEECH_ASSET_DURATION_INVALID', retryable: false });
-    const capabilities = await deps.avatarProvider.getCapabilities(); const videoFormat = String(video.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || '';
+    const capabilities = await deps.avatarProvider.getCapabilities(); const videoFormat = String(video.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || ''; const audioFormat = String(audio.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || '';
     if (videoFormat && capabilities.supportedFormats.length > 0 && !capabilities.supportedFormats.some((format) => format.toLowerCase().replace(/^\./, '') === videoFormat)) throw Object.assign(new Error(`Avatar provider does not support ${videoFormat} video input`), { code: 'AVATAR_VIDEO_FORMAT_UNSUPPORTED', retryable: false });
+    if (capabilities.supportedAudioFormats?.length && audioFormat && !capabilities.supportedAudioFormats.some((format) => format.toLowerCase().replace(/^\./, '') === audioFormat)) throw Object.assign(new Error(`Avatar provider does not support ${audioFormat} audio input`), { code: 'AVATAR_AUDIO_FORMAT_UNSUPPORTED', retryable: false });
+    if (capabilities.maxDurationSeconds !== undefined && videoDurationMs > capabilities.maxDurationSeconds * 1_000) throw Object.assign(new Error('Avatar source video exceeds provider duration limit'), { code: 'AVATAR_DURATION_EXCEEDS_PROVIDER_LIMIT', retryable: false });
     signal.throwIfAborted();
     const existingTask = generation.externalTaskId ? await deps.avatarProvider.getTask(generation.externalTaskId) : null;
     const replaceTerminalTask = existingTask && (existingTask.status === 'FAILED' || existingTask.status === 'CANCELLED');

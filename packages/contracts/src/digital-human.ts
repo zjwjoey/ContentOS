@@ -52,6 +52,7 @@ export interface AvatarCapabilities {
   requiresPublicUrl: boolean;
   maxDurationSeconds?: number;
   supportedFormats: string[];
+  supportedAudioFormats?: string[];
 }
 
 export interface AvatarGenerationRequest {

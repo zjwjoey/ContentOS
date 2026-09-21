@@ -57,9 +57,9 @@ test('HTTP adapters preserve provider capability, task status, model version, an
 
 test('HTTP avatar capabilities are health-checked with provider authentication', async () => {
   let path = ''; let authorization = '';
-  const avatar = new HzAgentAvatarProvider({ baseUrl: 'https://avatar.test', apiKey: 'test-only', fetchImpl: async (input, init) => { path = new URL(String(input)).pathname; authorization = String((init?.headers as Record<string, string>)?.authorization || ''); return new Response(JSON.stringify({ capabilities: { videoToVideo: true, requiresPublicUrl: true, supportedFormats: ['mp4'], maxDurationSeconds: 60 } }), { status: 200 }); } });
+  const avatar = new HzAgentAvatarProvider({ baseUrl: 'https://avatar.test', apiKey: 'test-only', fetchImpl: async (input, init) => { path = new URL(String(input)).pathname; authorization = String((init?.headers as Record<string, string>)?.authorization || ''); return new Response(JSON.stringify({ capabilities: { videoToVideo: true, requiresPublicUrl: true, supportedFormats: ['mp4'], supported_audio_formats: ['wav'], maxDurationSeconds: 60 } }), { status: 200 }); } });
   const capabilities = await avatar.getCapabilities();
-  assert.equal(path, '/v1/capabilities'); assert.equal(authorization, 'Bearer test-only'); assert.equal(capabilities.maxDurationSeconds, 60); assert.deepEqual(capabilities.supportedFormats, ['mp4']);
+  assert.equal(path, '/v1/capabilities'); assert.equal(authorization, 'Bearer test-only'); assert.equal(capabilities.maxDurationSeconds, 60); assert.deepEqual(capabilities.supportedFormats, ['mp4']); assert.deepEqual(capabilities.supportedAudioFormats, ['wav']);
 });
 
 test('signed provider media staging issues expiring, tamper-resistant URLs', async () => {

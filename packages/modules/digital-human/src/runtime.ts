@@ -37,7 +37,7 @@ export function createRuntimeDigitalHumanProviders(env: RuntimeDigitalHumanEnvir
     : env.HZAGENT_API_KEY
       ? avatarId === 'hzagent'
         ? new HzAgentAvatarProvider({ baseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn', apiKey: env.HZAGENT_API_KEY, ...(env.HZAGENT_CAPABILITIES_PATH ? { capabilitiesPath: env.HZAGENT_CAPABILITIES_PATH } : {}), ...(env.HZAGENT_SUBMIT_PATH ? { submitPath: env.HZAGENT_SUBMIT_PATH } : {}), ...(env.HZAGENT_TASK_PATH ? { taskPath: env.HZAGENT_TASK_PATH } : {}), ...(env.HZAGENT_AUTH_HEADER ? { authHeaderName: env.HZAGENT_AUTH_HEADER } : {}), ...(env.HZAGENT_AUTH_SCHEME !== undefined ? { authScheme: env.HZAGENT_AUTH_SCHEME } : {}) })
-        : new HttpAvatarProvider({ providerId: avatarId, baseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn', apiKey: env.HZAGENT_API_KEY, ...(env.HZAGENT_CAPABILITIES_PATH ? { capabilitiesPath: env.HZAGENT_CAPABILITIES_PATH } : {}) })
+        : new HttpAvatarProvider({ providerId: avatarId, baseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn', apiKey: env.HZAGENT_API_KEY, ...(env.HZAGENT_CAPABILITIES_PATH ? { capabilitiesPath: env.HZAGENT_CAPABILITIES_PATH } : {}), ...(env.HZAGENT_SUBMIT_PATH ? { submitPath: env.HZAGENT_SUBMIT_PATH } : {}), ...(env.HZAGENT_TASK_PATH ? { taskPath: env.HZAGENT_TASK_PATH } : {}), ...(env.HZAGENT_AUTH_HEADER ? { authHeaderName: env.HZAGENT_AUTH_HEADER } : {}), ...(env.HZAGENT_AUTH_SCHEME !== undefined ? { authScheme: env.HZAGENT_AUTH_SCHEME } : {}) })
       : new UnavailableAvatarProvider(avatarId, 'Avatar provider API key is not configured');
   const stagingProvider = env.CONTENTOS_MEDIA_STAGING_PROVIDER || 'http';
   const stagingBaseUrl = env.CONTENTOS_MEDIA_STAGING_BASE_URL || '';
