@@ -1,10 +1,10 @@
-import type { AvatarCapabilities, AvatarProvider, AvatarTaskStatus, SpeechCapabilities, SpeechGenerationRequest, SpeechGenerationResult, SpeechProvider, ProviderMediaStaging } from '../../../contracts/src/index.js';
+import type { AvatarProvider, AvatarTaskStatus, SpeechGenerationRequest, SpeechGenerationResult, SpeechProvider, ProviderMediaStaging } from '../../../contracts/src/index.js';
 import { DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, HttpAvatarProvider, HttpProviderMediaStaging, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging } from './providers.js';
 
 class UnavailableSpeechProvider implements SpeechProvider {
   readonly providerId: string;
   constructor(providerId: string, private readonly reason: string) { this.providerId = providerId; }
-  async getCapabilities(): Promise<SpeechCapabilities> { return { providerId: this.providerId, local: true, voiceClone: false, emotion: false, speed: false, languages: [], supportsReferenceAudio: false, requiresReferenceAudio: false, supportsVoiceId: false }; }
+  async getCapabilities(): Promise<never> { throw new DigitalHumanProviderError('UNAVAILABLE', this.reason, true); }
   async generateSpeech(_request: SpeechGenerationRequest): Promise<SpeechGenerationResult> { throw new DigitalHumanProviderError('UNAVAILABLE', this.reason, true); }
 }
 
@@ -16,7 +16,7 @@ class UnavailableMediaStaging implements ProviderMediaStaging {
 class UnavailableAvatarProvider implements AvatarProvider {
   readonly providerId: string;
   constructor(providerId: string, private readonly reason: string) { this.providerId = providerId; }
-  async getCapabilities(): Promise<AvatarCapabilities> { return { providerId: this.providerId, local: false, videoToVideo: false, imageToVideo: false, requiresPublicUrl: true, supportedFormats: [] }; }
+  async getCapabilities(): Promise<never> { throw new DigitalHumanProviderError('UNAVAILABLE', this.reason, true); }
   async submitLipSync(): Promise<never> { throw new DigitalHumanProviderError('UNAVAILABLE', this.reason, true); }
   async getTask(_externalTaskId: string): Promise<AvatarTaskStatus> { throw new DigitalHumanProviderError('UNAVAILABLE', this.reason, true); }
 }

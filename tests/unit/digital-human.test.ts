@@ -36,6 +36,13 @@ test('runtime provider selection is environment-driven and subtitle exports pres
   assert.match(subtitleTimelineToAss(timeline), /第一句。/);
 });
 
+test('unconfigured runtime providers fail closed during capability checks', async () => {
+  const runtime = createRuntimeDigitalHumanProviders({ CONTENTOS_SPEECH_PROVIDER: 'missing-speech', CONTENTOS_AVATAR_PROVIDER: 'hzagent' });
+  await assert.rejects(() => runtime.speech.getCapabilities(), /not configured/);
+  await assert.rejects(() => runtime.avatar.getCapabilities(), /API key/);
+  assert.equal(runtime.mediaStagingConfigured, false);
+});
+
 test('HTTP adapters preserve provider capability, task status, model version, and cost', async () => {
   const speech = new IndexTTS25SpeechProvider({ baseUrl: 'http://speech.test', fetchImpl: async () => new Response(JSON.stringify({ capabilities: { requiresReferenceAudio: true, languages: ['zh'] } }), { status: 200 }) });
   assert.equal((await speech.getCapabilities()).requiresReferenceAudio, true);

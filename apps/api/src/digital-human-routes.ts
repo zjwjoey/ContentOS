@@ -34,11 +34,12 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
     return reply.header('cache-control', 'private, max-age=0, no-store').header('content-length', asset.byteSize).type(contentType).send(createReadStream(deps.storage.objectPath(asset.storageKey)));
   });
   app.get('/api/v1/projects/:projectId/digital-human/capabilities', async (_request, reply) => {
-    if (!deps.providers) return { speech: { status: 'UNCONFIGURED' }, avatar: { status: 'UNCONFIGURED' } };
+    if (!deps.providers) return { speech: { status: 'UNCONFIGURED' }, avatar: { status: 'UNCONFIGURED' }, mediaStaging: { status: 'UNCONFIGURED' } };
     const [speech, avatar] = await Promise.allSettled([deps.providers.speech.getCapabilities(), deps.providers.avatar.getCapabilities()]);
     return {
       speech: speech.status === 'fulfilled' ? { status: 'READY', ...speech.value } : { status: 'UNAVAILABLE', providerId: deps.providers.speech.providerId },
       avatar: avatar.status === 'fulfilled' ? { status: 'READY', ...avatar.value } : { status: 'UNAVAILABLE', providerId: deps.providers.avatar.providerId },
+      mediaStaging: { status: deps.providers.mediaStagingConfigured ? 'READY' : 'UNAVAILABLE' },
     };
   });
   app.post('/api/v1/projects/:projectId/digital-human/avatar-generations/:generationId/edit-manifest', async (request, reply) => {
