@@ -4,7 +4,7 @@ import { DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, Http
 class UnavailableSpeechProvider implements SpeechProvider {
   readonly providerId: string;
   constructor(providerId: string, private readonly reason: string) { this.providerId = providerId; }
-  async getCapabilities(): Promise<SpeechCapabilities> { return { providerId: this.providerId, local: true, voiceClone: false, emotion: false, speed: false, languages: [], supportsReferenceAudio: false, supportsVoiceId: false }; }
+  async getCapabilities(): Promise<SpeechCapabilities> { return { providerId: this.providerId, local: true, voiceClone: false, emotion: false, speed: false, languages: [], supportsReferenceAudio: false, requiresReferenceAudio: false, supportsVoiceId: false }; }
   async generateSpeech(_request: SpeechGenerationRequest): Promise<SpeechGenerationResult> { throw new DigitalHumanProviderError('UNAVAILABLE', this.reason, true); }
 }
 
@@ -21,7 +21,7 @@ class UnavailableAvatarProvider implements AvatarProvider {
   async getTask(_externalTaskId: string): Promise<AvatarTaskStatus> { throw new DigitalHumanProviderError('UNAVAILABLE', this.reason, true); }
 }
 
-export interface RuntimeDigitalHumanProviders { speech: SpeechProvider; avatar: AvatarProvider; staging: ProviderMediaStaging; }
+export interface RuntimeDigitalHumanProviders { speech: SpeechProvider; avatar: AvatarProvider; staging: ProviderMediaStaging; mediaStagingConfigured: boolean; }
 export interface RuntimeDigitalHumanEnvironment { CONTENTOS_SPEECH_PROVIDER?: string; CONTENTOS_INDEXTTS_BASE_URL?: string; CONTENTOS_AVATAR_PROVIDER?: string; HZAGENT_BASE_URL?: string; HZAGENT_API_KEY?: string; CONTENTOS_MEDIA_STAGING_BASE_URL?: string; CONTENTOS_MEDIA_STAGING_API_KEY?: string; CONTENTOS_FAKE_SPEECH_OUTPUT_PATH?: string; }
 
 export function createRuntimeDigitalHumanProviders(env: RuntimeDigitalHumanEnvironment = process.env as RuntimeDigitalHumanEnvironment): RuntimeDigitalHumanProviders {
@@ -40,5 +40,5 @@ export function createRuntimeDigitalHumanProviders(env: RuntimeDigitalHumanEnvir
   const staging = env.CONTENTOS_MEDIA_STAGING_BASE_URL
     ? new HttpProviderMediaStaging({ baseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL, ...(env.CONTENTOS_MEDIA_STAGING_API_KEY ? { apiKey: env.CONTENTOS_MEDIA_STAGING_API_KEY } : {}) })
     : new UnavailableMediaStaging('Provider media staging is not configured');
-  return { speech, avatar, staging };
+  return { speech, avatar, staging, mediaStagingConfigured: Boolean(env.CONTENTOS_MEDIA_STAGING_BASE_URL) || avatarId === 'fake-avatar' };
 }

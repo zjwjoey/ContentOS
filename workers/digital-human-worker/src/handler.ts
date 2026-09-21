@@ -36,7 +36,7 @@ async function processSpeech(job: JobRecord, attemptId: string, signal: AbortSig
     const result = await deps.speechProvider.generateSpeech({ requestId: generation.id, projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, text: generation.text, language: String(generation.parameters.language || voice.language), speed: Number(generation.parameters.speed || voice.defaultSpeed), emotion: String(generation.parameters.emotion || voice.defaultEmotion), ...(reference ? { referenceAudioPath: deps.storage.objectPath(reference.storageKey) } : {}), ...(voice.providerVoiceId ? { providerVoiceId: voice.providerVoiceId } : {}) });
     signal.throwIfAborted();
     const asset = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: result.outputPath, kind: 'AUDIO', role: 'OUTPUT', metadata: { digitalHuman: { generationId: generation.id, provider: result.providerId, model: result.model, modelVersion: result.modelVersion } } });
-    await deps.digitalHuman.completeSpeech(generation.id, { outputAssetId: asset.id, durationMs: result.durationMs, latencyMs: result.latencyMs, modelVersion: result.modelVersion, provenance: result.provenance });
+    await deps.digitalHuman.completeSpeech(generation.id, { outputAssetId: asset.id, durationMs: result.durationMs, latencyMs: result.latencyMs, modelVersion: result.modelVersion, provenance: { ...result.provenance, provider: result.providerId, model: result.model, modelVersion: result.modelVersion, voiceProfileId: generation.voiceProfileId, referenceAssetId: voice.referenceAssetId, referenceChecksum: reference?.checksum || null, textHash: generation.textHash, parameters: generation.parameters, durationMs: result.durationMs, latencyMs: result.latencyMs } });
     return { generationId: generation.id, outputAssetId: asset.id, state: 'SUCCEEDED' };
   } catch (error) {
     if (signal.aborted) throw error;
@@ -62,11 +62,13 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
     const taskError = task as { errorCode?: string; errorMessage?: string };
     if (task.status === 'FAILED' || task.status === 'CANCELLED' || !task.outputUrl) throw Object.assign(new Error(taskError.errorMessage || 'Avatar provider task failed'), { code: taskError.errorCode || 'AVATAR_PROVIDER_FAILED', retryable: false });
     signal.throwIfAborted();
-    const response = await fetch(task.outputUrl); if (!response.ok) throw Object.assign(new Error('Unable to download avatar result'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: response.status >= 500 });
+    if (!/^https?:\/\//i.test(task.outputUrl)) throw Object.assign(new Error('Avatar provider returned an unsafe output URL'), { code: 'AVATAR_RESULT_URL_INVALID', retryable: false });
+    const response = await fetch(task.outputUrl, { signal }); if (!response.ok) throw Object.assign(new Error('Unable to download avatar result'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: response.status >= 500 });
     const bytes = Buffer.from(await response.arrayBuffer()); const tempPath = join(deps.storage.root, 'staging', `${generation.id}.avatar.mp4`); await mkdir(join(deps.storage.root, 'staging'), { recursive: true }); await writeFile(tempPath, bytes);
     try {
       const asset = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: tempPath, kind: 'VIDEO', role: 'OUTPUT', metadata: { digitalHuman: { generationId: generation.id, provider: task.providerId, externalTaskId: task.externalTaskId } } });
-      await deps.digitalHuman.completeAvatar(generation.id, { outputAssetId: asset.id, model: task.model, costAmount: task.costAmount, costCurrency: task.costCurrency, provenance: { provider: task.providerId, externalTaskId: task.externalTaskId, ...(task.provenance || {}) } });
+      const imported = await deps.assets.getReadySourceAsset(payload.projectId, asset.id, 'VIDEO'); const metadata = imported?.metadata || {};
+      await deps.digitalHuman.completeAvatar(generation.id, { outputAssetId: asset.id, durationMs: typeof metadata.durationMs === 'number' ? metadata.durationMs : undefined, model: task.model, modelVersion: task.modelVersion, costAmount: task.costAmount, costCurrency: task.costCurrency, provenance: { provider: task.providerId, model: task.model || generation.model, modelVersion: task.modelVersion || null, avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, sourceVideoAssetId: video.id, externalTaskId: task.externalTaskId, costAmount: task.costAmount ?? null, costCurrency: task.costCurrency ?? null, ...(task.provenance || {}) } });
       return { generationId: generation.id, outputAssetId: asset.id, state: 'SUCCEEDED' };
     } finally { await rm(tempPath, { force: true }); }
   } catch (error) {

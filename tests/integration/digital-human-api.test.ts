@@ -10,6 +10,7 @@ import { createDatabase, migrateUp } from '../../packages/database/src/index.js'
 import { LocalStorageProvider } from '../../packages/infrastructure/storage/src/index.js';
 import { JobService } from '../../packages/modules/job/src/index.js';
 import { ProjectService } from '../../packages/modules/project/src/index.js';
+import { DigitalHumanService } from '../../packages/modules/digital-human/src/index.js';
 
 const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55433/contentos_test';
 
@@ -41,6 +42,22 @@ test('Avatar output enters the existing EditManifest and VIDEO_RENDER path idemp
     const first = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/digital-human/avatar-generations/${avatarGenerationId}/edit-manifest`, payload: {} }); assert.equal(first.statusCode, 201, first.body); const firstBody = first.json() as { manifestId: string; jobId: string; deduplicated: boolean }; assert.equal(firstBody.deduplicated, false);
     const manifest = (await db.query<{ manifest: Record<string, unknown> }>('select manifest from edit_manifests where id=$1', [firstBody.manifestId])).rows[0]?.manifest; assert.equal(manifest?.projectId, project.id); assert.equal((manifest?.timeline as Array<{ assetId: string }>)[0]?.assetId, avatarAssetId); assert.equal((manifest?.audio as { voiceAssetId?: string }).voiceAssetId, speechAssetId); assert.equal((manifest?.metadata as { digitalHumanGenerationId?: string }).digitalHumanGenerationId, avatarGenerationId);
     const second = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/digital-human/avatar-generations/${avatarGenerationId}/edit-manifest`, payload: {} }); assert.equal(second.statusCode, 200, second.body); const secondBody = second.json() as { manifestId: string; jobId: string; deduplicated: boolean }; assert.deepEqual(secondBody, { manifestId: firstBody.manifestId, jobId: firstBody.jobId, deduplicated: true, editUrl: `/projects/${project.id}/video` });
+
+    const digitalHuman = new DigitalHumanService(db, jobs);
+    const raceVoiceId = `voice-profile-${randomUUID()}`;
+    await db.query('insert into voice_profiles (id,project_id,name,provider,reference_asset_id,language,default_speed,default_emotion,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)', [raceVoiceId, project.id, 'Concurrent Voice', 'indextts25', speechAssetId, 'zh', 1, 'natural', 'READY']);
+    const speechResults = await Promise.all([1, 2].map((index) => digitalHuman.createSpeechGeneration({ projectId: project.id, voiceProfileId: raceVoiceId, text: '并发幂等测试。', correlationId: `race-${index}` })));
+    assert.equal(new Set(speechResults.map((result) => result.generation.id)).size, 1);
+    assert.equal(new Set(speechResults.map((result) => result.job.id)).size, 1);
+    assert.equal(speechResults.filter((result) => result.created).length, 1);
+    const speechCount = await db.query<{ count: string }>('select count(*)::text as count from speech_generations where project_id = $1 and voice_profile_id = $2', [project.id, raceVoiceId]); assert.equal(speechCount.rows[0]?.count, '1');
+    const speechJobCount = await db.query<{ count: string }>('select count(*)::text as count from jobs where project_id = $1 and idempotency_key like $2', [project.id, 'digital-human:speech:%']); assert.equal(speechJobCount.rows[0]?.count, '1');
+
+    const avatarResults = await Promise.all([1, 2].map((index) => digitalHuman.createAvatarGeneration({ projectId: project.id, avatarProfileId, avatarClipId, speechAssetId, correlationId: `avatar-race-${index}` })));
+    assert.equal(new Set(avatarResults.map((result) => result.generation.id)).size, 1);
+    assert.equal(new Set(avatarResults.map((result) => result.job.id)).size, 1);
+    assert.equal(avatarResults.filter((result) => result.created).length, 1);
+    const avatarJobCount = await db.query<{ count: string }>('select count(*)::text as count from jobs where project_id = $1 and type = $2', [project.id, 'AVATAR_LIPSYNC_GENERATE']); assert.equal(avatarJobCount.rows[0]?.count, '2');
     await app.close();
   } finally { await db.end(); await rm(storageRoot, { recursive: true, force: true }); await temporary.close(); }
 });

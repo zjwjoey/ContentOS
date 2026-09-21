@@ -10,6 +10,7 @@ export interface SpeechCapabilities {
   speed: boolean;
   languages: string[];
   supportsReferenceAudio: boolean;
+  requiresReferenceAudio: boolean;
   supportsVoiceId: boolean;
 }
 
@@ -71,6 +72,7 @@ export interface AvatarExternalTask {
   status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
   outputUrl?: string;
   model?: string;
+  modelVersion?: string;
   costAmount?: number;
   costCurrency?: string;
   provenance?: Record<string, unknown>;

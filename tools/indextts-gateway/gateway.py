@@ -153,6 +153,7 @@ class Runtime:
             "speed": True,
             "languages": sorted(self.language_map),
             "supportsReferenceAudio": True,
+            "requiresReferenceAudio": True,
             "supportsVoiceId": False,
         }
 

@@ -55,7 +55,19 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
   app.get('/api/v1/projects/:projectId/digital-human/avatars', async (request) => { const id = projectId(request); const profiles = await deps.digitalHuman.listAvatarProfiles(id); return { items: await Promise.all(profiles.map(async (profile) => ({ ...profile, clips: await deps.digitalHuman.listAvatarClips(id, profile.id) }))) }; });
   app.post('/api/v1/projects/:projectId/digital-human/avatars', async (request, reply) => { const parsed = avatarInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues); const id = projectId(request); if (!(await deps.projects.get(id))) return fail(reply, 404, 'PROJECT_NOT_FOUND', 'Project not found'); try { return reply.code(201).send(await deps.digitalHuman.createAvatarProfile({ projectId: id, ...parsed.data })); } catch (error) { return fail(reply, 409, 'AVATAR_PROFILE_CONFLICT', error instanceof Error ? error.message : 'Unable to create Avatar Profile'); } });
   app.post('/api/v1/projects/:projectId/digital-human/avatar-clips', async (request, reply) => { const parsed = clipInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues); try { return reply.code(201).send(await deps.digitalHuman.createAvatarClip({ projectId: projectId(request), ...parsed.data })); } catch (error) { return fail(reply, 409, 'AVATAR_CLIP_CONFLICT', error instanceof Error ? error.message : 'Unable to create Avatar Clip'); } });
-  app.post('/api/v1/projects/:projectId/digital-human/speech-generations', async (request, reply) => { const parsed = speechInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues); try { const result = await deps.digitalHuman.createSpeechGeneration({ projectId: projectId(request), ...parsed.data, correlationId: parsed.data.correlationId || `api-${randomUUID()}` }); return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: !result.created }); } catch (error) { return fail(reply, 409, 'SPEECH_GENERATION_CONFLICT', error instanceof Error ? error.message : 'Unable to create Speech Generation'); } });
+  app.post('/api/v1/projects/:projectId/digital-human/speech-generations', async (request, reply) => {
+    const parsed = speechInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues);
+    const id = projectId(request);
+    if (deps.providers) {
+      const profile = await deps.digitalHuman.getVoiceProfile(id, parsed.data.voiceProfileId);
+      if (!profile) return fail(reply, 404, 'VOICE_PROFILE_NOT_FOUND', 'Voice Profile not found');
+      try {
+        const capabilities = await deps.providers.speech.getCapabilities();
+        if (capabilities.requiresReferenceAudio && !profile.referenceAssetId) return fail(reply, 409, 'VOICE_REFERENCE_REQUIRED', 'This speech provider requires a ready reference audio Asset');
+      } catch (error) { return fail(reply, 503, 'SPEECH_PROVIDER_UNAVAILABLE', error instanceof Error ? error.message : 'Speech provider is unavailable'); }
+    }
+    try { const result = await deps.digitalHuman.createSpeechGeneration({ projectId: id, ...parsed.data, correlationId: parsed.data.correlationId || `api-${randomUUID()}` }); return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: !result.created }); } catch (error) { return fail(reply, 409, 'SPEECH_GENERATION_CONFLICT', error instanceof Error ? error.message : 'Unable to create Speech Generation'); }
+  });
   app.get('/api/v1/projects/:projectId/digital-human/speech-generations', async (request) => ({ items: await deps.digitalHuman.listSpeechGenerations(projectId(request)) }));
   app.get('/api/v1/projects/:projectId/digital-human/speech-generations/:generationId', async (request, reply) => { const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getSpeechGeneration(params.projectId, params.generationId); return generation || fail(reply, 404, 'SPEECH_GENERATION_NOT_FOUND', 'Speech Generation not found'); });
   app.get('/api/v1/projects/:projectId/digital-human/speech-generations/:generationId/subtitles', async (request, reply) => {
@@ -68,7 +80,18 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
     if (format !== 'json' && format !== 'manifest') return fail(reply, 422, 'SUBTITLE_FORMAT_INVALID', 'Subtitle format must be json, manifest, srt or ass');
     return { timeline, subtitles: subtitleTimelineToManifestCues(timeline) };
   });
-  app.post('/api/v1/projects/:projectId/digital-human/avatar-generations', async (request, reply) => { const parsed = avatarGenerationInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues); try { const result = await deps.digitalHuman.createAvatarGeneration({ projectId: projectId(request), ...parsed.data, correlationId: parsed.data.correlationId || `api-${randomUUID()}` }); return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: !result.created }); } catch (error) { return fail(reply, 409, 'AVATAR_GENERATION_CONFLICT', error instanceof Error ? error.message : 'Unable to create Avatar Generation'); } });
+  app.post('/api/v1/projects/:projectId/digital-human/avatar-generations', async (request, reply) => {
+    const parsed = avatarGenerationInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues);
+    const id = projectId(request);
+    if (deps.providers) {
+      try {
+        const capabilities = await deps.providers.avatar.getCapabilities();
+        if (!capabilities.videoToVideo && !capabilities.imageToVideo) return fail(reply, 503, 'AVATAR_PROVIDER_UNAVAILABLE', 'Avatar provider is unavailable');
+        if (capabilities.requiresPublicUrl && !deps.providers.mediaStagingConfigured) return fail(reply, 503, 'MEDIA_STAGING_NOT_CONFIGURED', 'Public media staging is required for this avatar provider');
+      } catch (error) { return fail(reply, 503, 'AVATAR_PROVIDER_UNAVAILABLE', error instanceof Error ? error.message : 'Avatar provider is unavailable'); }
+    }
+    try { const result = await deps.digitalHuman.createAvatarGeneration({ projectId: id, ...parsed.data, correlationId: parsed.data.correlationId || `api-${randomUUID()}` }); return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: !result.created }); } catch (error) { return fail(reply, 409, 'AVATAR_GENERATION_CONFLICT', error instanceof Error ? error.message : 'Unable to create Avatar Generation'); }
+  });
   app.get('/api/v1/projects/:projectId/digital-human/avatar-generations', async (request) => ({ items: await deps.digitalHuman.listAvatarGenerations(projectId(request)) }));
   app.get('/api/v1/projects/:projectId/digital-human/avatar-generations/:generationId', async (request, reply) => { const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getAvatarGeneration(params.projectId, params.generationId); return generation || fail(reply, 404, 'AVATAR_GENERATION_NOT_FOUND', 'Avatar Generation not found'); });
 }
