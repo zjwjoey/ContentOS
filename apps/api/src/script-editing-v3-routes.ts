@@ -5,7 +5,7 @@ import { extname } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { z } from 'zod';
-import { createExternalVideoProvider, ensureStandaloneWorkspace, HybridMediaService, ScriptEditingV3Service, type VideoService } from '../../../packages/modules/video/src/index.js';
+import { createExternalVideoProvider, ensureStandaloneWorkspace, HybridMediaService, JianyingRuntimeLocator, ScriptEditingV3Service, type VideoService } from '../../../packages/modules/video/src/index.js';
 import type { JobService } from '../../../packages/modules/job/src/index.js';
 import { AssetCatalogService, type AssetService, type LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
@@ -84,8 +84,22 @@ async function enqueueRepresentativeFrameJobs(
   return eligible.length;
 }
 
-export function registerScriptEditingV3Routes(app: FastifyInstance, dependencies: { db: Pool; jobs: JobService; video: VideoService; assets: AssetService; localMedia: LocalMediaSourceService; localPathAccess?: LocalPathAccessService; storage?: LocalStorageProvider }): void {
+export function registerScriptEditingV3Routes(app: FastifyInstance, dependencies: { db: Pool; jobs: JobService; video: VideoService; assets: AssetService; localMedia: LocalMediaSourceService; localPathAccess?: LocalPathAccessService; storage?: LocalStorageProvider; jianyingRuntime?: JianyingRuntimeLocator }): void {
   const service = new ScriptEditingV3Service(dependencies.db, dependencies.storage ? { storage: dependencies.storage, hybridMedia: new HybridMediaService(dependencies.assets, dependencies.storage, createExternalVideoProvider(), dependencies.db) } : {});
+  const jianyingRuntime = dependencies.jianyingRuntime || new JianyingRuntimeLocator();
+  app.get('/api/v1/edit/v3/jianying/runtime', async (_request, reply) => {
+    const status = await jianyingRuntime.getRuntimeStatus();
+    return reply.send({
+      platform: status.platform,
+      helperConfigured: status.helper.configured,
+      helperAvailable: status.helper.status === 'AVAILABLE',
+      helperName: status.helper.path ? status.helper.path.split(/[\\/]/u).pop() : undefined,
+      dllConfigured: status.dll.configured,
+      dllAvailable: status.dll.status === 'AVAILABLE',
+      dllName: status.dll.path ? status.dll.path.split(/[\\/]/u).pop() : undefined,
+      encryptedDraftSupport: status.encryptedDraftSupport,
+    });
+  });
   app.post('/api/v1/edit/v3/scans', async (request, reply) => {
     const parsed = scanInput.safeParse(request.body || {}); if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', details: parsed.error.issues } });
     const input = parsed.data; const canonical = dependencies.localPathAccess ? await dependencies.localPathAccess.authorize(input.sourceRoot, 'MEDIA_ROOT') : input.sourceRoot; const rootId = sourceRootId(canonical); const key = `v3-material-scan:${input.workspaceId}:${rootId}:${input.recursive}`; const existing = await dependencies.jobs.getByIdempotencyKey(key); if (existing) return reply.code(202).send({ scanId: (existing.payload as { scanId?: string }).scanId, jobId: existing.id, state: existing.state, sourceRootId: rootId });

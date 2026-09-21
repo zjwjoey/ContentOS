@@ -126,8 +126,9 @@ test('Jianying draft adapters keep JSON parsing separate from unavailable DLL in
     const readable = await new PlainJsonDraftAdapter().read(draftDirectory);
     assert.equal(readable.rootPath, draftDirectory);
     assert.equal(readable.payloads[0]?.draft_id, 'draft-1');
-    assert.equal(new JianyingVideoEditorDllAdapter().status, 'UNAVAILABLE');
-    await assert.rejects(new JianyingVideoEditorDllAdapter(undefined, { platform: 'win32' }).read(draftDirectory), /JIANYING_VIDEOEDITOR_DLL_UNAVAILABLE/);
+    const runtime = new JianyingRuntimeLocator({ platform: 'win32', env: { NODE_ENV: 'test' } });
+    assert.equal((await runtime.getRuntimeStatus()).encryptedDraftSupport, 'HELPER_MISSING');
+    await assert.rejects(new JianyingVideoEditorDllAdapter(undefined, { platform: 'win32', locator: runtime }).read(draftDirectory), /JIANYING_VIDEOEDITOR_DLL_UNAVAILABLE/);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -165,7 +166,7 @@ test('Encrypted draft adapter copies input, uses the helper contract, and cleans
   const directory = await mkdtemp(join(tmpdir(), 'contentos-v3-encrypted-success-')); const source = join(directory, 'draft_content.json'); await writeFile(source, '{encrypted}');
   const hash = async () => createHash('sha256').update(await readFile(source)).digest('hex'); const originalHash = await hash();
   let inputPath = ''; let outputDirectory = '';
-  const adapter = new JianyingEncryptedDraftAdapter({ platform: 'win32', temporaryRoot: directory, locator: fakeRuntime({ dll: 'C:\\Jianying\\videoeditor.dll', helper: 'C:\\ContentOS\\jianying-draft-helper.exe' }), executor: async (_helper, args) => { inputPath = args[1]!; outputDirectory = args[3]!; await writeFile(inputPath, 'mutated temp copy'); await writeFile(join(outputDirectory, 'draft_content.json'), JSON.stringify({ draft_id: 'decrypted' })); return { stdout: JSON.stringify({ status: 'ok', files: ['draft_content.json'] }), stderr: '' }; } });
+  const adapter = new JianyingEncryptedDraftAdapter({ platform: 'win32', temporaryRoot: directory, locator: fakeRuntime({ dll: 'C:\\Jianying\\videoeditor.dll', helper: 'C:\\ContentOS\\jianying-draft-helper.exe' }), executor: async (_helper, args) => { inputPath = args[1]!; outputDirectory = args[3]!; await writeFile(inputPath, 'mutated temp copy'); await writeFile(join(outputDirectory, 'draft_content.json'), JSON.stringify({ draft_id: 'decrypted' })); return { stdout: JSON.stringify({ status: 'ok', protocolVersion: 1, files: ['draft_content.json'] }), stderr: '' }; } });
   try {
     const readable = await adapter.read(source);
     assert.equal(readable.payloads[0]?.draft_id, 'decrypted'); assert.equal(await hash(), originalHash);
@@ -186,6 +187,38 @@ test('Encrypted draft adapter reports missing runtime components and invalid hel
     await assert.rejects(() => new JianyingEncryptedDraftAdapter({ platform: 'win32', locator: fakeRuntime({ dll: 'videoeditor.dll' }) }).read(source), /JIANYING_HELPER_UNAVAILABLE/);
     const invalid = new JianyingEncryptedDraftAdapter({ platform: 'win32', locator: fakeRuntime({ dll: 'videoeditor.dll', helper: 'helper.exe' }), executor: async () => ({ stdout: 'not-json', stderr: '' }) });
     await assert.rejects(() => invalid.read(source), /JIANYING_DECRYPT_OUTPUT_INVALID/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('Jianying runtime locator reports actionable component status without scanning drives', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'contentos-v3-runtime-status-'));
+  const helper = join(directory, 'jianying-draft-helper.exe');
+  const dll = join(directory, 'videoeditor.dll');
+  await writeFile(helper, 'helper'); await writeFile(dll, 'dll');
+  try {
+    const ready = new JianyingRuntimeLocator({ platform: 'win32', projectRoot: directory, env: { NODE_ENV: 'test', JIANYING_DRAFT_HELPER: helper, JIANYING_VIDEOEDITOR_DLL: dll } });
+    const readyStatus = await ready.getRuntimeStatus();
+    assert.equal(readyStatus.encryptedDraftSupport, 'READY');
+    assert.equal(readyStatus.helper.status, 'AVAILABLE');
+    assert.equal(readyStatus.dll.status, 'AVAILABLE');
+    const missingHelper = new JianyingRuntimeLocator({ platform: 'win32', projectRoot: directory, env: { NODE_ENV: 'test', JIANYING_DRAFT_HELPER: join(directory, 'missing-helper.exe'), JIANYING_VIDEOEDITOR_DLL: dll } });
+    assert.equal((await missingHelper.getRuntimeStatus()).encryptedDraftSupport, 'HELPER_MISSING');
+    const unsupported = new JianyingRuntimeLocator({ platform: 'linux', projectRoot: directory, env: { NODE_ENV: 'test', JIANYING_DRAFT_HELPER: helper, JIANYING_VIDEOEDITOR_DLL: dll } });
+    assert.equal((await unsupported.getRuntimeStatus()).encryptedDraftSupport, 'UNSUPPORTED_PLATFORM');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('Encrypted draft adapter rejects helper protocol mismatches, timeouts, and unsafe output paths', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'contentos-v3-encrypted-safety-')); const source = join(directory, 'draft_content.json'); await writeFile(source, '{encrypted}');
+  try {
+    const mismatch = new JianyingEncryptedDraftAdapter({ platform: 'win32', temporaryRoot: directory, locator: fakeRuntime({ dll: 'videoeditor.dll', helper: 'helper.exe' }), executor: async () => ({ stdout: JSON.stringify({ status: 'ok', protocolVersion: 2, files: [] }), stderr: '' }) });
+    await assert.rejects(() => mismatch.read(source), /JIANYING_HELPER_PROTOCOL_MISMATCH/);
+    const timeout = new JianyingEncryptedDraftAdapter({ platform: 'win32', temporaryRoot: directory, locator: fakeRuntime({ dll: 'videoeditor.dll', helper: 'helper.exe' }), executor: async () => { const error = Object.assign(new Error('timed out'), { timedOut: true, stdout: '', stderr: '' }); throw error; } });
+    await assert.rejects(() => timeout.read(source), /JIANYING_HELPER_TIMEOUT/);
+    const traversal = new JianyingEncryptedDraftAdapter({ platform: 'win32', temporaryRoot: directory, locator: fakeRuntime({ dll: 'videoeditor.dll', helper: 'helper.exe' }), executor: async () => ({ stdout: JSON.stringify({ status: 'ok', protocolVersion: 1, files: ['../draft_content.json'] }), stderr: '' }) });
+    await assert.rejects(() => traversal.read(source), /JIANYING_DECRYPT_OUTPUT_INVALID/);
+    const absolute = new JianyingEncryptedDraftAdapter({ platform: 'win32', temporaryRoot: directory, locator: fakeRuntime({ dll: 'videoeditor.dll', helper: 'helper.exe' }), executor: async () => ({ stdout: JSON.stringify({ status: 'ok', protocolVersion: 1, files: ['C:\\outside.json'] }), stderr: '' }) });
+    await assert.rejects(() => absolute.read(source), /JIANYING_DECRYPT_OUTPUT_INVALID/);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

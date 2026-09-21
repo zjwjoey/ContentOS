@@ -56,6 +56,9 @@ test('Script Editing V3 browser flow covers pool, candidates, locking and full p
     // remains only as a compatibility alias and must not be a second workbench.
     await page.goto(`${baseUrl}/edit/script`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('heading', { name: 'Sentence Editing Workbench' }).waitFor({ state: 'visible', timeout: 15_000 });
+    const runtimeStatus = page.getByTestId('jianying-runtime-status');
+    await runtimeStatus.waitFor({ state: 'visible', timeout: 15_000 });
+    assert.match(await runtimeStatus.innerText(), /明文草稿支持/);
     const sourceRootInput = page.locator('input[placeholder="输入已授权的素材文件夹路径"]');
     await sourceRootInput.fill('');
     await sourceRootInput.pressSequentially(sourceRoot, { delay: 1 });

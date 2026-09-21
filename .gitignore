@@ -4,6 +4,11 @@ test-results/
 playwright-report/
 .worktrees/
 dist/
+tools/jianying-draft-helper/bin/
+tools/jianying-draft-helper/runtime-fixtures/
+tools/jianying-draft-helper/decrypted-temp/
+videoeditor.dll
+draft_content.json.dec.json
 .env
 .env.*
 !.env.example

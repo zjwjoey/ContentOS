@@ -30,7 +30,7 @@ export type { CreateQuickEditVersionInput, QuickEditManifestRecord } from './qui
 export { StandaloneQuickEditService } from './standalone-quick-edit-service.js';
 export type { CreateStandaloneQuickEditInput, StandaloneQuickEditSession } from './standalone-quick-edit-service.js';
 export { buildVisualQueriesV3, ensureStandaloneWorkspace, JianyingDraftImporter, JianyingEncryptedDraftAdapter, JianyingRuntimeLocator, JianyingVideoEditorDllAdapter, CompositeReadableDraftAdapter, PlainJsonDraftAdapter, materialSourceFingerprint, rankMaterialCandidateV3, ScriptEditingV3Service } from './script-editing-v3-service.js';
-export type { ReadableDraftAdapter } from './script-editing-v3-service.js';
+export type { JianyingEncryptedDraftSupport, JianyingRuntimeStatus, ReadableDraftAdapter } from './script-editing-v3-service.js';
 export { QwenVisualAnalysisProvider } from './visual-analysis.js';
 export type { VisualAnalysisProvider } from './visual-analysis.js';
 export { QwenVisualQueryProvider, RuleVisualQueryProvider, createVisualQueryProvider } from './visual-query.js';

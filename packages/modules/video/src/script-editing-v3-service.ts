@@ -16,7 +16,7 @@ import { InMemoryMaterialSemanticIndex, QwenEmbeddingProvider, type EmbeddingPro
 import { CompositeReadableDraftAdapter, JianyingEncryptedDraftAdapter, PlainJsonDraftAdapter, type ReadableDraftAdapter } from './jianying-draft-adapter.js';
 
 export { CompositeReadableDraftAdapter, JianyingEncryptedDraftAdapter, JianyingRuntimeLocator, JianyingVideoEditorDllAdapter, PlainJsonDraftAdapter } from './jianying-draft-adapter.js';
-export type { ReadableDraftAdapter } from './jianying-draft-adapter.js';
+export type { JianyingEncryptedDraftSupport, JianyingRuntimeStatus, ReadableDraftAdapter } from './jianying-draft-adapter.js';
 
 type SentenceV3 = { id: string; index: number; text: string; startMs: number; endMs: number; durationMs: number };
 type PoolRow = Record<string, unknown>;
