@@ -44,8 +44,12 @@ export class JobService {
   }
 
   async createIdempotent(input: CreateJobInput): Promise<JobRecord> {
-    const result = await this.db.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts, scheduled_at) values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now())) on conflict (idempotency_key) do update set id = jobs.id returning *', [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts, input.scheduledAt || null]);
-    return mapJob(result.rows[0] as Record<string, unknown>);
+    const values = [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts, input.scheduledAt || null];
+    const result = await this.db.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts, scheduled_at) values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now())) on conflict do nothing returning *', values);
+    if (result.rows[0]) return mapJob(result.rows[0] as Record<string, unknown>);
+    const existing = await this.db.query('select * from jobs where idempotency_key = $1', [input.idempotencyKey]);
+    if (existing.rows[0]) return mapJob(existing.rows[0] as Record<string, unknown>);
+    throw new Error(`JOB_ID_CONFLICT: ${input.id}`);
   }
 
   async get(id: string): Promise<JobRecord | null> {

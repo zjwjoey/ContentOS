@@ -1,5 +1,5 @@
 import type { AvatarCapabilities, AvatarProvider, AvatarTaskStatus, SpeechCapabilities, SpeechGenerationRequest, SpeechGenerationResult, SpeechProvider, ProviderMediaStaging } from '../../../contracts/src/index.js';
-import { DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, HttpAvatarProvider, HttpProviderMediaStaging, IndexTTS25SpeechProvider } from './providers.js';
+import { DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, HttpAvatarProvider, HttpProviderMediaStaging, HzAgentAvatarProvider, IndexTTS25SpeechProvider } from './providers.js';
 
 class UnavailableSpeechProvider implements SpeechProvider {
   readonly providerId: string;
@@ -35,7 +35,9 @@ export function createRuntimeDigitalHumanProviders(env: RuntimeDigitalHumanEnvir
   const avatar = avatarId === 'fake-avatar'
     ? new FakeAvatarProvider()
     : env.HZAGENT_API_KEY
-      ? new HttpAvatarProvider({ providerId: avatarId, baseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn', apiKey: env.HZAGENT_API_KEY })
+      ? avatarId === 'hzagent'
+        ? new HzAgentAvatarProvider({ baseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn', apiKey: env.HZAGENT_API_KEY })
+        : new HttpAvatarProvider({ providerId: avatarId, baseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn', apiKey: env.HZAGENT_API_KEY })
       : new UnavailableAvatarProvider(avatarId, 'Avatar provider API key is not configured');
   const staging = env.CONTENTOS_MEDIA_STAGING_BASE_URL
     ? new HttpProviderMediaStaging({ baseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL, ...(env.CONTENTOS_MEDIA_STAGING_API_KEY ? { apiKey: env.CONTENTOS_MEDIA_STAGING_API_KEY } : {}) })

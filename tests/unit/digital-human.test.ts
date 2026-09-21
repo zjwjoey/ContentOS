@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateAvatarGenerationRequest, validateSpeechGenerationRequest } from '../../packages/contracts/src/index.js';
-import { FakeAvatarProvider, FakeSpeechProvider, HttpAvatarProvider, IndexTTS25SpeechProvider, SyntheticTimingProvider, createRuntimeDigitalHumanProviders, subtitleTimelineToAss, subtitleTimelineToSrt } from '../../packages/modules/digital-human/src/index.js';
+import { FakeAvatarProvider, FakeSpeechProvider, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SyntheticTimingProvider, createRuntimeDigitalHumanProviders, subtitleTimelineToAss, subtitleTimelineToSrt } from '../../packages/modules/digital-human/src/index.js';
 
 test('digital human contracts reject unsafe generation requests', () => {
   assert.doesNotThrow(() => validateSpeechGenerationRequest({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', text: '你好', language: 'zh', speed: 1, emotion: 'natural' }));
@@ -40,7 +40,8 @@ test('HTTP adapters preserve provider capability, task status, model version, an
   const speech = new IndexTTS25SpeechProvider({ baseUrl: 'http://speech.test', fetchImpl: async () => new Response(JSON.stringify({ capabilities: { requiresReferenceAudio: true, languages: ['zh'] } }), { status: 200 }) });
   assert.equal((await speech.getCapabilities()).requiresReferenceAudio, true);
   let call = 0;
-  const avatar = new HttpAvatarProvider({ providerId: 'hzagent', baseUrl: 'http://avatar.test', apiKey: 'test-only', fetchImpl: async () => new Response(JSON.stringify(call++ === 0 ? { taskId: 'task-1', status: 'RUNNING', model: 'avatar-v1', modelVersion: '2026.09', costAmount: '1.25', costCurrency: 'RMB' } : { status: 'SUCCEEDED', outputUrl: 'https://cdn.test/result.mp4', modelVersion: '2026.09', costAmount: 1.25, costCurrency: 'RMB' }), { status: 200 }) });
+  const avatar = new HzAgentAvatarProvider({ baseUrl: 'http://avatar.test', apiKey: 'test-only', fetchImpl: async () => new Response(JSON.stringify(call++ === 0 ? { taskId: 'task-1', status: 'RUNNING', model: 'avatar-v1', modelVersion: '2026.09', costAmount: '1.25', costCurrency: 'RMB' } : { status: 'SUCCEEDED', outputUrl: 'https://cdn.test/result.mp4', modelVersion: '2026.09', costAmount: 1.25, costCurrency: 'RMB' }), { status: 200 }) });
+  assert.equal(avatar.providerId, 'hzagent');
   const submitted = await avatar.submitLipSync({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', audioUrl: 'https://cdn.test/a.wav', videoUrl: 'https://cdn.test/v.mp4', parameters: {} });
   assert.equal(submitted.status, 'RUNNING'); assert.equal(submitted.modelVersion, '2026.09'); assert.equal(submitted.costAmount, 1.25);
   const completed = await avatar.getTask('task-1'); assert.equal(completed.status, 'SUCCEEDED'); assert.equal(completed.outputUrl, 'https://cdn.test/result.mp4'); assert.equal(completed.costCurrency, 'RMB');

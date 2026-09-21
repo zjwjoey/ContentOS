@@ -120,6 +120,11 @@ export class HttpAvatarProvider implements AvatarProvider {
   async cancelTask(externalTaskId: string): Promise<void> { const path = (this.options.taskPath || '/v1/lipsync/tasks/:id').replace(':id', encodeURIComponent(externalTaskId)); const response = await this.fetchImpl(new URL(path, this.options.baseUrl), { method: 'DELETE', headers: { authorization: `Bearer ${this.options.apiKey}` } }); if (!response.ok && response.status !== 404) throw responseError(response.status); }
 }
 
+/** HZAgent's vendor-specific boundary. Keep all HZAgent field/path choices here. */
+export class HzAgentAvatarProvider extends HttpAvatarProvider {
+  constructor(options: Omit<HttpAvatarProviderOptions, 'providerId'>) { super({ ...options, providerId: 'hzagent' }); }
+}
+
 export interface HttpProviderMediaStagingOptions { baseUrl: string; apiKey?: string; fetchImpl?: typeof fetch; }
 
 export class HttpProviderMediaStaging implements ProviderMediaStaging {

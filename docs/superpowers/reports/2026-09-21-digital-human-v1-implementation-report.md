@@ -19,6 +19,8 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Runtime provider selection through environment/config, with fail-closed unavailable providers when production credentials or gateways are missing.
 - Provider capability preflight before creating speech/avatar Jobs: required reference audio, remote provider availability, and public media staging are surfaced as actionable API errors instead of creating doomed work.
 - Stable request-derived Generation/Job identifiers plus `INSERT ... RETURNING` conflict handling prevent concurrent idempotent requests from creating orphan Jobs; the integration test exercises concurrent Speech and Avatar submissions.
+- The shared Job idempotent insert path now handles concurrent primary-key and idempotency-key races without creating duplicate or orphaned Jobs.
+- A named `HzAgentAvatarProvider` adapter now forms the vendor boundary; other remote providers continue to use the generic HTTP adapter.
 - Remote avatar task adapters now preserve normalized status, model version, cost, and provider provenance; result downloads require HTTP(S) and honor Job cancellation signals.
 - Synthetic subtitle timeline export as Edit Manifest cues, SRT, and ASS through the Speech Generation API.
 - Capability endpoint at `/api/v1/projects/:projectId/digital-human/capabilities`, with the UI displaying live speech/avatar availability instead of assuming a provider is configured.
@@ -36,7 +38,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Lint check: passed (151 TypeScript files).
 - `git diff --check`: passed.
 - Full TypeScript baseline: passed after restoring the workspace dependency links with the lockfile's `autoInstallPeers=false` setting.
-- Full baseline test run: 279 passed / 4 failed. The remaining failures are test-environment/migration-history issues: the shared test database contains stale migration rows `0032`–`0037` that are not present in this branch, including the pre-existing missing `0037_script_editing_v3_settings.down.sql`. A clean temporary-schema migration matrix passes 9/9, and the Digital Human test suite passes 7/7.
+- Full baseline test run: 280 passed / 3 failed. All remaining failures are test-environment/migration-history issues: the shared test database still points at the pre-existing `0037_script_editing_v3_settings` migration, whose down file is not present in this branch. The clean temporary-schema migration matrix passes 9/9, and the Digital Human test suite passes 8/8.
 
 ## Runtime status
 
