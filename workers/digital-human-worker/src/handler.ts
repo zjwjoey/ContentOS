@@ -39,7 +39,7 @@ async function processSpeech(job: JobRecord, attemptId: string, signal: AbortSig
     await deps.digitalHuman.completeSpeech(generation.id, { outputAssetId: asset.id, durationMs: result.durationMs, latencyMs: result.latencyMs, modelVersion: result.modelVersion, provenance: { ...result.provenance, provider: result.providerId, model: result.model, modelVersion: result.modelVersion, voiceProfileId: generation.voiceProfileId, referenceAssetId: voice.referenceAssetId, referenceChecksum: reference?.checksum || null, textHash: generation.textHash, parameters: generation.parameters, durationMs: result.durationMs, latencyMs: result.latencyMs } });
     return { generationId: generation.id, outputAssetId: asset.id, state: 'SUCCEEDED' };
   } catch (error) {
-    if (signal.aborted) throw error;
+    if (signal.aborted) { await deps.digitalHuman.cancelSpeech(generation.id); throw error; }
     const providerError = error instanceof DigitalHumanProviderError ? error : null;
     await deps.digitalHuman.failSpeech(generation.id, { code: providerError?.code || 'SPEECH_GENERATION_FAILED', message: error instanceof Error ? error.message.slice(0, 200) : 'Speech generation failed' });
     throw error;
@@ -54,9 +54,11 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
   if (!clip || !video || video.kind !== 'VIDEO' || video.lifecycle !== 'READY') throw Object.assign(new Error('Avatar source video is not ready'), { code: 'AVATAR_CLIP_ASSET_NOT_READY', retryable: false });
   if (!audio || audio.kind !== 'AUDIO' || audio.lifecycle !== 'READY') throw Object.assign(new Error('Speech asset is not ready'), { code: 'SPEECH_ASSET_NOT_READY', retryable: false });
   signal.throwIfAborted();
+  let remoteTaskId = generation.externalTaskId;
   try {
     const existingTask = generation.externalTaskId ? await deps.avatarProvider.getTask(generation.externalTaskId) : null;
     const task = existingTask || await deps.avatarProvider.submitLipSync({ requestId: generation.id, projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, audioUrl: (await deps.staging.stageAsset(audio.id)).publicUrl, videoUrl: (await deps.staging.stageAsset(video.id)).publicUrl, ...(generation.model ? { model: generation.model } : {}), parameters: generation.provenance.parameters && typeof generation.provenance.parameters === 'object' ? generation.provenance.parameters as Record<string, unknown> : {} });
+    remoteTaskId = task.externalTaskId;
     if (!generation.externalTaskId) await deps.digitalHuman.markAvatarWaiting(generation.id, task.externalTaskId, { provider: task.providerId, externalTaskId: task.externalTaskId });
     if (task.status === 'QUEUED' || task.status === 'RUNNING') throw Object.assign(new Error('Avatar provider task is still running'), { code: 'EXTERNAL_TASK_PENDING', retryable: true });
     const taskError = task as { errorCode?: string; errorMessage?: string };
@@ -72,7 +74,12 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
       return { generationId: generation.id, outputAssetId: asset.id, state: 'SUCCEEDED' };
     } finally { await rm(tempPath, { force: true }); }
   } catch (error) {
-    if (signal.aborted || (error as { code?: unknown }).code === 'EXTERNAL_TASK_PENDING') throw error;
+    if (signal.aborted) {
+      if (remoteTaskId && deps.avatarProvider.cancelTask) await deps.avatarProvider.cancelTask(remoteTaskId).catch(() => undefined);
+      await deps.digitalHuman.cancelAvatar(generation.id);
+      throw error;
+    }
+    if ((error as { code?: unknown }).code === 'EXTERNAL_TASK_PENDING') throw error;
     await deps.digitalHuman.failAvatar(generation.id, { code: typeof (error as { code?: unknown }).code === 'string' ? String((error as { code: string }).code) : 'AVATAR_GENERATION_FAILED', message: error instanceof Error ? error.message.slice(0, 200) : 'Avatar generation failed' });
     throw error;
   }

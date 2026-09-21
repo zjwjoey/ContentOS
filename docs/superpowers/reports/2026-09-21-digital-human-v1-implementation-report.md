@@ -24,6 +24,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - A named `HzAgentAvatarProvider` adapter now forms the vendor boundary; other remote providers continue to use the generic HTTP adapter.
 - Built-in HMAC/TTL Provider Media Staging is available with `CONTENTOS_MEDIA_STAGING_PROVIDER=signed-url`; ContentOS serves only READY AUDIO/VIDEO Assets through a signed query URL and never exposes `STORAGE_ROOT` or persists the temporary URL.
 - Remote avatar task adapters now preserve normalized status, model version, cost, and provider provenance; result downloads require HTTP(S) and honor Job cancellation signals.
+- Job cancellation now persists Speech/Avatar generation `CANCELLED` state and invokes the optional remote avatar `cancelTask`, including the race window immediately after remote submission; a worker regression test covers external-task cancellation.
 - The named HZAgent adapter is now configuration-driven for submit/task paths and authentication header/scheme, and accepts common camelCase/snake_case task response aliases without leaking vendor details into the service layer.
 - Synthetic subtitle timeline export as Edit Manifest cues, SRT, and ASS through the Speech Generation API.
 - SRT/ASS subtitle downloads now persist idempotent `TEXT` Assets with project ownership and expose the Asset content route, so subtitle files are traceable and reusable rather than transient response bodies.
@@ -37,13 +38,13 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 
 - Targeted TypeScript compilation: passed.
 - Digital Human/config/worker unit tests and provider contract checks: passed.
-- Digital Human/API/provider suite: 10 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, concurrent Speech/Avatar idempotency checks, signed staging, subtitle Asset persistence, and fail-closed capability checks.
+- Digital Human/API/provider suite: 11 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, concurrent Speech/Avatar idempotency checks, signed staging, subtitle Asset persistence, fail-closed capability checks, and external-task cancellation.
 - The Digital Human API integration suite also verifies subtitle generation creates a `TEXT` Asset and that the stored subtitle can be downloaded through the project Asset route.
 - Format check: passed (467 files).
 - Lint check: passed (176 TypeScript files).
 - `git diff --check`: passed.
 - Full TypeScript baseline: passed after restoring the workspace dependency links with the lockfile's `autoInstallPeers=false` setting.
-- Full baseline test run: 280 passed / 3 failed when pointed at the configured PostgreSQL test service on port `55433`. All remaining failures are shared test-database migration-history issues: that database still records the pre-existing `0037_script_editing_v3_settings` migration, whose down file is not present in this branch. The clean temporary-schema migration matrix passes 9/9, and the Digital Human test suite passes 9/9.
+- Full baseline test run: the previously verified direct run recorded 280 passed / 3 failed when pointed at the configured PostgreSQL test service on port `55433`. All remaining failures are shared test-database migration-history issues: that database still records the pre-existing `0037_script_editing_v3_settings` migration, whose down file is not present in this branch. The clean temporary-schema migration matrix passes 9/9, and the current Digital Human test suite passes 11/11.
 - Root TypeScript build, Web production build, format, lint, typecheck, and `git diff --check` pass on the current worktree. The Web build was run directly from `apps/web` because the isolated worktree's root `node_modules` is a junction to the original repository and pnpm 11 refuses that junction for task-state storage.
 
 ## Runtime status
