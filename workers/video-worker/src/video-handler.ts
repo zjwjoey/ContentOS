@@ -7,10 +7,68 @@ import type { JobLeaseCancellationHandler, JobRecord, JobService } from '../../.
 import { ensureStandaloneWorkspace, JianyingDraftImporter, materialSourceFingerprint, planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, rerollEditorialClip, ScriptEditingV3Service, QwenEmbeddingProvider, QwenVisualAnalysisProvider, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoJobPayload, type VideoService } from '../../../packages/modules/video/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import type { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
-import { generateRepresentativeFrames, renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
+import { concatDraftPreviewFragments, generateRepresentativeFrames, muxDraftPreviewAudio, renderDraftPreviewFragment, renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
+import type { EditManifestV0 } from '../../../packages/contracts/src/index.js';
 import { detectShotsV1 } from '../../../packages/modules/video/src/index.js';
 
 export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; localMedia?: LocalMediaSourceService; localPathAccess?: LocalPathAccessService; mediaProvider?: ExternalVideoProvider; }
+
+export function createDraftPreviewJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
+  return async (job, _attemptId, signal) => {
+    if (job.type !== 'EDIT_V3_DRAFT_PREVIEW') throw new Error('DRAFT_PREVIEW_JOB_TYPE_INVALID');
+    const payload = job.payload as { sessionId?: string; manifestId?: string; snapshotId?: string; workspaceId?: string; mode?: 'DRAFT' | 'FAST' };
+    if (!payload.sessionId || !payload.manifestId || !payload.snapshotId || !payload.workspaceId || !payload.mode) throw new Error('DRAFT_PREVIEW_PAYLOAD_INVALID');
+    const row = (await deps.db.query('select manifest from edit_manifests where id=$1 and workspace_id=$2', [payload.manifestId, payload.workspaceId])).rows[0] as { manifest?: EditManifestV0 } | undefined;
+    if (!row?.manifest) throw new Error('DRAFT_PREVIEW_MANIFEST_NOT_FOUND');
+    const manifest = row.manifest;
+    const clips = manifest.timeline.filter((clip) => clip.role !== 'INTRO' && clip.role !== 'OUTRO');
+    if (!clips.length) throw new Error('DRAFT_PREVIEW_NO_FRAGMENTS');
+    const assetIds = [...new Set(clips.map((clip) => clip.assetId))];
+    const assetRows = await deps.db.query<{ asset_id: string; source_fingerprint: string | null; source_path: string }>('select asset_id,source_fingerprint,source_path from material_pool_items where snapshot_id=$1 and asset_id=any($2::text[])', [payload.snapshotId, assetIds]);
+    const assetFingerprints = new Map(assetRows.rows.map((item) => [item.asset_id, item.source_fingerprint]));
+    const previewRoot = `${deps.storage.root}/script-editing-v3/previews/${payload.sessionId}/${payload.mode.toLowerCase()}`;
+    const fragmentRoot = `${previewRoot}/fragments`;
+    const fragmentPaths: string[] = [];
+    let renderedFragmentCount = 0;
+    let reusedFragmentCount = 0;
+    let changedClipCount = 0;
+    let cursor = 0;
+    const startedAt = Date.now();
+    for (const [index, clip] of clips.entries()) {
+      signal.throwIfAborted();
+      const visualStart = clip.timelineStartMs ?? cursor;
+      const visualDurationMs = Math.max(clip.durationMs, (clip.timelineEndMs ?? visualStart + clip.durationMs) - visualStart);
+      cursor = visualStart + visualDurationMs;
+      const sourceOutMs = clip.sourceOutMs ?? clip.sourceInMs + clip.durationMs;
+      const fingerprint = assetFingerprints.get(clip.assetId) || `${clip.sourcePath}:${clip.sourceInMs}:${sourceOutMs}`;
+      const fragmentKey = `${payload.mode.toLowerCase()}-${index}-${clip.sentenceId || clip.assetId}`;
+      const cached = (await deps.db.query<{ output_path: string }>('select output_path from script_editing_v3_preview_fragments where workspace_id=$1 and fragment_key=$2 and source_fingerprint=$3 and source_in_ms=$4 and source_out_ms=$5 and status=\'READY\' and output_path is not null order by updated_at desc limit 1', [payload.workspaceId, fragmentKey, fingerprint, clip.sourceInMs, sourceOutMs])).rows[0];
+      let fragmentPath = cached?.output_path || `${fragmentRoot}/${index}-${Buffer.from(`${fingerprint}:${clip.sourceInMs}:${sourceOutMs}`).toString('base64url').slice(0, 32)}.mp4`;
+      if (cached?.output_path && await accessFile(cached.output_path).then(() => true).catch(() => false)) reusedFragmentCount += 1;
+      else {
+        changedClipCount += 1;
+        const localSubtitles = deps.fontFile ? (manifest.subtitles || []).filter((item) => item.endMs > visualStart && item.startMs < visualStart + visualDurationMs).map((item) => ({ ...item, startMs: Math.max(0, item.startMs - visualStart), endMs: Math.min(visualDurationMs, item.endMs - visualStart) })) : undefined;
+        const localOverlays = deps.fontFile ? (manifest.textOverlays || []).filter((item) => item.endMs > visualStart && item.startMs < visualStart + visualDurationMs).map((item) => ({ ...item, startMs: Math.max(0, item.startMs - visualStart), endMs: Math.min(visualDurationMs, item.endMs - visualStart) })) : undefined;
+        await renderDraftPreviewFragment({ inputPath: clip.sourcePath, outputPath: fragmentPath, sourceInMs: clip.sourceInMs, sourceOutMs, visualDurationMs, canvas: manifest.canvas, ...(localSubtitles?.length ? { subtitles: localSubtitles } : {}), ...(manifest.subtitleStyle ? { subtitleStyle: manifest.subtitleStyle } : {}), ...(localOverlays?.length ? { textOverlays: localOverlays } : {}), ffmpegPath: deps.ffmpegPath, ffprobePath: deps.ffprobePath, ...(deps.fontFile ? { fontFile: deps.fontFile } : {}), signal });
+        renderedFragmentCount += 1;
+      }
+      await deps.db.query("insert into script_editing_v3_preview_fragments (id,workspace_id,manifest_id,fragment_key,source_fingerprint,source_in_ms,source_out_ms,output_path,status,metadata) values ($1,$2,$3,$4,$5,$6,$7,$8,'READY',$9) on conflict (manifest_id,fragment_key,source_fingerprint,source_in_ms,source_out_ms) do update set output_path=excluded.output_path,status='READY',metadata=excluded.metadata,updated_at=now()", [`preview-fragment-${randomUUID()}`, payload.workspaceId, payload.manifestId, fragmentKey, fingerprint, clip.sourceInMs, sourceOutMs, fragmentPath, { mode: payload.mode, sentenceId: clip.sentenceId || null }]);
+      fragmentPaths.push(fragmentPath);
+    }
+    const concatStartedAt = Date.now();
+    const concatPath = `${previewRoot}/concat.mp4`;
+    await concatDraftPreviewFragments({ fragmentPaths, outputPath: concatPath, ffmpegPath: deps.ffmpegPath, ffprobePath: deps.ffprobePath, signal });
+    let outputPath = concatPath;
+    if (manifest.audio.voicePath && await accessFile(manifest.audio.voicePath).then(() => true).catch(() => false)) {
+      outputPath = `${previewRoot}/draft-preview.mp4`;
+      await muxDraftPreviewAudio({ videoPath: concatPath, audioPath: manifest.audio.voicePath, outputPath, durationMs: fragmentPaths.length ? cursor : 0, ffmpegPath: deps.ffmpegPath, ffprobePath: deps.ffprobePath, signal });
+    }
+    const metrics = { draftPreviewTotalMs: Date.now() - startedAt, changedClipCount, reusedFragmentCount, renderedFragmentCount, concatMs: Date.now() - concatStartedAt };
+    await deps.db.query("insert into script_editing_v3_preview_fragments (id,workspace_id,manifest_id,fragment_key,source_fingerprint,source_in_ms,source_out_ms,output_path,status,metadata) values ($1,$2,$3,$4,$5,0,1,$6,'READY',$7) on conflict (manifest_id,fragment_key,source_fingerprint,source_in_ms,source_out_ms) do update set output_path=excluded.output_path,status='READY',metadata=excluded.metadata,updated_at=now()", [`preview-output-${randomUUID()}`, payload.workspaceId, payload.manifestId, `__concat__-${payload.mode.toLowerCase()}`, `${payload.manifestId}:${payload.mode}`, outputPath, metrics]);
+    console.log(JSON.stringify({ level: 'info', event: 'script_editing_v3.draft_preview', sessionId: payload.sessionId, manifestId: payload.manifestId, mode: payload.mode, ...metrics }));
+    return { mode: payload.mode, manifestId: payload.manifestId, outputPath, ...metrics };
+  };
+}
 
 export function createVisualAnalysisJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
   return async (job, _attemptId, signal) => {

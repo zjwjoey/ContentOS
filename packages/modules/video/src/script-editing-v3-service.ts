@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import type { Pool } from 'pg';
@@ -30,6 +31,14 @@ export async function ensureStandaloneWorkspace(db: Pool, workspaceId: string): 
 export function materialSourceFingerprint(input: { fileSize?: number | null | undefined; modifiedAt?: string | null | undefined; durationMs: number }): string {
   const modifiedAt = input.modifiedAt ? new Date(String(input.modifiedAt)).toISOString() : '';
   return `${Number(input.fileSize || 0)}:${modifiedAt}:${Math.max(0, Math.round(input.durationMs))}`;
+}
+
+async function fileSourceFingerprint(path: string, fallback: string): Promise<string> {
+  try {
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+    return `sha256:${hash.digest('hex')}`;
+  } catch { return fallback; }
 }
 
 function tokens(value: string): string[] {
@@ -261,7 +270,7 @@ export class ScriptEditingV3Service {
     for (const row of result.rows as PoolRow[]) {
       const canonical = resolve(String(row.source_path)).toLowerCase();
       const key = `${canonical}:${Number(row.file_size || 0)}:${Number(row.duration_ms)}`;
-      if (!deduped.has(key)) deduped.set(key, { ...row, canonical_path: canonical, asset_id: String(row.file_id), source_fingerprint: materialSourceFingerprint({ fileSize: row.file_size == null ? null : Number(row.file_size), modifiedAt: row.modified_at == null ? null : String(row.modified_at), durationMs: Number(row.duration_ms) }), availability: row.index_availability === 'MISSING' ? 'MISSING' : row.available === false ? 'UNREADABLE' : 'VALID', error_message: row.error_message || null, source_ref: { sourceRootId: String(row.source_root_id), usageCount: Number(row.usage_count || 0), ...(row.last_used_at ? { lastUsedAt: new Date(String(row.last_used_at)).toISOString() } : {}) }, gold: false });
+      if (!deduped.has(key)) deduped.set(key, { ...row, canonical_path: canonical, asset_id: String(row.file_id), source_fingerprint: await fileSourceFingerprint(String(row.source_path), materialSourceFingerprint({ fileSize: row.file_size == null ? null : Number(row.file_size), modifiedAt: row.modified_at == null ? null : String(row.modified_at), durationMs: Number(row.duration_ms) })), availability: row.index_availability === 'MISSING' ? 'MISSING' : row.available === false ? 'UNREADABLE' : 'VALID', error_message: row.error_message || null, source_ref: { sourceRootId: String(row.source_root_id), usageCount: Number(row.usage_count || 0), ...(row.last_used_at ? { lastUsedAt: new Date(String(row.last_used_at)).toISOString() } : {}) }, gold: false });
     }
     for (const sourcePath of sourceFiles) {
       const canonicalPath = resolve(sourcePath);
@@ -283,7 +292,7 @@ export class ScriptEditingV3Service {
         errorMessage = error instanceof Error ? error.message.slice(0, 200) : '无法读取视频元数据';
       }
       const key = `${canonical}:${Number(fileSize || 0)}:${Number(metadata.durationMs)}`;
-      if (!deduped.has(key)) deduped.set(key, { canonical_path: canonical, asset_id: existing?.file_id || `local-file-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`, source_path: sourcePath, file_name: basename(sourcePath), duration_ms: metadata.durationMs, width: metadata.width, height: metadata.height, fps: metadata.fps, format: metadata.format, codec: metadata.videoCodec || null, file_size: fileSize, modified_at: modifiedAt, source_fingerprint: materialSourceFingerprint({ fileSize, modifiedAt, durationMs: metadata.durationMs }), tags: [], availability, error_message: errorMessage, source_ref: { sourceFile: true }, gold: false });
+      if (!deduped.has(key)) deduped.set(key, { canonical_path: canonical, asset_id: existing?.file_id || `local-file-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`, source_path: sourcePath, file_name: basename(sourcePath), duration_ms: metadata.durationMs, width: metadata.width, height: metadata.height, fps: metadata.fps, format: metadata.format, codec: metadata.videoCodec || null, file_size: fileSize, modified_at: modifiedAt, source_fingerprint: await fileSourceFingerprint(canonicalPath, materialSourceFingerprint({ fileSize, modifiedAt, durationMs: metadata.durationMs })), tags: [], availability, error_message: errorMessage, source_ref: { sourceFile: true }, gold: false });
     }
     if (roots.length) {
       const missingRows = await this.db.query(`select distinct on (i.file_id) i.file_id,i.file_name,f.source_path,i.duration_ms,i.width,i.height,i.fps,i.codec,i.file_size,i.modified_at,i.tags,i.thumbnail_key,i.usage_count,i.last_used_at,i.source_root_id from local_media_index i join local_media_scan_files f on f.file_id=i.file_id join local_media_scans s on s.id=f.scan_id where s.workspace_id=$1 and i.source_root_id=any($2::text[]) and i.availability='MISSING' order by i.file_id,s.scanned_at desc nulls last`, [input.workspaceId, roots]);
@@ -486,11 +495,19 @@ export class ScriptEditingV3Service {
     return { session, manifest };
   }
 
-  async listRevisionHistory(sessionId: string): Promise<Array<{ id: string; revision: number; status: string; parentManifestId: string | null; current: boolean; createdAt: string; operation: unknown[] }>> {
+  async listRevisionHistory(sessionId: string): Promise<Array<{ id: string; revision: number; status: string; parentManifestId: string | null; current: boolean; createdAt: string; operation: unknown[]; changedSentenceIds: string[] }>> {
     const session = (await this.db.query('select workspace_id,current_manifest_id from script_editing_v3_sessions where id=$1', [sessionId])).rows[0] as PoolRow | undefined;
     if (!session) throw new Error('SCRIPT_EDITING_V3_SESSION_NOT_FOUND');
-    const result = await this.db.query("select id,revision,status,parent_manifest_id,created_at,edit_operations from edit_manifests where workspace_id=$1 and (manifest->'metadata'->>'v3SessionId'=$2 or id=$3) order by revision desc,id desc", [String(session.workspace_id), sessionId, session.current_manifest_id || '']);
-    return result.rows.map((row) => ({ id: String(row.id), revision: Number(row.revision), status: String(row.status), parentManifestId: row.parent_manifest_id ? String(row.parent_manifest_id) : null, current: String(row.id) === String(session.current_manifest_id), createdAt: new Date(String(row.created_at)).toISOString(), operation: Array.isArray(row.edit_operations) ? row.edit_operations : [] }));
+    const result = await this.db.query("select id,revision,status,parent_manifest_id,created_at,edit_operations,manifest from edit_manifests where workspace_id=$1 and (manifest->'metadata'->>'v3SessionId'=$2 or id=$3) order by revision desc,id desc", [String(session.workspace_id), sessionId, session.current_manifest_id || '']);
+    const manifests = new Map(result.rows.map((row) => [String(row.id), row.manifest as EditManifestV0]));
+    return result.rows.map((row) => {
+      const current = row.parent_manifest_id ? manifests.get(String(row.parent_manifest_id)) : undefined;
+      const next = row.manifest as EditManifestV0;
+      const previousBySentence = new Map((current?.timeline || []).filter((clip) => clip.sentenceId).map((clip) => [clip.sentenceId!, clip]));
+      const changedSentenceIds = [...new Set((next.timeline || []).filter((clip) => clip.sentenceId).map((clip) => clip.sentenceId!).filter((sentenceId) => JSON.stringify(previousBySentence.get(sentenceId) || null) !== JSON.stringify(next.timeline.find((clip) => clip.sentenceId === sentenceId) || null)))];
+      for (const sentenceId of previousBySentence.keys()) if (!next.timeline.some((clip) => clip.sentenceId === sentenceId)) changedSentenceIds.push(sentenceId);
+      return { id: String(row.id), revision: Number(row.revision), status: String(row.status), parentManifestId: row.parent_manifest_id ? String(row.parent_manifest_id) : null, current: String(row.id) === String(session.current_manifest_id), createdAt: new Date(String(row.created_at)).toISOString(), operation: Array.isArray(row.edit_operations) ? row.edit_operations : [], changedSentenceIds: [...new Set(changedSentenceIds)] };
+    });
   }
 
   async changeRevision(sessionId: string, action: 'UNDO' | 'REDO' | 'RESTORE', targetManifestId?: string, reason?: string): Promise<{ manifestId: string; revision: number; action: string }> {
@@ -533,9 +550,11 @@ export class ScriptEditingV3Service {
     const probe = await probeMedia(newPath, process.env.FFPROBE_PATH || 'ffprobe');
     const durationClose = Math.abs(Number(probe.durationMs) - Number(row.duration_ms)) <= 500;
     const dimensionsClose = !Number(row.width) || !Number(row.height) || (Number(probe.width) === Number(row.width) && Number(probe.height) === Number(row.height));
-    if ((!durationClose || !dimensionsClose) && !allowMismatch) throw new Error('RELINK_FINGERPRINT_MISMATCH');
-    const fingerprint = materialSourceFingerprint({ fileSize: details.size, modifiedAt: details.mtime.toISOString(), durationMs: Number(probe.durationMs) });
-    const confidence = row.source_fingerprint === fingerprint ? 'HIGH' : allowMismatch ? 'FORCED' : 'REVIEW_REQUIRED';
+    const sizeClose = !row.file_size || Number(row.file_size) === details.size;
+    const fingerprint = await fileSourceFingerprint(newPath, materialSourceFingerprint({ fileSize: details.size, modifiedAt: details.mtime.toISOString(), durationMs: Number(probe.durationMs) }));
+    const fingerprintMatches = row.source_fingerprint === fingerprint;
+    if (!fingerprintMatches && !allowMismatch) throw new Error(!durationClose || !dimensionsClose || !sizeClose ? 'RELINK_FINGERPRINT_MISMATCH' : 'RELINK_CONFIRMATION_REQUIRED');
+    const confidence = fingerprintMatches ? 'HIGH' : 'FORCED';
     const client = await this.db.connect();
     try {
       await client.query('begin');
@@ -644,22 +663,23 @@ export class ScriptEditingV3Service {
 
   async applyOperation(sessionId: string, operation: EditOperationV3): Promise<{ manifestId: string; revision: number }> {
     const current = await this.currentManifest(sessionId);
-    const clipIndex = current.manifest.timeline.findIndex((clip) => clip.sentenceId === operation.sentenceId);
-    if (clipIndex < 0) throw new Error('SCRIPT_EDITING_V3_SENTENCE_NOT_FOUND');
-    const currentClip = current.manifest.timeline[clipIndex]!;
-    if (currentClip.locked && operation.type !== 'UNLOCK_CLIP') throw new Error('SCRIPT_EDITING_V3_CLIP_LOCKED');
+    const clipIndex = 'sentenceId' in operation ? current.manifest.timeline.findIndex((clip) => clip.sentenceId === operation.sentenceId) : -1;
+    if ('sentenceId' in operation && clipIndex < 0) throw new Error('SCRIPT_EDITING_V3_SENTENCE_NOT_FOUND');
+    const currentClip = clipIndex >= 0 ? current.manifest.timeline[clipIndex]! : undefined;
+    if (currentClip?.locked && operation.type !== 'UNLOCK_CLIP') throw new Error('SCRIPT_EDITING_V3_CLIP_LOCKED');
     const snapshot = await this.getSnapshot(String(current.session.material_pool_snapshot_id));
     const itemById = new Map(snapshot.items.map((item) => [item.assetId, item]));
-    await this.addImportedAssetItems(String(current.session.workspace_id), [currentClip.assetId], itemById);
+    if (currentClip) await this.addImportedAssetItems(String(current.session.workspace_id), [currentClip.assetId], itemById);
     if (operation.type === 'TRIM_SOURCE') {
       if (operation.sourceInMs < 0 || operation.sourceOutMs <= operation.sourceInMs) throw new Error('TRIM_SOURCE_OUT_OF_BOUNDS');
-      if (operation.sourceOutMs - operation.sourceInMs !== currentClip.durationMs) throw new Error('TRIM_DURATION_MUST_MATCH_SENTENCE');
+      if (!currentClip || operation.sourceOutMs - operation.sourceInMs !== currentClip.durationMs) throw new Error('TRIM_DURATION_MUST_MATCH_SENTENCE');
       const asset = itemById.get(currentClip.assetId); if (!asset || operation.sourceOutMs > asset.durationMs) throw new Error('TRIM_SOURCE_OUT_OF_BOUNDS');
     }
     let normalizedOperation: EditOperationV3 = operation;
     if (operation.type === 'REPLACE_CLIP' || operation.type === 'MANUAL_SELECT_CLIP') {
       const asset = itemById.get(operation.assetId); if (!asset) throw new Error('ASSET_NOT_IN_MATERIAL_POOL_SNAPSHOT');
       if (asset.availability !== 'VALID' || asset.disabled) throw new Error('ASSET_NOT_AVAILABLE_FOR_SELECTION');
+      if (!currentClip) throw new Error('SCRIPT_EDITING_V3_SENTENCE_NOT_FOUND');
       const maxSourceInMs = Math.max(0, asset.durationMs - currentClip.durationMs);
       const requestedSourceInMs = operation.sourceInMs ?? (operation.type === 'MANUAL_SELECT_CLIP' ? 0 : currentClip.sourceInMs);
       const sourceInMs = Math.min(maxSourceInMs, Math.max(0, requestedSourceInMs));
@@ -667,10 +687,24 @@ export class ScriptEditingV3Service {
       normalizedOperation = { ...operation, sourceInMs };
     }
     const adjustmentAssets: AdjustmentAsset[] = snapshot.items.map((item) => ({ id: item.assetId, durationMs: item.durationMs, sourcePath: item.sourcePath, originalName: item.fileName, tags: [...item.tags, ...(item.aiTags || [])] }));
-    const next = applyQuickEditOperations(current.manifest, [normalizedOperation], adjustmentAssets);
-    const clip = next.timeline[clipIndex]!;
-    if (operation.type === 'TRIM_SOURCE') { clip.selectionSource = 'MANUAL'; clip.revision = Number(clip.revision || 1) + 1; }
+    let quickOperation: import('./quick-edit.js').QuickEditOperation;
+    if (operation.type === 'REORDER') {
+      const indexes = operation.sentenceIds.map((sentenceId) => current.manifest.timeline.findIndex((clip) => clip.sentenceId === sentenceId));
+      if (indexes.length !== current.manifest.timeline.length || indexes.some((index) => index < 0) || new Set(indexes).size !== indexes.length) throw new Error('SCRIPT_EDITING_V3_REORDER_INVALID');
+      quickOperation = { type: 'REORDER', clipIndexes: indexes };
+    } else {
+      quickOperation = normalizedOperation;
+    }
+    const next = applyQuickEditOperations(current.manifest, [quickOperation], adjustmentAssets);
+    if (operation.type === 'REORDER') {
+      let cursor = 0;
+      for (const clip of next.timeline) { clip.timelineStartMs = cursor; clip.timelineEndMs = cursor + clip.durationMs; cursor += clip.durationMs; }
+    }
+    const operationSentenceId = 'sentenceId' in operation ? operation.sentenceId : undefined;
+    const clip = operationSentenceId && clipIndex >= 0 ? next.timeline.find((candidate) => candidate.sentenceId === operationSentenceId) : undefined;
+    if (operation.type === 'TRIM_SOURCE' && clip) { clip.selectionSource = 'MANUAL'; clip.revision = Number(clip.revision || 1) + 1; }
     if (operation.type === 'REPLACE_CLIP' || operation.type === 'MANUAL_SELECT_CLIP') {
+      if (!clip) throw new Error('SCRIPT_EDITING_V3_SENTENCE_NOT_FOUND');
       clip.sourceSegmentId = operation.sourceSegmentId || `segment-${sessionId}-${operation.sentenceId}-${clip.assetId}-${operation.type === 'MANUAL_SELECT_CLIP' ? 'manual' : 'replace'}`;
       clip.selectionSource = operation.type === 'MANUAL_SELECT_CLIP' ? 'MANUAL' : 'HISTORY';
       clip.locked = false;
@@ -679,7 +713,7 @@ export class ScriptEditingV3Service {
     next.metadata = { ...(next.metadata || {}), v3Revision: Number(current.session.revision) + 1 };
     validateEditManifest(next);
     const result = await this.persistManifest(sessionId, next, normalizedOperation);
-    if (operation.type === 'REPLACE_CLIP') {
+    if (operation.type === 'REPLACE_CLIP' && currentClip) {
       await this.incrementUsageStats(String(current.session.workspace_id), currentClip.assetId, { replaceCount: 1 });
       await this.incrementUsageStats(String(current.session.workspace_id), operation.assetId, { selectedCount: 1 });
       await this.db.query('insert into script_editing_v3_usage_events (id,workspace_id,session_id,manifest_id,asset_id,event_type,sentence_id) values ($1,$2,$3,$4,$5,\'REPLACED_OUT\',$6)', [`v3-usage-replaced-${randomUUID()}`, String(current.session.workspace_id), sessionId, result.manifestId, currentClip.assetId, operation.sentenceId]);

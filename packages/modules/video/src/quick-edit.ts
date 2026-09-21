@@ -43,6 +43,7 @@ function requireInteger(value: unknown, field: string, minimum = 0): number {
 function parseSentenceOperation(value: Record<string, unknown>): EditOperationV3 {
   if (typeof value.sentenceId !== 'string' || !value.sentenceId.trim()) throw new Error('Quick Edit sentenceId is required');
   if (value.type === 'LOCK_CLIP' || value.type === 'UNLOCK_CLIP') return { type: value.type, sentenceId: value.sentenceId.trim() };
+  if (value.type === 'REMOVE_CLIP') return { type: 'REMOVE_CLIP', sentenceId: value.sentenceId.trim() };
   if (value.type === 'TRIM_SOURCE') {
     const sourceInMs = requireInteger(value.sourceInMs, 'sourceInMs');
     const sourceOutMs = requireInteger(value.sourceOutMs, 'sourceOutMs', 1);
@@ -152,12 +153,13 @@ function assertPermutation(indexes: number[], length: number): void {
 type ClipIndexedQuickEditOperation = Exclude<QuickEditOperation, EditOperationV3>;
 
 function normalizeOperation(operation: QuickEditOperation, manifest: EditManifestV0): ClipIndexedQuickEditOperation {
-  if (!('sentenceId' in operation)) return operation;
+  if (!('sentenceId' in operation)) return operation as ClipIndexedQuickEditOperation;
   const clipIndex = manifest.timeline.findIndex((clip) => clip.sentenceId === operation.sentenceId);
   if (clipIndex < 0) throw new Error(`Quick Edit sentenceId ${operation.sentenceId} was not found`);
   if (operation.type === 'TRIM_SOURCE') return { type: 'TRIM_SOURCE', clipIndex, sourceInMs: operation.sourceInMs, sourceOutMs: operation.sourceOutMs };
   if (operation.type === 'LOCK_CLIP') return { type: 'LOCK_CLIP', clipIndex };
   if (operation.type === 'UNLOCK_CLIP') return { type: 'UNLOCK_CLIP', clipIndex };
+  if (operation.type === 'REMOVE_CLIP') return { type: 'REMOVE', clipIndex };
   if (operation.type === 'REPLACE_CLIP') return { type: 'REPLACE_CLIP', clipIndex, assetId: operation.assetId, ...(operation.sourceInMs === undefined ? {} : { sourceInMs: operation.sourceInMs }) };
   return { type: 'MANUAL_SELECT_CLIP', clipIndex, assetId: operation.assetId, ...(operation.sourceInMs === undefined ? {} : { sourceInMs: operation.sourceInMs }) };
 }

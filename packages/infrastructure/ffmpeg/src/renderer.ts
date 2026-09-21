@@ -221,3 +221,66 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
     return { outputPath, ...probe };
   } catch (error) { await rm(tempOutput, { force: true }); if (overlayDir) await rm(overlayDir, { recursive: true, force: true }); throw error; }
 }
+
+export async function renderDraftPreviewFragment(input: {
+  inputPath: string;
+  outputPath: string;
+  sourceInMs: number;
+  sourceOutMs: number;
+  visualDurationMs?: number;
+  canvas: EditManifestV0['canvas'];
+  subtitles?: EditManifestV0['subtitles'];
+  subtitleStyle?: EditManifestV0['subtitleStyle'];
+  textOverlays?: EditManifestV0['textOverlays'];
+  ffmpegPath: string;
+  ffprobePath: string;
+  fontFile?: string;
+  signal?: AbortSignal;
+}): Promise<RenderResult> {
+  const durationMs = input.sourceOutMs - input.sourceInMs;
+  if (durationMs <= 0) throw new Error('DRAFT_PREVIEW_FRAGMENT_RANGE_INVALID');
+  const manifest: EditManifestV0 = {
+    schemaVersion: 'EDIT_MANIFEST_V0',
+    workspaceId: 'draft-preview',
+    seed: 1,
+    canvas: input.canvas,
+    timeline: [{ assetId: 'draft-preview-source', sourcePath: input.inputPath, sourceInMs: input.sourceInMs, sourceOutMs: input.sourceOutMs, durationMs, transition: 'cut', timelineStartMs: 0, timelineEndMs: Math.max(durationMs, input.visualDurationMs || durationMs), role: 'CONTENT' }],
+    audio: { volume: 1 },
+    ...(input.subtitles?.length ? { subtitles: input.subtitles } : {}),
+    ...(input.subtitleStyle ? { subtitleStyle: input.subtitleStyle } : {}),
+    ...(input.textOverlays?.length ? { textOverlays: input.textOverlays } : {}),
+    output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' },
+  };
+  return renderEditManifest({ manifest, outputPath: input.outputPath, ffmpegPath: input.ffmpegPath, ffprobePath: input.ffprobePath, ...(input.fontFile ? { fontFile: input.fontFile } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+}
+
+export async function concatDraftPreviewFragments(input: { fragmentPaths: string[]; outputPath: string; ffmpegPath: string; ffprobePath: string; signal?: AbortSignal }): Promise<RenderResult> {
+  if (!input.fragmentPaths.length) throw new Error('DRAFT_PREVIEW_NO_FRAGMENTS');
+  await mkdir(dirname(input.outputPath), { recursive: true });
+  const listPath = `${input.outputPath}.${randomUUID()}.txt`;
+  const tempOutput = `${input.outputPath}.${randomUUID()}.part.mp4`;
+  const list = input.fragmentPaths.map((path) => `file '${path.replaceAll('\\', '/').replaceAll("'", "'\\''")}'`).join('\n');
+  await writeFile(listPath, `${list}\n`, 'utf8');
+  try {
+    await run(input.ffmpegPath, ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', '-movflags', '+faststart', tempOutput], input.signal);
+    const probe = await probeMedia(tempOutput, input.ffprobePath, input.signal);
+    if (probe.format !== 'mp4' || probe.durationMs <= 0 || probe.videoCodec !== 'h264') throw new Error(`DRAFT_PREVIEW_CONCAT_INVALID:${JSON.stringify(probe)}`);
+    await rename(tempOutput, input.outputPath);
+    return { outputPath: input.outputPath, ...probe };
+  } finally {
+    await rm(listPath, { force: true });
+    await rm(tempOutput, { force: true });
+  }
+}
+
+export async function muxDraftPreviewAudio(input: { videoPath: string; audioPath: string; outputPath: string; durationMs: number; ffmpegPath: string; ffprobePath: string; signal?: AbortSignal }): Promise<RenderResult> {
+  await mkdir(dirname(input.outputPath), { recursive: true });
+  const tempOutput = `${input.outputPath}.${randomUUID()}.part.mp4`;
+  try {
+    await run(input.ffmpegPath, ['-y', '-i', input.videoPath, '-i', input.audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-t', String(input.durationMs / 1000), '-movflags', '+faststart', tempOutput], input.signal);
+    const probe = await probeMedia(tempOutput, input.ffprobePath, input.signal);
+    if (probe.format !== 'mp4' || probe.durationMs <= 0 || !probe.audio) throw new Error(`DRAFT_PREVIEW_AUDIO_INVALID:${JSON.stringify(probe)}`);
+    await rename(tempOutput, input.outputPath);
+    return { outputPath: input.outputPath, ...probe };
+  } finally { await rm(tempOutput, { force: true }); }
+}

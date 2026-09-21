@@ -120,6 +120,11 @@ test('Script Editing V3 browser flow covers pool, candidates, locking and full p
     await firstCard.getByRole('button', { name: '保存 Trim' }).click();
     await page.getByText('已保存 Source Monitor 区间').waitFor({ state: 'visible', timeout: 10_000 });
 
+    const revisionPreview = page.locator('section.card').filter({ hasText: 'V3.4 Revision / Preview' });
+    await revisionPreview.getByRole('button', { name: '更新 Draft Preview' }).click();
+    await page.getByText(/Draft Preview 已完成：复用/).waitFor({ state: 'visible', timeout: 120_000 });
+    assert.ok(await revisionPreview.locator('video').getAttribute('src'));
+
     await page.getByRole('button', { name: '渲染整片', exact: true }).click();
     await page.getByText('整片渲染已进入 durable Job；正在等待成片…').waitFor({ state: 'visible', timeout: 10_000 });
     const preview = page.locator('video.history-preview').last();

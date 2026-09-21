@@ -134,7 +134,9 @@ export type EditOperationV3 =
   | { type: 'TRIM_SOURCE'; sentenceId: string; sourceInMs: number; sourceOutMs: number }
   | { type: 'LOCK_CLIP'; sentenceId: string }
   | { type: 'UNLOCK_CLIP'; sentenceId: string }
-  | { type: 'MANUAL_SELECT_CLIP'; sentenceId: string; assetId: string; sourceInMs?: number | undefined; sourceSegmentId?: string | undefined };
+  | { type: 'MANUAL_SELECT_CLIP'; sentenceId: string; assetId: string; sourceInMs?: number | undefined; sourceSegmentId?: string | undefined }
+  | { type: 'REMOVE_CLIP'; sentenceId: string }
+  | { type: 'REORDER'; sentenceIds: string[] };
 
 export interface SentenceEditingCardV3 {
   sentenceId: string;

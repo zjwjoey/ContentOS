@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { copyFile, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -9,6 +9,7 @@ import { generateFixtureVideo, probeMedia } from '../../packages/infrastructure/
 import { AssetService } from '../../packages/modules/asset/src/index.js';
 import { FakeExternalVideoProvider, HybridMediaService, JianyingDraftImporter, ScriptEditingV3Service } from '../../packages/modules/video/src/index.js';
 import { LocalStorageProvider } from '../../packages/infrastructure/storage/src/index.js';
+import { createDraftPreviewJobHandler } from '../../workers/video-worker/src/video-handler.js';
 
 const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55433/contentos_test';
 
@@ -188,6 +189,73 @@ test('V3 can build a material snapshot from explicitly selected video files with
       assert.equal(secondSnapshot.items[0]?.assetId, snapshot.items[0]?.assetId);
     });
   } finally { await rm(sourceDirectory, { recursive: true, force: true }); }
+});
+
+test('V3.4 draft preview renders fragments and reuses the unchanged fragment after a replacement', async () => {
+  const root = await mkdtemp(join(process.env.TEMP || process.env.TMP || '.', 'contentos-v3-preview-'));
+  try {
+    const firstPath = join(root, 'first.mp4');
+    const secondPath = join(root, 'second.mp4');
+    const replacementPath = join(root, 'replacement.mp4');
+    await generateFixtureVideo(firstPath, process.env.FFMPEG_PATH || 'ffmpeg', 'blue', 5);
+    await generateFixtureVideo(secondPath, process.env.FFMPEG_PATH || 'ffmpeg', 'green', 5);
+    await generateFixtureVideo(replacementPath, process.env.FFMPEG_PATH || 'ffmpeg', 'red', 5);
+    await withDatabase(async (db, workspaceId) => {
+      const storage = new LocalStorageProvider(join(root, 'storage'));
+      const service = new ScriptEditingV3Service(db);
+      const snapshot = await service.createMaterialPoolSnapshot({ workspaceId, sourceFiles: [firstPath, secondPath, replacementPath] });
+      const session = await service.createSession({ workspaceId, snapshotId: snapshot.id, script: '第一句。第二句。', sentences: [{ text: '第一句', durationMs: 3_000 }, { text: '第二句', durationMs: 3_000 }] });
+      await service.generate(session.id);
+      const firstManifest = (await db.query<{ id: string; manifest: Record<string, unknown> }>('select m.id,m.manifest from edit_manifests m join script_editing_v3_sessions s on s.current_manifest_id=m.id where s.id=$1', [session.id])).rows[0]!;
+      const handler = createDraftPreviewJobHandler({ db, storage, ffmpegPath: process.env.FFMPEG_PATH || 'ffmpeg', ffprobePath: process.env.FFPROBE_PATH || 'ffprobe' } as never);
+      const job = { id: 'preview-job-1', type: 'EDIT_V3_DRAFT_PREVIEW', payload: { sessionId: session.id, manifestId: firstManifest.id, snapshotId: snapshot.id, workspaceId, mode: 'DRAFT' } } as never;
+      const firstResult = await handler(job, 'attempt-1', new AbortController().signal) as { renderedFragmentCount: number; reusedFragmentCount: number; outputPath: string };
+      assert.equal(firstResult.renderedFragmentCount, 2);
+      assert.equal(firstResult.reusedFragmentCount, 0);
+      assert.equal((await access(firstResult.outputPath).then(() => true).catch(() => false)), true);
+      assert.ok((await probeMedia(firstResult.outputPath, process.env.FFPROBE_PATH || 'ffprobe')).durationMs >= 5_500);
+      const usedAssetIds = ((await db.query<{ manifest: { timeline: Array<{ assetId: string }> } }>('select manifest from edit_manifests where id=$1', [firstManifest.id])).rows[0]?.manifest.timeline || []).map((clip) => clip.assetId);
+      const replacementAsset = snapshot.items.find((item) => !usedAssetIds.includes(item.assetId))!;
+      await service.applyOperation(session.id, { type: 'REPLACE_CLIP', sentenceId: 'sentence-0', assetId: replacementAsset.assetId });
+      const secondManifest = (await db.query<{ id: string }>('select current_manifest_id as id from script_editing_v3_sessions where id=$1', [session.id])).rows[0]!;
+      const secondJob = { id: 'preview-job-2', type: 'EDIT_V3_DRAFT_PREVIEW', payload: { sessionId: session.id, manifestId: secondManifest.id, snapshotId: snapshot.id, workspaceId, mode: 'DRAFT' } } as never;
+      const secondResult = await handler(secondJob, 'attempt-2', new AbortController().signal) as { renderedFragmentCount: number; reusedFragmentCount: number };
+      assert.equal(secondResult.renderedFragmentCount, 1);
+      assert.equal(secondResult.reusedFragmentCount, 1);
+    });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('V3.4 relink preserves material identity and rejects an unconfirmed different file', async () => {
+  const root = await mkdtemp(join(process.env.TEMP || process.env.TMP || '.', 'contentos-v3-relink-'));
+  try {
+    const originalPath = join(root, 'original.mp4');
+    const movedPath = join(root, 'moved.mp4');
+    const differentPath = join(root, 'different.mp4');
+    await generateFixtureVideo(originalPath, process.env.FFMPEG_PATH || 'ffmpeg', 'blue', 5);
+    await copyFile(originalPath, movedPath);
+    await generateFixtureVideo(differentPath, process.env.FFMPEG_PATH || 'ffmpeg', 'red', 5);
+    await withDatabase(async (db, workspaceId) => {
+      const service = new ScriptEditingV3Service(db);
+      const snapshot = await service.createMaterialPoolSnapshot({ workspaceId, sourceFiles: [originalPath] });
+      const item = snapshot.items[0]!;
+      await service.setManualTags(snapshot.id, item.assetId, ['货架']);
+      await service.setGold(snapshot.id, item.assetId, true);
+      await db.query('insert into script_editing_v3_asset_usage_stats (workspace_id,asset_id,selected_count) values ($1,$2,3) on conflict (workspace_id,asset_id) do update set selected_count=3', [workspaceId, item.assetId]);
+      const relinked = await service.relinkMaterial(snapshot.id, item.assetId, movedPath);
+      assert.equal(relinked.assetId, item.assetId);
+      assert.equal(relinked.confidence, 'HIGH');
+      const after = (await service.getSnapshot(snapshot.id)).items[0]!;
+      assert.equal(after.sourcePath, movedPath);
+      assert.deepEqual(after.tags, ['货架']);
+      assert.equal(after.gold, true);
+      assert.equal(after.selectedCount, 3);
+      await assert.rejects(service.relinkMaterial(snapshot.id, item.assetId, differentPath), /RELINK_CONFIRMATION_REQUIRED/);
+      const forced = await service.relinkMaterial(snapshot.id, item.assetId, differentPath, 'operator', true);
+      assert.equal(forced.assetId, item.assetId);
+      assert.equal(forced.confidence, 'FORCED');
+    });
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('Jianying directory import is read-only and maps history back to the existing Asset', async () => {
