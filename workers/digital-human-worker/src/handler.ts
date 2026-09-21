@@ -3,11 +3,12 @@ import { createWriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { Transform, Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { JobRunner, type JobRecord, type JobService } from '../../../packages/modules/job/src/index.js';
+import { JobRunner, type JobLeaseCancellationHandler, type JobRecord, type JobService } from '../../../packages/modules/job/src/index.js';
 import { DigitalHumanProviderError, DigitalHumanService } from '../../../packages/modules/digital-human/src/index.js';
 import type { AvatarProvider, ProviderMediaStaging, SpeechProvider } from '../../../packages/contracts/src/index.js';
 import { AssetCatalogService, AssetService } from '../../../packages/modules/asset/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
+import { DIGITAL_HUMAN_JOB_TYPES } from './job-types.js';
 
 export interface DigitalHumanWorkerDependencies {
   jobs: JobService;
@@ -28,6 +29,25 @@ function payloadOf(job: JobRecord): { generationId: string; projectId: string; k
   if (payload.schemaVersion !== 'DIGITAL_HUMAN_JOB_PAYLOAD_V1' || typeof payload.generationId !== 'string' || typeof payload.projectId !== 'string' || typeof payload.correlationId !== 'string' || !['SPEECH', 'AVATAR'].includes(String(payload.kind))) throw Object.assign(new Error('Invalid Digital Human Job payload'), { code: 'DIGITAL_HUMAN_PAYLOAD_INVALID', retryable: false });
   if (payload.projectId !== job.projectId) throw Object.assign(new Error('Digital Human Job project mismatch'), { code: 'DIGITAL_HUMAN_PROJECT_MISMATCH', retryable: false });
   return { generationId: payload.generationId, projectId: payload.projectId, kind: payload.kind as 'SPEECH' | 'AVATAR', correlationId: payload.correlationId };
+}
+
+export function createDigitalHumanLeaseCancellationHandler(deps: DigitalHumanWorkerDependencies): JobLeaseCancellationHandler {
+  return async (job) => {
+    if (!DIGITAL_HUMAN_JOB_TYPES.includes(job.type as typeof DIGITAL_HUMAN_JOB_TYPES[number])) return false;
+    const payload = job.payload && typeof job.payload === 'object' ? job.payload as Record<string, unknown> : {};
+    const projectId = typeof payload.projectId === 'string' ? payload.projectId : job.projectId;
+    const generationId = typeof payload.generationId === 'string' ? payload.generationId : '';
+    if (!projectId || !generationId) return true;
+    if (payload.kind === 'AVATAR') {
+      const generation = await deps.digitalHuman.getAvatarGeneration(projectId, generationId);
+      if (generation?.externalTaskId && deps.avatarProvider.cancelTask) await deps.avatarProvider.cancelTask(generation.externalTaskId);
+      if (generation) await deps.digitalHuman.cancelAvatar(generation.id);
+    } else if (payload.kind === 'SPEECH') {
+      const generation = await deps.digitalHuman.getSpeechGeneration(projectId, generationId);
+      if (generation) await deps.digitalHuman.cancelSpeech(generation.id);
+    }
+    return true;
+  };
 }
 
 const DEFAULT_MAX_REMOTE_RESULT_BYTES = 500 * 1024 * 1024;

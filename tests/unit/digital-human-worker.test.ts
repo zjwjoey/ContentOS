@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDigitalHumanDevRunner } from '../../workers/digital-human-worker/src/dev-main.js';
 import { createDigitalHumanWorker } from '../../workers/digital-human-worker/src/main.js';
-import { createDigitalHumanJobHandler } from '../../workers/digital-human-worker/src/handler.js';
+import { createDigitalHumanJobHandler, createDigitalHumanLeaseCancellationHandler } from '../../workers/digital-human-worker/src/handler.js';
 
 const fakeDependencies = (jobs: { listRunnable: () => Promise<never[]>; reconcileExpiredLeases: () => Promise<number> }) => ({ jobs, digitalHuman: {}, assets: {}, assetService: {}, storage: {}, speechProvider: {}, avatarProvider: {}, staging: {} } as never);
 
@@ -50,6 +50,19 @@ test('Digital Human worker cancels an external avatar task when its job is abort
   await assert.rejects(running);
   assert.deepEqual(cancelledTasks, ['remote-1']);
   assert.deepEqual(cancelledGenerations, ['generation-1']);
+});
+
+test('Digital Human lease recovery cancels a remote Avatar task after worker loss', async () => {
+  const cancelledTasks: string[] = []; const cancelledGenerations: string[] = [];
+  const handler = createDigitalHumanLeaseCancellationHandler({
+    digitalHuman: {
+      getAvatarGeneration: async () => ({ id: 'generation-recovery', externalTaskId: 'remote-recovery' }),
+      cancelAvatar: async (id: string) => { cancelledGenerations.push(id); },
+    },
+    avatarProvider: { cancelTask: async (id: string) => { cancelledTasks.push(id); } },
+  } as never);
+  const result = await handler({ type: 'AVATAR_LIPSYNC_GENERATE', projectId: 'project-1', payload: { kind: 'AVATAR', projectId: 'project-1', generationId: 'generation-recovery' } } as never, {} as never);
+  assert.equal(result, true); assert.deepEqual(cancelledTasks, ['remote-recovery']); assert.deepEqual(cancelledGenerations, ['generation-recovery']);
 });
 
 test('Digital Human worker resubmits only after an old external task is terminal', async () => {

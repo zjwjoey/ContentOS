@@ -6,7 +6,7 @@ import { JobService } from '../../../packages/modules/job/src/index.js';
 import { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import { probeMedia } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 import { createDigitalHumanWorker } from './main.js';
-import type { DigitalHumanWorkerDependencies } from './handler.js';
+import { createDigitalHumanLeaseCancellationHandler, type DigitalHumanWorkerDependencies } from './handler.js';
 import { DIGITAL_HUMAN_JOB_TYPES } from './job-types.js';
 
 export interface DigitalHumanDevRunnerOptions { pollIntervalMs?: number; batchSize?: number; recoveryIntervalMs?: number; }
@@ -15,9 +15,9 @@ export interface DigitalHumanDevRunner { start(): Promise<void>; stop(signal?: s
 export function createDigitalHumanDevRunner(dependencies: DigitalHumanWorkerDependencies, options: DigitalHumanDevRunnerOptions = {}): DigitalHumanDevRunner {
   const pollIntervalMs = options.pollIntervalMs ?? 250; const batchSize = options.batchSize ?? 10; const recoveryIntervalMs = options.recoveryIntervalMs ?? 5_000;
   if (!Number.isInteger(pollIntervalMs) || pollIntervalMs <= 0 || !Number.isInteger(batchSize) || batchSize <= 0 || !Number.isInteger(recoveryIntervalMs) || recoveryIntervalMs <= 0) throw new Error('Digital Human runner options must be positive integers');
-  const runtime = createDigitalHumanWorker(dependencies); let pollTimer: NodeJS.Timeout | undefined; let recoveryTimer: NodeJS.Timeout | undefined; let started = false; let polling = false; let recovering = false;
+  const runtime = createDigitalHumanWorker(dependencies); const cancellation = createDigitalHumanLeaseCancellationHandler(dependencies); let pollTimer: NodeJS.Timeout | undefined; let recoveryTimer: NodeJS.Timeout | undefined; let started = false; let polling = false; let recovering = false;
   const pollOnce = async (): Promise<void> => { if (polling) return; polling = true; try { const jobs = await dependencies.jobs.listRunnable(DIGITAL_HUMAN_JOB_TYPES, batchSize); await Promise.all(jobs.map((job) => runtime.execute(job.type, { jobId: job.id }))); } finally { polling = false; } };
-  const recoverOnce = async (): Promise<void> => { if (recovering) return; recovering = true; try { await dependencies.jobs.reconcileExpiredLeases(new Date()); } finally { recovering = false; } };
+  const recoverOnce = async (): Promise<void> => { if (recovering) return; recovering = true; try { await dependencies.jobs.reconcileExpiredLeases(new Date(), cancellation); } finally { recovering = false; } };
   return {
     pollOnce, recoverOnce,
     async start() { if (started) return; await recoverOnce(); await runtime.start(); started = true; await pollOnce(); pollTimer = setInterval(() => { void pollOnce(); }, pollIntervalMs); recoveryTimer = setInterval(() => { void recoverOnce(); }, recoveryIntervalMs); pollTimer.unref(); recoveryTimer.unref(); },
