@@ -25,6 +25,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Remote avatar task adapters now preserve normalized status, model version, cost, and provider provenance; result downloads require HTTP(S) and honor Job cancellation signals.
 - The named HZAgent adapter is now configuration-driven for submit/task paths and authentication header/scheme, and accepts common camelCase/snake_case task response aliases without leaking vendor details into the service layer.
 - Synthetic subtitle timeline export as Edit Manifest cues, SRT, and ASS through the Speech Generation API.
+- SRT/ASS subtitle downloads now persist idempotent `TEXT` Assets with project ownership and expose the Asset content route, so subtitle files are traceable and reusable rather than transient response bodies.
 - Capability endpoint at `/api/v1/projects/:projectId/digital-human/capabilities`, with the UI displaying live speech/avatar availability instead of assuming a provider is configured.
 - Successful Avatar Generations can now create an idempotent `EDIT_MANIFEST_V0` plus the existing `VIDEO_RENDER` Job; the workspace redirects to the existing video editor, preserving generated speech, synthetic subtitle cues, 9:16 canvas, and FFmpeg rendering.
 - Loopback IndexTTS gateway source at `tools/indextts-gateway/gateway.py` with input-root allowlisting, output-root isolation, request correlation logging, and `/health`, `/capabilities`, and `/v1/speech/generate` endpoints.
@@ -36,8 +37,9 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Targeted TypeScript compilation: passed.
 - Digital Human/config/worker unit tests and provider contract checks: passed.
 - Digital Human API integration suite: 9 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, concurrent Speech/Avatar idempotency checks, and the signed staging route.
-- Format check: passed (302 files).
-- Lint check: passed (151 TypeScript files).
+- The Digital Human API integration suite also verifies subtitle generation creates a `TEXT` Asset and that the stored subtitle can be downloaded through the project Asset route.
+- Format check: passed (467 files).
+- Lint check: passed (176 TypeScript files).
 - `git diff --check`: passed.
 - Full TypeScript baseline: passed after restoring the workspace dependency links with the lockfile's `autoInstallPeers=false` setting.
 - Full baseline test run: 280 passed / 3 failed when pointed at the configured PostgreSQL test service on port `55433`. All remaining failures are shared test-database migration-history issues: that database still records the pre-existing `0037_script_editing_v3_settings` migration, whose down file is not present in this branch. The clean temporary-schema migration matrix passes 9/9, and the Digital Human test suite passes 9/9.

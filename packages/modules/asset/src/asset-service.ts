@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import type { Pool } from 'pg';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 
-export interface ImportAssetInput { projectId?: string; workspaceId?: string; global?: boolean; sourcePath: string; kind: string; role?: 'SOURCE' | 'VOICE' | 'OUTPUT'; metadata?: Record<string, unknown>; }
+export interface ImportAssetInput { projectId?: string; workspaceId?: string; global?: boolean; sourcePath: string; kind: string; role?: 'SOURCE' | 'VOICE' | 'OUTPUT'; metadata?: Record<string, unknown>; skipProbe?: boolean; }
 export interface AssetResult { id: string; projectId: string; workspaceId?: string; checksum: string; storageKey: string; byteSize: number; status: 'READY' | 'DEDUPED'; }
 export interface AssetProbe { durationMs?: number; width?: number; height?: number; format?: string; }
 export interface AssetTransaction { query(text: string, values?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }> }
@@ -19,7 +19,7 @@ export class AssetService {
   constructor(private readonly db: Pool, private readonly storage: LocalStorageProvider, private readonly probe?: (path: string) => Promise<AssetProbe>) {}
   async prepareFile(input: ImportAssetInput): Promise<PreparedAssetImport> {
     const staged = await this.storage.stage(input.sourcePath);
-    const probe = this.probe ? await this.probe(input.sourcePath) : undefined;
+    const probe = this.probe && !input.skipProbe ? await this.probe(input.sourcePath) : undefined;
     const promoted = await this.storage.promote(staged);
     return new ActivePreparedAssetImport(staged.checksum, staged.byteSize, promoted.storageKey, staged.originalName, this.storage, probe, promoted.deduped);
   }

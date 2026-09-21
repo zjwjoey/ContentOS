@@ -186,6 +186,14 @@ export class AssetCatalogService {
     return { id: String(row.id), kind: String(row.kind) as AssetSummaryV0['kind'], lifecycle: 'READY', byteSize: Number(row.byte_size), checksum: String(row.checksum), originalName: typeof metadata.originalName === 'string' ? metadata.originalName : String(row.storage_key).split('/').pop() || 'asset', metadata: safeMetadata(row), storageKey: String(row.storage_key) };
   }
 
+  async getReadyDigitalHumanSubtitle(projectId: string, speechGenerationId: string, format: 'srt' | 'ass'): Promise<ReadyAssetContent | null> {
+    const result = await this.db.query("select a.* from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 where a.project_id = $1 and a.kind = 'TEXT' and a.lifecycle = 'READY' and a.metadata->'digitalHuman'->>'speechGenerationId' = $2 and a.metadata->>'format' = $3 order by a.created_at desc, a.id desc limit 1", [projectId, speechGenerationId, format]);
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {};
+    return { id: String(row.id), kind: 'TEXT', lifecycle: 'READY', byteSize: Number(row.byte_size), checksum: String(row.checksum), originalName: typeof metadata.originalName === 'string' ? metadata.originalName : String(row.storage_key).split('/').pop() || 'asset', metadata: safeMetadata(row), storageKey: String(row.storage_key) };
+  }
+
   async getReadyAssetForProviderStaging(assetId: string): Promise<ReadyAssetContent | null> {
     const result = await this.db.query("select * from assets where id = $1 and kind in ('AUDIO','VIDEO') and lifecycle = 'READY'", [assetId]);
     const row = result.rows[0] as Record<string, unknown> | undefined;

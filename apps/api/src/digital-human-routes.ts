@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { DigitalHumanService, SyntheticTimingProvider, subtitleTimelineToAss, subtitleTimelineToManifestCues, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../../packages/modules/digital-human/src/index.js';
 import type { RuntimeDigitalHumanProviders } from '../../../packages/modules/digital-human/src/index.js';
 import { DEFAULT_PRESENTATION_SETTINGS_V1, type EditManifestV0 } from '../../../packages/contracts/src/index.js';
-import type { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
+import { AssetService, type AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
 import type { VideoAdjustmentService, VideoService } from '../../../packages/modules/video/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
@@ -17,7 +19,7 @@ const speechInput = z.object({ voiceProfileId: z.string().trim().min(1).max(200)
 const avatarGenerationInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), avatarClipId: z.string().trim().min(1).max(200), speechAssetId: z.string().trim().min(1).max(200), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), parameters: z.record(z.string(), z.unknown()).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
 const editManifestInput = z.object({ seed: z.number().int().default(1), includeSubtitles: z.boolean().default(true) }).strict();
 
-export interface DigitalHumanRouteDependencies { digitalHuman: DigitalHumanService; projects: ProjectService; providers?: RuntimeDigitalHumanProviders; quickEdit?: VideoAdjustmentService; video?: VideoService; assets?: AssetCatalogService; storage?: LocalStorageProvider; mediaStagingSecret?: string | undefined; }
+export interface DigitalHumanRouteDependencies { digitalHuman: DigitalHumanService; projects: ProjectService; providers?: RuntimeDigitalHumanProviders; quickEdit?: VideoAdjustmentService; video?: VideoService; assets?: AssetCatalogService; assetService?: AssetService; storage?: LocalStorageProvider; mediaStagingSecret?: string | undefined; }
 function fail(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, status: number, code: string, message: string): unknown { return reply.code(status).send({ error: { code, message, details: [] } }); }
 function invalid(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, details: unknown): unknown { return reply.code(422).send({ error: { code: 'DIGITAL_HUMAN_VALIDATION_ERROR', message: 'Invalid digital human input', details } }); }
 function projectId(request: { params: unknown }): string { return (request.params as { projectId: string }).projectId; }
@@ -84,8 +86,20 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
     if (!generation) return fail(reply, 404, 'SPEECH_GENERATION_NOT_FOUND', 'Speech Generation not found');
     if (generation.status !== 'SUCCEEDED' || !generation.durationMs) return fail(reply, 409, 'SPEECH_GENERATION_NOT_READY', 'Speech Generation has no measured duration yet');
     const timeline = await new SyntheticTimingProvider().align({ text: generation.text, durationMs: generation.durationMs, language: String(generation.parameters.language || 'zh') }); const format = query.format || 'json';
-    if (format === 'srt') return reply.type('application/x-subrip; charset=utf-8').send(subtitleTimelineToSrt(timeline));
-    if (format === 'ass') return reply.type('text/x-ssa; charset=utf-8').send(subtitleTimelineToAss(timeline));
+    const persistSubtitle = async (subtitleFormat: 'srt' | 'ass', body: string): Promise<string | undefined> => {
+      const existing = deps.assets ? await deps.assets.getReadyDigitalHumanSubtitle(params.projectId, generation.id, subtitleFormat) : null;
+      if (existing) return existing.id;
+      if (!deps.assetService || !deps.storage) return undefined;
+      const tempPath = join(deps.storage.root, 'staging', `digital-human-${generation.id}.${subtitleFormat}`);
+      await mkdir(join(deps.storage.root, 'staging'), { recursive: true });
+      await writeFile(tempPath, body, 'utf8');
+      try {
+        const asset = await deps.assetService.importFile({ projectId: params.projectId, sourcePath: tempPath, kind: 'TEXT', role: 'OUTPUT', skipProbe: true, metadata: { format: subtitleFormat, digitalHuman: { speechGenerationId: generation.id, format: subtitleFormat } } });
+        return asset.id;
+      } finally { await rm(tempPath, { force: true }); }
+    };
+    if (format === 'srt') { const body = subtitleTimelineToSrt(timeline); const assetId = await persistSubtitle('srt', body); if (assetId) reply.header('x-contentos-asset-id', assetId); return reply.type('application/x-subrip; charset=utf-8').send(body); }
+    if (format === 'ass') { const body = subtitleTimelineToAss(timeline); const assetId = await persistSubtitle('ass', body); if (assetId) reply.header('x-contentos-asset-id', assetId); return reply.type('text/x-ssa; charset=utf-8').send(body); }
     if (format !== 'json' && format !== 'manifest') return fail(reply, 422, 'SUBTITLE_FORMAT_INVALID', 'Subtitle format must be json, manifest, srt or ass');
     return { timeline, subtitles: subtitleTimelineToManifestCues(timeline) };
   });

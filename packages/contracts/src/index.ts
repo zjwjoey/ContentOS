@@ -26,7 +26,7 @@ export { validateApprovalDecision } from './approval.js';
 export type { ApprovalDecisionV0, ApprovalStatus, ApprovalTargetType } from './approval.js';
 export type { ProjectCenterAction, ProjectCenterActionKind, ProjectCenterHealthLevel, ProjectCenterJobSummary, ProjectCenterSeverity, ProjectCenterSnapshot, ProjectCenterStage, ProjectCenterStageKey, ProjectCenterStageStatus } from './project-center.js';
 export { validateAssetImportV0, validateAssetSummaryV0 } from './asset.js';
-export type { AssetImportKind, AssetImportState, AssetImportV0, AssetSummaryV0 } from './asset.js';
+export type { AssetImportKind, AssetImportState, AssetKindV0, AssetImportV0, AssetSummaryV0 } from './asset.js';
 export { validateVideoWorkspaceSnapshotV0 } from './video.js';
 export type { VideoWorkspaceSnapshotV0 } from './video.js';
 export { validateBenchmarkAccountV1, validateBenchmarkContentV1, validateBenchmarkAnalysisV1 } from './benchmark.js';
