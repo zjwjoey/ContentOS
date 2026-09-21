@@ -37,17 +37,10 @@ function jsonObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-const externalStatuses = ['QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'] as const;
-function externalStatus(value: unknown, fallback: typeof externalStatuses[number] = 'QUEUED'): typeof externalStatuses[number] {
-  const normalized = String(value || '').toUpperCase(); return externalStatuses.includes(normalized as typeof externalStatuses[number]) ? normalized as typeof externalStatuses[number] : normalized === 'COMPLETED' ? 'SUCCEEDED' : fallback;
-}
 function optionalNumber(value: unknown): number | undefined {
   const result = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(result) ? result : undefined;
 }
-function optionalString(value: unknown): string | undefined { return typeof value === 'string' && value.trim() ? value : undefined; }
-function firstString(body: Record<string, unknown>, ...keys: string[]): string | undefined { for (const key of keys) { const value = optionalString(body[key]); if (value) return value; } return undefined; }
-function firstNumber(body: Record<string, unknown>, ...keys: string[]): number | undefined { for (const key of keys) { const value = optionalNumber(body[key]); if (value !== undefined) return value; } return undefined; }
 
 export function isPublicHttpUrl(value: string): boolean {
   try {
@@ -138,77 +131,6 @@ export class FakeSpeechProvider implements SpeechProvider {
   constructor(private readonly outputPath: string) {}
   async getCapabilities(): Promise<SpeechCapabilities> { return { providerId: this.providerId, local: true, voiceClone: true, emotion: true, speed: true, languages: ['zh', 'en'], supportsReferenceAudio: true, requiresReferenceAudio: false, supportsVoiceId: false, maxTextCharacters: 20_000 }; }
   async generateSpeech(_request: SpeechGenerationRequest): Promise<SpeechGenerationResult> { return { providerId: this.providerId, model: 'fake-speech', modelVersion: '1', outputPath: this.outputPath, durationMs: 1_000, latencyMs: 1, provenance: { fake: true } }; }
-}
-
-export interface HttpAvatarProviderOptions {
-  providerId: string;
-  baseUrl: string;
-  apiKey: string;
-  submitPath?: string;
-  taskPath?: string;
-  capabilitiesPath?: string;
-  model?: string;
-  authHeaderName?: string;
-  authScheme?: string;
-  idempotencyHeaderName?: string;
-  requestTimeoutMs?: number;
-  capabilityTimeoutMs?: number;
-  fetchImpl?: typeof fetch;
-}
-
-export class HttpAvatarProvider implements AvatarProvider {
-  readonly providerId: string;
-  private readonly fetchImpl: typeof fetch;
-  constructor(private readonly options: HttpAvatarProviderOptions) { this.providerId = options.providerId; this.fetchImpl = options.fetchImpl || fetch; }
-  private authHeaders(): Record<string, string> { const name = this.options.authHeaderName || 'authorization'; const value = this.options.authScheme === '' ? this.options.apiKey : `${this.options.authScheme || 'Bearer'} ${this.options.apiKey}`; return { [name]: value }; }
-  async getCapabilities(): Promise<AvatarCapabilities> {
-    const response = await providerFetch(this.fetchImpl, new URL(this.options.capabilitiesPath || '/v1/capabilities', this.options.baseUrl), { headers: this.authHeaders() }, timeoutMs(this.options.capabilityTimeoutMs, DEFAULT_CAPABILITY_TIMEOUT_MS));
-    if (!response.ok) throw responseError(response.status);
-    const body = jsonObject(await response.json()); const capabilities = jsonObject(body.capabilities || body); const rawSupportedFormats = capabilities.supportedFormats ?? capabilities.supported_formats; const supportedFormats: string[] = Array.isArray(rawSupportedFormats) ? rawSupportedFormats.filter((value: unknown): value is string => typeof value === 'string') : ['mp4']; const rawSupportedAudioFormats = capabilities.supportedAudioFormats ?? capabilities.supported_audio_formats; const supportedAudioFormats: string[] = Array.isArray(rawSupportedAudioFormats) ? rawSupportedAudioFormats.filter((value: unknown): value is string => typeof value === 'string') : []; const maxDurationSeconds = optionalNumber(capabilities.maxDurationSeconds ?? capabilities.max_duration_seconds);
-    return { providerId: this.providerId, local: false, videoToVideo: capabilities.videoToVideo !== false && capabilities.video_to_video !== false, imageToVideo: capabilities.imageToVideo === true || capabilities.image_to_video === true, requiresPublicUrl: capabilities.requiresPublicUrl !== false && capabilities.requires_public_url !== false, supportedFormats: supportedFormats.length ? supportedFormats : ['mp4'], ...(supportedAudioFormats.length ? { supportedAudioFormats } : {}), ...(maxDurationSeconds === undefined ? {} : { maxDurationSeconds }) };
-  }
-  async submitLipSync(request: AvatarGenerationRequest): Promise<AvatarExternalTask> {
-    const idempotencyHeaderName = this.options.idempotencyHeaderName === '' ? '' : (this.options.idempotencyHeaderName || 'Idempotency-Key');
-    const response = await providerFetch(this.fetchImpl, new URL(this.options.submitPath || '/v1/lipsync/tasks', this.options.baseUrl), {
-      method: 'POST', headers: { 'content-type': 'application/json', ...this.authHeaders(), ...(idempotencyHeaderName ? { [idempotencyHeaderName]: request.requestId } : {}) },
-      body: JSON.stringify({ requestId: request.requestId, projectId: request.projectId, jobId: request.jobId, correlationId: request.correlationId, audioUrl: request.audioUrl, videoUrl: request.videoUrl, model: request.model || this.options.model, parameters: request.parameters }),
-    }, timeoutMs(this.options.requestTimeoutMs, DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS));
-    if (!response.ok) throw responseError(response.status);
-    const body = jsonObject(await response.json()); const taskId = firstString(body, 'taskId', 'task_id', 'id') || '';
-    if (!taskId) throw new DigitalHumanProviderError('EXTERNAL_FAILED', 'Avatar provider returned no task id', false);
-    const costAmount = firstNumber(body, 'costAmount', 'cost_amount'); const billingQuantity = firstNumber(body, 'billingQuantity', 'billing_quantity', 'quantity'); const billingUnit = firstString(body, 'billingUnit', 'billing_unit', 'unit'); const provenance = jsonObject(body.provenance); const outputUrl = firstString(body, 'outputUrl', 'output_url', 'resultUrl', 'result_url', 'videoUrl', 'video_url'); if (outputUrl && !isPublicHttpUrl(outputUrl)) throw new DigitalHumanProviderError('EXTERNAL_FAILED', 'Avatar provider returned an unsafe result URL', false); const model = firstString(body, 'model'); const modelVersion = firstString(body, 'modelVersion', 'model_version'); const costCurrency = firstString(body, 'costCurrency', 'cost_currency');
-    return { externalTaskId: taskId, providerId: this.providerId, status: externalStatus(body.status ?? body.state), ...(outputUrl ? { outputUrl } : {}), ...(model ? { model } : {}), ...(modelVersion ? { modelVersion } : {}), ...(costAmount === undefined ? {} : { costAmount }), ...(costCurrency ? { costCurrency } : {}), ...(billingQuantity === undefined ? {} : { billingQuantity }), ...(billingUnit ? { billingUnit } : {}), ...(Object.keys(provenance).length ? { provenance } : {}) };
-  }
-  async getTask(externalTaskId: string): Promise<AvatarTaskStatus> {
-    const path = (this.options.taskPath || '/v1/lipsync/tasks/:id').replace(':id', encodeURIComponent(externalTaskId));
-    const response = await providerFetch(this.fetchImpl, new URL(path, this.options.baseUrl), { headers: this.authHeaders() }, timeoutMs(this.options.requestTimeoutMs, DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS));
-    if (!response.ok) throw responseError(response.status);
-    const body = jsonObject(await response.json()); const rawStatus = String(body.status ?? body.state ?? '').toUpperCase();
-    if (!externalStatuses.includes(rawStatus as typeof externalStatuses[number]) && rawStatus !== 'COMPLETED') throw new DigitalHumanProviderError('EXTERNAL_FAILED', 'Avatar provider returned an invalid task status', false);
-    const costAmount = firstNumber(body, 'costAmount', 'cost_amount'); const billingQuantity = firstNumber(body, 'billingQuantity', 'billing_quantity', 'quantity'); const billingUnit = firstString(body, 'billingUnit', 'billing_unit', 'unit'); const provenance = jsonObject(body.provenance); const outputUrl = firstString(body, 'outputUrl', 'output_url', 'resultUrl', 'result_url', 'videoUrl', 'video_url'); if (outputUrl && !isPublicHttpUrl(outputUrl)) throw new DigitalHumanProviderError('EXTERNAL_FAILED', 'Avatar provider returned an unsafe result URL', false); const model = firstString(body, 'model'); const modelVersion = firstString(body, 'modelVersion', 'model_version'); const costCurrency = firstString(body, 'costCurrency', 'cost_currency'); const errorCode = firstString(body, 'errorCode', 'error_code'); const errorMessage = firstString(body, 'errorMessage', 'error_message');
-    return { externalTaskId, providerId: this.providerId, status: rawStatus === 'COMPLETED' ? 'SUCCEEDED' : rawStatus as AvatarTaskStatus['status'], ...(outputUrl ? { outputUrl } : {}), ...(model ? { model } : {}), ...(modelVersion ? { modelVersion } : {}), ...(costAmount === undefined ? {} : { costAmount }), ...(costCurrency ? { costCurrency } : {}), ...(billingQuantity === undefined ? {} : { billingQuantity }), ...(billingUnit ? { billingUnit } : {}), ...(Object.keys(provenance).length ? { provenance } : {}), ...(errorCode ? { errorCode } : {}), ...(errorMessage ? { errorMessage } : {}) };
-  }
-  async cancelTask(externalTaskId: string): Promise<void> { const path = (this.options.taskPath || '/v1/lipsync/tasks/:id').replace(':id', encodeURIComponent(externalTaskId)); const response = await providerFetch(this.fetchImpl, new URL(path, this.options.baseUrl), { method: 'DELETE', headers: this.authHeaders() }, timeoutMs(this.options.requestTimeoutMs, DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS)); if (!response.ok && response.status !== 404) throw responseError(response.status); }
-}
-
-/** HZAgent's vendor-specific boundary. Keep all HZAgent field/path choices here. */
-export class HzAgentAvatarProvider extends HttpAvatarProvider {
-  constructor(options: Omit<HttpAvatarProviderOptions, 'providerId'>) { super({ ...options, providerId: 'hzagent' }); }
-}
-
-export interface HttpProviderMediaStagingOptions { baseUrl: string; apiKey?: string; requestTimeoutMs?: number; fetchImpl?: typeof fetch; }
-
-export class HttpProviderMediaStaging implements ProviderMediaStaging {
-  private readonly fetchImpl: typeof fetch;
-  constructor(private readonly options: HttpProviderMediaStagingOptions) { this.fetchImpl = options.fetchImpl || fetch; }
-  async stageAsset(assetId: string, options: { ttlSeconds?: number } = {}): Promise<{ publicUrl: string; expiresAt: string }> {
-    const headers: Record<string, string> = { 'content-type': 'application/json' }; if (this.options.apiKey) headers.authorization = `Bearer ${this.options.apiKey}`;
-    const response = await providerFetch(this.fetchImpl, new URL('/v1/media/stage', this.options.baseUrl), { method: 'POST', headers, body: JSON.stringify({ assetId, ttlSeconds: options.ttlSeconds || 900 }) }, timeoutMs(this.options.requestTimeoutMs, DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS));
-    if (!response.ok) throw responseError(response.status);
-    const body = jsonObject(await response.json());
-    if (typeof body.publicUrl !== 'string' || !isPublicHttpUrl(body.publicUrl) || typeof body.expiresAt !== 'string') throw new DigitalHumanProviderError('EXTERNAL_FAILED', 'Media staging service returned an invalid public URL', false);
-    return { publicUrl: body.publicUrl, expiresAt: body.expiresAt };
-  }
 }
 
 export interface SignedProviderMediaStagingOptions { baseUrl: string; secret: string; }

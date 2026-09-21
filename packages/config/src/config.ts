@@ -24,16 +24,8 @@ export interface AppConfig {
   digitalHumanSpeechProvider: string;
   indexttsBaseUrl: string;
   digitalHumanAvatarProvider: string;
-  avatarBaseUrl: string;
-  avatarApiKey: string;
-  avatarCapabilitiesPath: string;
-  avatarSubmitPath: string;
-  avatarTaskPath: string;
-  avatarAuthHeader: string;
-  avatarAuthScheme: string;
   mediaStagingProvider: string;
   mediaStagingBaseUrl: string;
-  mediaStagingApiKey: string;
   mediaStagingSecret: string;
   digitalHumanProviderRequestTimeoutMs: number;
   digitalHumanProviderCapabilityTimeoutMs: number;
@@ -90,18 +82,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     digitalHumanSpeechProvider: env.CONTENTOS_SPEECH_PROVIDER || 'indextts25',
     indexttsBaseUrl: env.CONTENTOS_INDEXTTS_BASE_URL || 'http://127.0.0.1:8788',
     digitalHumanAvatarProvider: env.CONTENTOS_AVATAR_PROVIDER || 'hzagent',
-    avatarBaseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn',
-    avatarApiKey: env.HZAGENT_API_KEY || '',
-    avatarCapabilitiesPath: env.HZAGENT_CAPABILITIES_PATH || '',
-    avatarSubmitPath: env.HZAGENT_SUBMIT_PATH || '',
-    avatarTaskPath: env.HZAGENT_TASK_PATH || '',
-    avatarAuthHeader: env.HZAGENT_AUTH_HEADER || '',
-    // Keep the vendor authentication scheme explicit. The runtime must not invent a
-    // Bearer mapping for an unverified HZAgent contract.
-    avatarAuthScheme: env.HZAGENT_AUTH_SCHEME || '',
     mediaStagingProvider: env.CONTENTOS_MEDIA_STAGING_PROVIDER || 'http',
     mediaStagingBaseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL || '',
-    mediaStagingApiKey: env.CONTENTOS_MEDIA_STAGING_API_KEY || '',
     mediaStagingSecret: env.CONTENTOS_MEDIA_STAGING_SECRET || '',
     digitalHumanProviderRequestTimeoutMs: integer(env, 'CONTENTOS_PROVIDER_REQUEST_TIMEOUT_MS', 30_000),
     digitalHumanProviderCapabilityTimeoutMs: integer(env, 'CONTENTOS_PROVIDER_CAPABILITY_TIMEOUT_MS', 5_000),
