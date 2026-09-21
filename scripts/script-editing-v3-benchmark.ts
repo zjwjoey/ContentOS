@@ -27,6 +27,8 @@ function percentile(values: number[], fraction: number): number | null {
 }
 
 function elapsed(start: number): number { return Math.round((performance.now() - start) * 100) / 100; }
+function stats(values: number[]): { p50: number; p95: number; max: number } { return { p50: percentile(values, 0.5) || 0, p95: percentile(values, 0.95) || 0, max: Math.max(...values, 0) }; }
+function measure(operation: () => void, repetitions = 20): { p50: number; p95: number; max: number } { const values: number[] = []; for (let index = 0; index < repetitions; index += 1) { const start = performance.now(); operation(); values.push(elapsed(start)); } return stats(values); }
 
 async function main(): Promise<void> {
   const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
@@ -86,17 +88,22 @@ async function main(): Promise<void> {
       queryLatencies.push(elapsed(queryStart));
     }
 
-    const scaleBenchmarks = [] as Array<{ datasetSize: number; buildMs: number; queryP50Ms: number; pagedQueryMs: number; nPlusOneQueries: number }>;
+    const scaleBenchmarks = [] as Array<{ datasetSize: number; snapshotCreation: { p50: number; p95: number; max: number }; assetLibraryQuery: { p50: number; p95: number; max: number }; candidateSearch: { p50: number; p95: number; max: number }; manualFilter: { p50: number; p95: number; max: number }; goldFilter: { p50: number; p95: number; max: number }; usageRanking: { p50: number; p95: number; max: number }; shotSegmentRetrieval: { p50: number; p95: number; max: number }; workbenchInitialLoad: { p50: number; p95: number; max: number }; nPlusOneQueries: number }>;
     for (const datasetSize of [100, 500, 1000]) {
       const scaledItems: MaterialPoolItemV3[] = Array.from({ length: datasetSize }, (_, index) => ({ ...items[index % items.length]!, assetId: `benchmark-${datasetSize}-${index + 1}` }));
       const scaled = new InMemoryMaterialSemanticIndex();
       const buildStart = performance.now();
       await scaled.build({ snapshotId: `benchmark-${datasetSize}`, items: scaledItems });
-      const scaledQueries: number[] = [];
-      for (let index = 0; index < 20; index += 1) { const queryStart = performance.now(); scaled.search({ snapshotId: `benchmark-${datasetSize}`, queries: [`benchmark-${index % 10} 真实场景`], limit: 5 }); scaledQueries.push(elapsed(queryStart)); }
-      const pageStart = performance.now();
-      scaled.search({ snapshotId: `benchmark-${datasetSize}`, queries: ['benchmark 真实场景'], limit: 50 });
-      scaleBenchmarks.push({ datasetSize, buildMs: Math.round((performance.now() - buildStart - (scaledQueries.reduce((sum, value) => sum + value, 0))) * 100) / 100, queryP50Ms: percentile(scaledQueries, 0.5) || 0, pagedQueryMs: Math.round((performance.now() - pageStart) * 100) / 100, nPlusOneQueries: 1 });
+      const snapshotCreation = stats([elapsed(buildStart)]);
+      const libraryRows = scaledItems.map((item, index) => ({ ...item, gold: index % 7 === 0, usageCount: index % 11, recentUseCount: index % 5, shots: Array.from({ length: 3 }, (_, shotIndex) => ({ sourceInMs: shotIndex * 1_000, sourceOutMs: (shotIndex + 1) * 1_000 })) }));
+      const assetLibraryQuery = measure(() => libraryRows.filter((item) => item.fileName.includes('benchmark')).slice(0, 50));
+      const candidateSearch = measure(() => scaled.search({ snapshotId: `benchmark-${datasetSize}`, queries: ['benchmark-7 真实场景'], limit: 20 }));
+      const manualFilter = measure(() => libraryRows.filter((item) => item.tags.includes('benchmark-7')).slice(0, 50));
+      const goldFilter = measure(() => libraryRows.filter((item) => item.gold).slice(0, 50));
+      const usageRanking = measure(() => [...libraryRows].sort((left, right) => right.usageCount - left.usageCount || right.recentUseCount - left.recentUseCount).slice(0, 50));
+      const shotSegmentRetrieval = measure(() => libraryRows.flatMap((item) => item.shots).slice(0, 50));
+      const workbenchInitialLoad = measure(() => libraryRows.slice(0, 50).map((item) => ({ assetId: item.assetId, fileName: item.fileName, durationMs: item.durationMs, tags: item.tags })));
+      scaleBenchmarks.push({ datasetSize, snapshotCreation, assetLibraryQuery, candidateSearch, manualFilter, goldFilter, usageRanking, shotSegmentRetrieval, workbenchInitialLoad, nPlusOneQueries: 1 });
     }
 
     const qwenStatus = process.env.QWEN_API_KEY && process.env.QWEN_BASE_URL ? 'configured_not_invoked' : 'not_configured';
@@ -119,6 +126,8 @@ async function main(): Promise<void> {
         uiCandidateLoading: null,
       },
       qwen: { status: qwenStatus, note: '需在真实 Qwen 配置和 Gold Set 下单独记录 AI 延迟与效果；此脚本不在无授权时调用远端模型。' },
+      benchmarkScope: 'local_in_memory_operator_workload',
+      benchmarkNote: '100/500/1000 的 Asset Library、Candidate、Filter、Gold、Usage、Shots、Workbench 指标在同一批确定性内存数据上测量；实际数据库延迟需在目标部署数据库上另行记录。每页固定 50 条，批量读取假设为 1 次查询，不构造 N+1。',
       scaleBenchmarks,
       aiRetrievalGoldSet: { status: 'BLOCKED_BY_DATA', reason: '仓库未提供人工标注 Gold Set 或真实 Qwen Profile，避免用合成标签冒充真实效果。' },
     };

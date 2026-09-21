@@ -35,7 +35,7 @@ const sentencePreviewInput = z.object({ script: z.string().max(100_000), splitSe
 const localMediaScanInput = z.object({ projectId: z.string().trim().min(1).optional(), sourceRoot: z.string().trim().min(1), recursive: z.boolean().default(true), idempotencyKey: z.string().trim().min(1).max(200).optional() });
 const localMediaContentInput = z.object({ projectId: z.string().trim().min(1).optional(), workspaceId: z.string().trim().min(1).optional(), sourceRootId: z.string().trim().min(1), fileId: z.string().trim().min(1) }).refine((value) => Boolean(value.projectId || value.workspaceId));
 const localMediaIndexQuery = z.object({ projectId: z.string().trim().min(1).optional(), workspaceId: z.string().trim().min(1).optional(), query: z.string().max(200).optional(), orientation: z.enum(['ALL', 'VERTICAL', 'HORIZONTAL', 'SQUARE', 'UNKNOWN']).optional(), category: z.string().max(100).optional(), usage: z.enum(['ALL', 'UNUSED', 'RECENT', 'FREQUENT']).optional(), sort: z.enum(['NAME', 'UPDATED', 'DURATION', 'USAGE', 'RECENT', 'RECOMMENDED', 'NEWEST', 'LEAST_USED', 'MOST_RECENT']).optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }).refine((value) => Boolean(value.projectId || value.workspaceId));
-const localMediaMetaInput = z.object({ category: z.string().max(100).nullable().optional(), tags: z.array(z.string().max(80)).max(64).optional(), gold: z.boolean().optional() });
+const localMediaMetaInput = z.object({ category: z.string().max(100).nullable().optional(), tags: z.array(z.string().max(80)).max(64).optional(), gold: z.boolean().optional(), disabled: z.boolean().optional() });
 const localMediaRelinkInput = z.object({ sourcePath: z.string().trim().min(1), actor: z.string().trim().min(1).max(100).optional(), force: z.boolean().default(false) });
 const presetFields = z.object({ name: z.string().trim().min(1).max(120), description: z.string().max(500).optional(), editModeDefault: z.enum(['SCRIPT', 'RANDOM']).optional(), minClipDurationMs: z.number().int().positive().optional(), maxClipDurationMs: z.number().int().positive().optional(), preferUnusedMedia: z.boolean().optional(), introAssetId: z.string().trim().nullable().optional(), outroAssetId: z.string().trim().nullable().optional(), canvas: z.object({ width: z.literal(1080), height: z.literal(1920), aspectRatio: z.literal('9:16') }).optional(), fps: z.number().int().positive().max(120).optional() });
 const presetDurationValidation = (value: { minClipDurationMs?: number | undefined; maxClipDurationMs?: number | undefined }, context: z.RefinementCtx) => { if (value.minClipDurationMs !== undefined && value.maxClipDurationMs !== undefined && value.maxClipDurationMs < value.minClipDurationMs) context.addIssue({ code: z.ZodIssueCode.custom, path: ['maxClipDurationMs'], message: '最长镜头不能短于最短镜头' }); };
@@ -150,7 +150,8 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     if (!parsed.success || !dependencies.localMedia) return reply.code(422).send({ error: { code: 'LOCAL_MEDIA_INDEX_INVALID', message: '素材索引参数不完整。', details: parsed.success ? [] : parsed.error.issues } });
     const filters = { page: parsed.data.page, pageSize: parsed.data.pageSize, ...(parsed.data.query !== undefined ? { query: parsed.data.query } : {}), ...(parsed.data.orientation !== undefined ? { orientation: parsed.data.orientation } : {}), ...(parsed.data.category !== undefined ? { category: parsed.data.category } : {}), ...(parsed.data.usage !== undefined ? { usage: parsed.data.usage } : {}), ...(parsed.data.sort !== undefined ? { sort: parsed.data.sort } : {}) };
     const result = parsed.data.workspaceId ? await dependencies.localMedia.listWorkspaceIndexPage(parsed.data.workspaceId, filters) : await dependencies.localMedia.listIndexPage(parsed.data.projectId!, filters);
-    return { items: result.items.map(LocalMediaSourceService.toPublicFile), total: result.total, page: result.page, pageSize: result.pageSize, hasNext: result.page * result.pageSize < result.total };
+    const items = parsed.data.workspaceId ? result.items : result.items.map(LocalMediaSourceService.toPublicFile);
+    return { items, total: result.total, page: result.page, pageSize: result.pageSize, hasNext: result.page * result.pageSize < result.total };
   });
   app.patch('/api/v1/video/local-media/index/:fileId', async (request, reply) => {
     const parsed = localMediaMetaInput.safeParse(request.body || {});
@@ -163,6 +164,7 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     if (parsed.data.category !== undefined) await dependencies.localMedia.updateCategory(fileId, parsed.data.category);
     if (parsed.data.tags !== undefined) await dependencies.localMedia.updateTags(fileId, parsed.data.tags);
     if (parsed.data.gold !== undefined && workspaceId) await dependencies.localMedia.updateGold(fileId, workspaceId, parsed.data.gold);
+    if (parsed.data.disabled !== undefined) await dependencies.localMedia.updateDisabled(fileId, parsed.data.disabled);
     return { ok: true };
   });
   app.post('/api/v1/video/local-media/index/:fileId/relink', async (request, reply) => {

@@ -222,6 +222,11 @@ test('Script Editing V3.4 browser closure covers Asset Library and Gold Set work
     await page.goto(`${baseUrl}/assets/library`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('heading', { name: '长期素材库' }).waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByText('MISSING').first().waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByText('完整路径').first().waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByRole('button', { name: '禁用素材' }).first().click();
+    await page.getByRole('button', { name: '恢复素材' }).first().waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByRole('button', { name: '选择文件' }).first().waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByText(/Shots：尚未检测/).first().waitFor({ state: 'visible', timeout: 10_000 });
     const fileId = `${scan.sourceRootId}:closure-original.mp4`;
     const relink = await page.request.post(`${baseUrl}/api/v1/video/local-media/index/${encodeURIComponent(fileId)}/relink?workspaceId=${encodeURIComponent(workspaceId)}`, { data: { sourcePath: moved } });
     assert.equal(relink.status(), 200, await relink.text()); assert.equal((await relink.json() as { confidence: string }).confidence, 'HIGH');
