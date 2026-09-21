@@ -28,11 +28,12 @@ function payloadOf(job: JobRecord): { generationId: string; projectId: string; k
 async function processSpeech(job: JobRecord, attemptId: string, signal: AbortSignal, payload: ReturnType<typeof payloadOf>, deps: DigitalHumanWorkerDependencies): Promise<unknown> {
   const generation = await deps.digitalHuman.getSpeechGeneration(payload.projectId, payload.generationId); if (!generation) throw Object.assign(new Error('Speech Generation not found'), { code: 'SPEECH_GENERATION_NOT_FOUND', retryable: false });
   if (generation.status === 'SUCCEEDED') return { generationId: generation.id, outputAssetId: generation.outputAssetId, state: generation.status };
-  await deps.digitalHuman.markSpeechRunning(generation.id); const voice = await deps.digitalHuman.getVoiceProfile(payload.projectId, generation.voiceProfileId); if (!voice) throw Object.assign(new Error('Voice Profile not found'), { code: 'VOICE_PROFILE_NOT_FOUND', retryable: false });
-  const reference = voice.referenceAssetId ? await deps.assets.getProjectAsset(payload.projectId, voice.referenceAssetId) : null;
-  if (voice.referenceAssetId && !reference) throw Object.assign(new Error('Voice reference asset not found'), { code: 'VOICE_REFERENCE_ASSET_NOT_READY', retryable: false });
-  signal.throwIfAborted();
+  await deps.digitalHuman.markSpeechRunning(generation.id);
   try {
+    const voice = await deps.digitalHuman.getVoiceProfile(payload.projectId, generation.voiceProfileId); if (!voice) throw Object.assign(new Error('Voice Profile not found'), { code: 'VOICE_PROFILE_NOT_FOUND', retryable: false });
+    const reference = voice.referenceAssetId ? await deps.assets.getProjectAsset(payload.projectId, voice.referenceAssetId) : null;
+    if (voice.referenceAssetId && !reference) throw Object.assign(new Error('Voice reference asset not found'), { code: 'VOICE_REFERENCE_ASSET_NOT_READY', retryable: false });
+    signal.throwIfAborted();
     const result = await deps.speechProvider.generateSpeech({ requestId: generation.id, projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, text: generation.text, language: String(generation.parameters.language || voice.language), speed: Number(generation.parameters.speed || voice.defaultSpeed), emotion: String(generation.parameters.emotion || voice.defaultEmotion), ...(reference ? { referenceAudioPath: deps.storage.objectPath(reference.storageKey) } : {}), ...(voice.providerVoiceId ? { providerVoiceId: voice.providerVoiceId } : {}) });
     signal.throwIfAborted();
     if (!Number.isFinite(result.durationMs) || result.durationMs <= 0) throw Object.assign(new Error('Speech provider returned an invalid duration'), { code: 'SPEECH_DURATION_INVALID', retryable: false });
@@ -53,17 +54,17 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
   const generation = await deps.digitalHuman.getAvatarGeneration(payload.projectId, payload.generationId); if (!generation) throw Object.assign(new Error('Avatar Generation not found'), { code: 'AVATAR_GENERATION_NOT_FOUND', retryable: false });
   if (generation.status === 'SUCCEEDED') return { generationId: generation.id, outputAssetId: generation.outputAssetId, state: generation.status };
   await deps.digitalHuman.markAvatarRunning(generation.id);
-  const clip = await deps.digitalHuman.getAvatarClip(payload.projectId, generation.avatarClipId); const video = clip ? await deps.assets.getProjectAsset(payload.projectId, clip.assetId) : null; const audio = await deps.assets.getProjectAsset(payload.projectId, generation.speechAssetId);
-  if (!clip || !video || video.kind !== 'VIDEO' || video.lifecycle !== 'READY') throw Object.assign(new Error('Avatar source video is not ready'), { code: 'AVATAR_CLIP_ASSET_NOT_READY', retryable: false });
-  if (!audio || audio.kind !== 'AUDIO' || audio.lifecycle !== 'READY') throw Object.assign(new Error('Speech asset is not ready'), { code: 'SPEECH_ASSET_NOT_READY', retryable: false });
-  const videoDurationMs = Number(video.metadata.durationMs); const audioDurationMs = Number(audio.metadata.durationMs);
-  if (!Number.isFinite(videoDurationMs) || videoDurationMs <= 0) throw Object.assign(new Error('Avatar source video duration is invalid'), { code: 'AVATAR_CLIP_DURATION_INVALID', retryable: false });
-  if (!Number.isFinite(audioDurationMs) || audioDurationMs <= 0) throw Object.assign(new Error('Speech asset duration is invalid'), { code: 'SPEECH_ASSET_DURATION_INVALID', retryable: false });
-  const capabilities = await deps.avatarProvider.getCapabilities(); const videoFormat = String(video.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || '';
-  if (videoFormat && capabilities.supportedFormats.length > 0 && !capabilities.supportedFormats.some((format) => format.toLowerCase().replace(/^\./, '') === videoFormat)) throw Object.assign(new Error(`Avatar provider does not support ${videoFormat} video input`), { code: 'AVATAR_VIDEO_FORMAT_UNSUPPORTED', retryable: false });
-  signal.throwIfAborted();
   let remoteTaskId = generation.externalTaskId;
   try {
+    const clip = await deps.digitalHuman.getAvatarClip(payload.projectId, generation.avatarClipId); const video = clip ? await deps.assets.getProjectAsset(payload.projectId, clip.assetId) : null; const audio = video ? await deps.assets.getProjectAsset(payload.projectId, generation.speechAssetId) : null;
+    if (!clip || !video || video.kind !== 'VIDEO' || video.lifecycle !== 'READY') throw Object.assign(new Error('Avatar source video is not ready'), { code: 'AVATAR_CLIP_ASSET_NOT_READY', retryable: false });
+    if (!audio || audio.kind !== 'AUDIO' || audio.lifecycle !== 'READY') throw Object.assign(new Error('Speech asset is not ready'), { code: 'SPEECH_ASSET_NOT_READY', retryable: false });
+    const videoDurationMs = Number(video.metadata.durationMs); const audioDurationMs = Number(audio.metadata.durationMs);
+    if (!Number.isFinite(videoDurationMs) || videoDurationMs <= 0) throw Object.assign(new Error('Avatar source video duration is invalid'), { code: 'AVATAR_CLIP_DURATION_INVALID', retryable: false });
+    if (!Number.isFinite(audioDurationMs) || audioDurationMs <= 0) throw Object.assign(new Error('Speech asset duration is invalid'), { code: 'SPEECH_ASSET_DURATION_INVALID', retryable: false });
+    const capabilities = await deps.avatarProvider.getCapabilities(); const videoFormat = String(video.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || '';
+    if (videoFormat && capabilities.supportedFormats.length > 0 && !capabilities.supportedFormats.some((format) => format.toLowerCase().replace(/^\./, '') === videoFormat)) throw Object.assign(new Error(`Avatar provider does not support ${videoFormat} video input`), { code: 'AVATAR_VIDEO_FORMAT_UNSUPPORTED', retryable: false });
+    signal.throwIfAborted();
     const existingTask = generation.externalTaskId ? await deps.avatarProvider.getTask(generation.externalTaskId) : null;
     const replaceTerminalTask = existingTask && (existingTask.status === 'FAILED' || existingTask.status === 'CANCELLED');
     const task = !replaceTerminalTask && existingTask ? existingTask : await deps.avatarProvider.submitLipSync({ requestId: generation.id, projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, audioUrl: (await deps.staging.stageAsset(audio.id)).publicUrl, videoUrl: (await deps.staging.stageAsset(video.id)).publicUrl, ...(generation.model ? { model: generation.model } : {}), parameters: generation.provenance.parameters && typeof generation.provenance.parameters === 'object' ? generation.provenance.parameters as Record<string, unknown> : {} });

@@ -77,3 +77,33 @@ test('Digital Human worker resubmits only after an old external task is terminal
   assert.equal(submitted, 1);
   assert.equal(waiting, 1);
 });
+
+test('Digital Human worker records Speech preflight failures on the Generation', async () => {
+  const failures: Array<{ id: string; code: string }> = [];
+  const deps = {
+    digitalHuman: {
+      getSpeechGeneration: async () => ({ id: 'generation-speech-preflight', status: 'PENDING', outputAssetId: null }),
+      markSpeechRunning: async () => undefined,
+      getVoiceProfile: async () => null,
+      failSpeech: async (id: string, error: { code: string }) => { failures.push({ id, code: error.code }); },
+    },
+  } as never;
+  const job = { id: 'job-speech-preflight', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'SPEECH', generationId: 'generation-speech-preflight', projectId: 'project-1', correlationId: 'corr-preflight' } } as never;
+  await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-speech-preflight', new AbortController().signal), /Voice Profile not found/);
+  assert.deepEqual(failures, [{ id: 'generation-speech-preflight', code: 'SPEECH_GENERATION_FAILED' }]);
+});
+
+test('Digital Human worker records Avatar preflight failures on the Generation', async () => {
+  const failures: Array<{ id: string; code: string }> = [];
+  const deps = {
+    digitalHuman: {
+      getAvatarGeneration: async () => ({ id: 'generation-avatar-preflight', status: 'PENDING', outputAssetId: null, externalTaskId: null }),
+      markAvatarRunning: async () => undefined,
+      getAvatarClip: async () => null,
+      failAvatar: async (id: string, error: { code: string }) => { failures.push({ id, code: error.code }); },
+    },
+  } as never;
+  const job = { id: 'job-avatar-preflight', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-avatar-preflight', projectId: 'project-1', correlationId: 'corr-preflight' } } as never;
+  await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-avatar-preflight', new AbortController().signal), /Avatar source video is not ready/);
+  assert.deepEqual(failures, [{ id: 'generation-avatar-preflight', code: 'AVATAR_CLIP_ASSET_NOT_READY' }]);
+});

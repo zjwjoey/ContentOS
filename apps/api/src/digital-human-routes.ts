@@ -11,6 +11,7 @@ import { AssetService, type AssetCatalogService } from '../../../packages/module
 import type { VideoAdjustmentService, VideoService } from '../../../packages/modules/video/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
+import type { JobService } from '../../../packages/modules/job/src/index.js';
 
 const voiceInput = z.object({ name: z.string().trim().min(1).max(200), provider: z.string().trim().min(1).max(100).default('indextts25'), referenceAssetId: z.string().trim().min(1).max(200).optional(), providerVoiceId: z.string().trim().min(1).max(200).optional(), language: z.string().trim().min(1).max(20).default('zh'), defaultSpeed: z.number().min(.25).max(4).default(1), defaultEmotion: z.string().trim().min(1).max(100).default('natural') }).strict();
 const avatarInput = z.object({ name: z.string().trim().min(1).max(200), ownerName: z.string().trim().max(200).default('') }).strict();
@@ -19,7 +20,7 @@ const speechInput = z.object({ voiceProfileId: z.string().trim().min(1).max(200)
 const avatarGenerationInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), avatarClipId: z.string().trim().min(1).max(200), speechAssetId: z.string().trim().min(1).max(200), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), parameters: z.record(z.string(), z.unknown()).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
 const editManifestInput = z.object({ seed: z.number().int().default(1), includeSubtitles: z.boolean().default(true) }).strict();
 
-export interface DigitalHumanRouteDependencies { digitalHuman: DigitalHumanService; projects: ProjectService; providers?: RuntimeDigitalHumanProviders; quickEdit?: VideoAdjustmentService; video?: VideoService; assets?: AssetCatalogService; assetService?: AssetService; storage?: LocalStorageProvider; mediaStagingSecret?: string | undefined; }
+export interface DigitalHumanRouteDependencies { digitalHuman: DigitalHumanService; projects: ProjectService; jobs: JobService; providers?: RuntimeDigitalHumanProviders; quickEdit?: VideoAdjustmentService; video?: VideoService; assets?: AssetCatalogService; assetService?: AssetService; storage?: LocalStorageProvider; mediaStagingSecret?: string | undefined; }
 function fail(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, status: number, code: string, message: string): unknown { return reply.code(status).send({ error: { code, message, details: [] } }); }
 function invalid(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, details: unknown): unknown { return reply.code(422).send({ error: { code: 'DIGITAL_HUMAN_VALIDATION_ERROR', message: 'Invalid digital human input', details } }); }
 function projectId(request: { params: unknown }): string { return (request.params as { projectId: string }).projectId; }
@@ -82,6 +83,14 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
   });
   app.get('/api/v1/projects/:projectId/digital-human/speech-generations', async (request) => ({ items: await deps.digitalHuman.listSpeechGenerations(projectId(request)) }));
   app.get('/api/v1/projects/:projectId/digital-human/speech-generations/:generationId', async (request, reply) => { const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getSpeechGeneration(params.projectId, params.generationId); return generation || fail(reply, 404, 'SPEECH_GENERATION_NOT_FOUND', 'Speech Generation not found'); });
+  app.post('/api/v1/projects/:projectId/digital-human/speech-generations/:generationId/cancel', async (request, reply) => {
+    const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getSpeechGeneration(params.projectId, params.generationId);
+    if (!generation) return fail(reply, 404, 'SPEECH_GENERATION_NOT_FOUND', 'Speech Generation not found');
+    if (generation.status === 'CANCELLED') return { ...generation, cancelRequested: false };
+    if (generation.status === 'SUCCEEDED' || generation.status === 'FAILED') return fail(reply, 409, 'SPEECH_GENERATION_NOT_CANCELLABLE', 'Only active Speech Generations can be cancelled');
+    await deps.jobs.requestCancel(generation.jobId); await deps.digitalHuman.cancelSpeech(generation.id);
+    return { ...((await deps.digitalHuman.getSpeechGeneration(params.projectId, params.generationId)) || generation), cancelRequested: true };
+  });
   app.post('/api/v1/projects/:projectId/digital-human/speech-generations/:generationId/retry', async (request, reply) => {
     const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getSpeechGeneration(params.projectId, params.generationId);
     if (!generation) return fail(reply, 404, 'SPEECH_GENERATION_NOT_FOUND', 'Speech Generation not found');
@@ -133,6 +142,18 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
   });
   app.get('/api/v1/projects/:projectId/digital-human/avatar-generations', async (request) => ({ items: await deps.digitalHuman.listAvatarGenerations(projectId(request)) }));
   app.get('/api/v1/projects/:projectId/digital-human/avatar-generations/:generationId', async (request, reply) => { const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getAvatarGeneration(params.projectId, params.generationId); return generation || fail(reply, 404, 'AVATAR_GENERATION_NOT_FOUND', 'Avatar Generation not found'); });
+  app.post('/api/v1/projects/:projectId/digital-human/avatar-generations/:generationId/cancel', async (request, reply) => {
+    const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getAvatarGeneration(params.projectId, params.generationId);
+    if (!generation) return fail(reply, 404, 'AVATAR_GENERATION_NOT_FOUND', 'Avatar Generation not found');
+    if (generation.status === 'CANCELLED') return { ...generation, cancelRequested: false };
+    if (generation.status === 'SUCCEEDED' || generation.status === 'FAILED') return fail(reply, 409, 'AVATAR_GENERATION_NOT_CANCELLABLE', 'Only active Avatar Generations can be cancelled');
+    if (generation.externalTaskId && deps.providers?.avatar.cancelTask) {
+      try { await deps.providers.avatar.cancelTask(generation.externalTaskId); }
+      catch (error) { return fail(reply, 502, 'AVATAR_PROVIDER_CANCEL_FAILED', error instanceof Error ? error.message : 'Avatar provider cancellation failed'); }
+    }
+    await deps.jobs.requestCancel(generation.jobId); await deps.digitalHuman.cancelAvatar(generation.id);
+    return { ...((await deps.digitalHuman.getAvatarGeneration(params.projectId, params.generationId)) || generation), cancelRequested: true };
+  });
   app.post('/api/v1/projects/:projectId/digital-human/avatar-generations/:generationId/retry', async (request, reply) => {
     const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getAvatarGeneration(params.projectId, params.generationId);
     if (!generation) return fail(reply, 404, 'AVATAR_GENERATION_NOT_FOUND', 'Avatar Generation not found');

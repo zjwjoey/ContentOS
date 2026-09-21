@@ -34,6 +34,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Synthetic subtitle timeline export as Edit Manifest cues, SRT, and ASS through the Speech Generation API.
 - SRT/ASS subtitle downloads now persist idempotent `TEXT` Assets with project ownership and expose the Asset content route, so subtitle files are traceable and reusable rather than transient response bodies.
 - A real PostgreSQL temporary-schema Worker vertical slice now runs the durable `AVATAR_LIPSYNC_GENERATE` handler, fetches a remote result through the staging boundary, and imports it as a distinct READY project `VIDEO` Asset with duration metadata and provider task provenance.
+- Worker preflight failures now transition the corresponding Speech/Avatar Generation to `FAILED` instead of leaving it `RUNNING`; API and Workspace cancellation controls request Job cancellation and persist Generation `CANCELLED`, while cancelling an existing remote Avatar task before local cancellation and preserving the Worker race-safe cancellation path.
 - Capability endpoint at `/api/v1/projects/:projectId/digital-human/capabilities`, with the UI displaying live speech/avatar availability instead of assuming a provider is configured.
 - Successful Avatar Generations can now create an idempotent `EDIT_MANIFEST_V0` plus the existing `VIDEO_RENDER` Job; the workspace redirects to the existing video editor, preserving generated speech, synthetic subtitle cues, 9:16 canvas, and FFmpeg rendering.
 - Loopback IndexTTS gateway source at `tools/indextts-gateway/gateway.py` with input-root allowlisting, output-root isolation, request correlation logging, and `/health`, `/capabilities`, and `/v1/speech/generate` endpoints.
@@ -44,13 +45,13 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 
 - Targeted TypeScript compilation: passed.
 - Digital Human/config/worker unit tests and provider contract checks: passed.
-- Digital Human/API/provider suite: 15 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, the Worker-to-Asset vertical slice, concurrent Speech/Avatar idempotency and retry checks, signed staging, subtitle Asset persistence, authenticated capability health-checks, public-staging URL validation, fail-closed capability checks, external-task cancellation, and terminal-task replacement.
+- Digital Human/API/provider suite: 17 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, the Worker-to-Asset vertical slice, API cancellation, Worker preflight failure recording, concurrent Speech/Avatar idempotency and retry checks, signed staging, subtitle Asset persistence, authenticated capability health-checks, public-staging URL validation, fail-closed capability checks, external-task cancellation, and terminal-task replacement.
 - The Digital Human API integration suite also verifies subtitle generation creates a `TEXT` Asset and that the stored subtitle can be downloaded through the project Asset route.
 - Format check: passed (468 files).
 - Lint check: passed (176 TypeScript files).
 - `git diff --check`: passed.
 - Full TypeScript baseline: passed after restoring the workspace dependency links with the lockfile's `autoInstallPeers=false` setting.
-- Full baseline test run: the previously verified direct run recorded 280 passed / 3 failed when pointed at the configured PostgreSQL test service on port `55433`. All remaining failures are shared test-database migration-history issues: that database still records the pre-existing `0037_script_editing_v3_settings` migration, whose down file is not present in this branch. The clean temporary-schema migration matrix passes 9/9, and the current Digital Human test suite passes 15/15.
+- Full baseline test run: the previously verified direct run recorded 280 passed / 3 failed when pointed at the configured PostgreSQL test service on port `55433`. All remaining failures are shared test-database migration-history issues: that database still records the pre-existing `0037_script_editing_v3_settings` migration, whose down file is not present in this branch. The clean temporary-schema migration matrix passes 9/9, and the current Digital Human test suite passes 17/17.
 - Root TypeScript build, Web production build, format, lint, typecheck, and `git diff --check` pass on the current worktree. The Web build was run directly from `apps/web` because the isolated worktree's root `node_modules` is a junction to the original repository and pnpm 11 refuses that junction for task-state storage.
 
 ## Runtime status
