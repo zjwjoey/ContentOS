@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
 import { basename } from 'node:path';
 import type {
   AlignmentProvider, AlignmentRequest, AvatarCapabilities, AvatarExternalTask, AvatarGenerationRequest, AvatarProvider, AvatarTaskStatus,
@@ -32,6 +33,17 @@ function optionalNumber(value: unknown): number | undefined {
 }
 function optionalString(value: unknown): string | undefined { return typeof value === 'string' && value.trim() ? value : undefined; }
 function firstString(body: Record<string, unknown>, ...keys: string[]): string | undefined { for (const key of keys) { const value = optionalString(body[key]); if (value) return value; } return undefined; }
+
+export function isPublicHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value); if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, ''); if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local') || hostname.endsWith('.internal')) return false;
+    const ipVersion = isIP(hostname);
+    if (ipVersion === 4) { const octets = hostname.split('.').map(Number); const first = octets[0] ?? -1; const second = octets[1] ?? -1; if (first === 10 || first === 127 || (first === 169 && second === 254) || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168) || first === 0) return false; }
+    if (ipVersion === 6 && (hostname === '::1' || hostname.startsWith('fc') || hostname.startsWith('fd') || hostname.startsWith('fe8') || hostname.startsWith('fe9') || hostname.startsWith('fea') || hostname.startsWith('feb'))) return false;
+    return true;
+  } catch { return false; }
+}
 
 export interface IndexTTS25SpeechProviderOptions {
   baseUrl: string;
@@ -148,7 +160,7 @@ export class HttpProviderMediaStaging implements ProviderMediaStaging {
     const response = await this.fetchImpl(new URL('/v1/media/stage', this.options.baseUrl), { method: 'POST', headers, body: JSON.stringify({ assetId, ttlSeconds: options.ttlSeconds || 900 }) });
     if (!response.ok) throw responseError(response.status);
     const body = jsonObject(await response.json());
-    if (typeof body.publicUrl !== 'string' || !/^https?:\/\//.test(body.publicUrl) || typeof body.expiresAt !== 'string') throw new DigitalHumanProviderError('EXTERNAL_FAILED', 'Media staging service returned an invalid result', false);
+    if (typeof body.publicUrl !== 'string' || !isPublicHttpUrl(body.publicUrl) || typeof body.expiresAt !== 'string') throw new DigitalHumanProviderError('EXTERNAL_FAILED', 'Media staging service returned an invalid public URL', false);
     return { publicUrl: body.publicUrl, expiresAt: body.expiresAt };
   }
 }
@@ -180,6 +192,7 @@ export function verifyProviderMediaToken(token: string, secret: string): { asset
 export class SignedProviderMediaStaging implements ProviderMediaStaging {
   constructor(private readonly options: SignedProviderMediaStagingOptions) {}
   async stageAsset(assetId: string, options: { ttlSeconds?: number } = {}): Promise<{ publicUrl: string; expiresAt: string }> {
+    if (!isPublicHttpUrl(this.options.baseUrl)) throw new DigitalHumanProviderError('UNAVAILABLE', 'Provider media staging base URL is not public', false);
     const ttlSeconds = Math.min(3600, Math.max(60, Math.floor(options.ttlSeconds || 900))); const expiresAtSeconds = Math.floor(Date.now() / 1000) + ttlSeconds;
     const token = createProviderMediaToken(assetId, expiresAtSeconds, this.options.secret); const publicUrl = new URL('/api/v1/provider-media', this.options.baseUrl); publicUrl.searchParams.set('token', token);
     return { publicUrl: publicUrl.toString(), expiresAt: new Date(expiresAtSeconds * 1000).toISOString() };

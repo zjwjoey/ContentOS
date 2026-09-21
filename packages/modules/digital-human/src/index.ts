@@ -1,6 +1,6 @@
 export { DigitalHumanService } from './digital-human-service.js';
 export type { CreateAvatarClipInput, CreateAvatarGenerationInput, CreateAvatarProfileInput, CreateSpeechGenerationInput, CreateVoiceProfileInput, DigitalHumanAssetReader } from './digital-human-service.js';
-export { createProviderMediaToken, DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, HttpAvatarProvider, HttpProviderMediaStaging, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging, SyntheticTimingProvider, verifyProviderMediaToken } from './providers.js';
+export { createProviderMediaToken, DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, HttpAvatarProvider, HttpProviderMediaStaging, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging, SyntheticTimingProvider, isPublicHttpUrl, verifyProviderMediaToken } from './providers.js';
 export type { HttpAvatarProviderOptions, HttpProviderMediaStagingOptions, IndexTTS25SpeechProviderOptions, SignedProviderMediaStagingOptions } from './providers.js';
 export { createRuntimeDigitalHumanProviders } from './runtime.js';
 export type { RuntimeDigitalHumanEnvironment, RuntimeDigitalHumanProviders } from './runtime.js';

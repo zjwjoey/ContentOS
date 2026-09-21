@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateAvatarGenerationRequest, validateSpeechGenerationRequest } from '../../packages/contracts/src/index.js';
-import { FakeAvatarProvider, FakeSpeechProvider, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging, SyntheticTimingProvider, createRuntimeDigitalHumanProviders, subtitleTimelineToAss, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../packages/modules/digital-human/src/index.js';
+import { FakeAvatarProvider, FakeSpeechProvider, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging, SyntheticTimingProvider, createRuntimeDigitalHumanProviders, isPublicHttpUrl, subtitleTimelineToAss, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../packages/modules/digital-human/src/index.js';
 
 test('digital human contracts reject unsafe generation requests', () => {
   assert.doesNotThrow(() => validateSpeechGenerationRequest({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', text: '你好', language: 'zh', speed: 1, emotion: 'natural' }));
@@ -67,4 +67,12 @@ test('signed provider media staging issues expiring, tamper-resistant URLs', asy
   const result = await staging.stageAsset('asset-video-1', { ttlSeconds: 60 }); const token = new URL(result.publicUrl).searchParams.get('token') || '';
   const verified = verifyProviderMediaToken(token, 'test-staging-secret'); assert.equal(verified?.assetId, 'asset-video-1'); assert.ok(verified && verified.expiresAtSeconds > Math.floor(Date.now() / 1000));
   assert.equal(verifyProviderMediaToken(`${token}tampered`, 'test-staging-secret'), null); assert.equal(verifyProviderMediaToken(token, 'wrong-secret'), null);
+});
+
+test('provider staging rejects private URLs and runtime marks them unavailable', async () => {
+  assert.equal(isPublicHttpUrl('https://media.example/assets/1'), true);
+  assert.equal(isPublicHttpUrl('http://127.0.0.1:3000/assets/1'), false);
+  assert.equal(isPublicHttpUrl('http://192.168.1.10/assets/1'), false);
+  const runtime = createRuntimeDigitalHumanProviders({ CONTENTOS_SPEECH_PROVIDER: 'fake-speech', CONTENTOS_AVATAR_PROVIDER: 'hzagent', HZAGENT_API_KEY: 'test-only', CONTENTOS_MEDIA_STAGING_PROVIDER: 'signed-url', CONTENTOS_MEDIA_STAGING_BASE_URL: 'http://127.0.0.1:3000', CONTENTOS_MEDIA_STAGING_SECRET: 'secret' });
+  assert.equal(runtime.mediaStagingConfigured, false);
 });

@@ -1,5 +1,5 @@
 import type { AvatarProvider, AvatarTaskStatus, SpeechGenerationRequest, SpeechGenerationResult, SpeechProvider, ProviderMediaStaging } from '../../../contracts/src/index.js';
-import { DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, HttpAvatarProvider, HttpProviderMediaStaging, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging } from './providers.js';
+import { DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, HttpAvatarProvider, HttpProviderMediaStaging, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging, isPublicHttpUrl } from './providers.js';
 
 class UnavailableSpeechProvider implements SpeechProvider {
   readonly providerId: string;
@@ -40,11 +40,13 @@ export function createRuntimeDigitalHumanProviders(env: RuntimeDigitalHumanEnvir
         : new HttpAvatarProvider({ providerId: avatarId, baseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn', apiKey: env.HZAGENT_API_KEY, ...(env.HZAGENT_CAPABILITIES_PATH ? { capabilitiesPath: env.HZAGENT_CAPABILITIES_PATH } : {}) })
       : new UnavailableAvatarProvider(avatarId, 'Avatar provider API key is not configured');
   const stagingProvider = env.CONTENTOS_MEDIA_STAGING_PROVIDER || 'http';
-  const staging = stagingProvider === 'signed-url' && env.CONTENTOS_MEDIA_STAGING_BASE_URL && env.CONTENTOS_MEDIA_STAGING_SECRET
-    ? new SignedProviderMediaStaging({ baseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL, secret: env.CONTENTOS_MEDIA_STAGING_SECRET })
-    : stagingProvider === 'http' && env.CONTENTOS_MEDIA_STAGING_BASE_URL
-      ? new HttpProviderMediaStaging({ baseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL, ...(env.CONTENTOS_MEDIA_STAGING_API_KEY ? { apiKey: env.CONTENTOS_MEDIA_STAGING_API_KEY } : {}) })
+  const stagingBaseUrl = env.CONTENTOS_MEDIA_STAGING_BASE_URL || '';
+  const publicStagingBaseUrl = isPublicHttpUrl(stagingBaseUrl);
+  const staging = stagingProvider === 'signed-url' && publicStagingBaseUrl && env.CONTENTOS_MEDIA_STAGING_SECRET
+    ? new SignedProviderMediaStaging({ baseUrl: stagingBaseUrl, secret: env.CONTENTOS_MEDIA_STAGING_SECRET })
+    : stagingProvider === 'http' && publicStagingBaseUrl
+      ? new HttpProviderMediaStaging({ baseUrl: stagingBaseUrl, ...(env.CONTENTOS_MEDIA_STAGING_API_KEY ? { apiKey: env.CONTENTOS_MEDIA_STAGING_API_KEY } : {}) })
       : new UnavailableMediaStaging('Provider media staging is not configured');
-  const mediaStagingConfigured = avatarId === 'fake-avatar' || (stagingProvider === 'signed-url' ? Boolean(env.CONTENTOS_MEDIA_STAGING_BASE_URL && env.CONTENTOS_MEDIA_STAGING_SECRET) : Boolean(env.CONTENTOS_MEDIA_STAGING_BASE_URL));
+  const mediaStagingConfigured = avatarId === 'fake-avatar' || (stagingProvider === 'signed-url' ? Boolean(publicStagingBaseUrl && env.CONTENTOS_MEDIA_STAGING_SECRET) : Boolean(publicStagingBaseUrl));
   return { speech, avatar, staging, mediaStagingConfigured };
 }
