@@ -19,6 +19,7 @@ ContentOS needs a production path from script text to speech, avatar lip-sync, s
 - Preserve remote billing quantity and unit alongside amount/currency when the provider reports them; absent provider billing data remains nullable.
 - Include the selected Avatar Profile/Clip and Speech Asset identity, as well as their checksums, in the Avatar request hash so the same media reused under different profiles is not incorrectly merged.
 - Validate provider-declared speech limits and capabilities at both API submission and Worker execution boundaries, including reference audio, provider voice IDs, language, speed, emotion, and maximum text length.
+- Keep Voice/Avatar Profiles and Clips traceable through PATCH plus soft-delete (`DISABLED`) operations; hard deletion is intentionally avoided because generations retain foreign-key provenance.
 - Use `SyntheticTimingProvider` in V1; leave ASR/forced alignment as a replaceable provider.
 
 ## Consequences

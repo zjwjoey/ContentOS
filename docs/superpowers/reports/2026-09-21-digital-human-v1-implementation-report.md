@@ -50,6 +50,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Digital Human Edit Manifest handoff now uses the existing project-level idempotency index and transaction advisory lock, with a concurrent integration test proving two handoff requests converge on one manifest and one render Job.
 - Avatar request hashes now include Profile/Clip/Speech Asset identities in addition to media checksums, preventing cross-profile deduplication when the same source media is reused intentionally.
 - Speech capability preflight now validates provider voice IDs, reference-audio support, language, speed, emotion, and provider-declared text limits at both API and Worker boundaries.
+- Voice Profiles, Avatar Profiles, and Avatar Clips now support scoped edits and trace-preserving soft deletion through the API; the Workspace can upload reference audio and avatar clips through the existing durable Asset Import pipeline and wait for the resulting Asset ID.
 - Loopback IndexTTS gateway source at `tools/indextts-gateway/gateway.py` with input-root allowlisting, output-root isolation, request correlation logging, and `/health`, `/capabilities`, and `/v1/speech/generate` endpoints.
 - Workspace UI actions for Voice Profile, Avatar Profile, Avatar Clip, speech generation, avatar generation, output preview, and subtitle download.
 - Contract/provider/worker/config tests and a proposed ADR.
