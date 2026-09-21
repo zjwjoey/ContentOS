@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { DigitalHumanService, SyntheticTimingProvider, subtitleTimelineToAss, subtitleTimelineToManifestCues, subtitleTimelineToSrt } from '../../../packages/modules/digital-human/src/index.js';
+import type { RuntimeDigitalHumanProviders } from '../../../packages/modules/digital-human/src/index.js';
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
 
 const voiceInput = z.object({ name: z.string().trim().min(1).max(200), provider: z.string().trim().min(1).max(100).default('indextts25'), referenceAssetId: z.string().trim().min(1).max(200).optional(), providerVoiceId: z.string().trim().min(1).max(200).optional(), language: z.string().trim().min(1).max(20).default('zh'), defaultSpeed: z.number().min(.25).max(4).default(1), defaultEmotion: z.string().trim().min(1).max(100).default('natural') }).strict();
@@ -10,12 +11,20 @@ const clipInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200),
 const speechInput = z.object({ voiceProfileId: z.string().trim().min(1).max(200), text: z.string().trim().min(1).max(100_000), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), language: z.string().trim().min(1).max(20).optional(), speed: z.number().min(.25).max(4).optional(), emotion: z.string().trim().min(1).max(100).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
 const avatarGenerationInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), avatarClipId: z.string().trim().min(1).max(200), speechAssetId: z.string().trim().min(1).max(200), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), parameters: z.record(z.string(), z.unknown()).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
 
-export interface DigitalHumanRouteDependencies { digitalHuman: DigitalHumanService; projects: ProjectService; }
+export interface DigitalHumanRouteDependencies { digitalHuman: DigitalHumanService; projects: ProjectService; providers?: RuntimeDigitalHumanProviders; }
 function fail(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, status: number, code: string, message: string): unknown { return reply.code(status).send({ error: { code, message, details: [] } }); }
 function invalid(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, details: unknown): unknown { return reply.code(422).send({ error: { code: 'DIGITAL_HUMAN_VALIDATION_ERROR', message: 'Invalid digital human input', details } }); }
 function projectId(request: { params: unknown }): string { return (request.params as { projectId: string }).projectId; }
 
 export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHumanRouteDependencies): void {
+  app.get('/api/v1/projects/:projectId/digital-human/capabilities', async (_request, reply) => {
+    if (!deps.providers) return { speech: { status: 'UNCONFIGURED' }, avatar: { status: 'UNCONFIGURED' } };
+    const [speech, avatar] = await Promise.allSettled([deps.providers.speech.getCapabilities(), deps.providers.avatar.getCapabilities()]);
+    return {
+      speech: speech.status === 'fulfilled' ? { status: 'READY', ...speech.value } : { status: 'UNAVAILABLE', providerId: deps.providers.speech.providerId },
+      avatar: avatar.status === 'fulfilled' ? { status: 'READY', ...avatar.value } : { status: 'UNAVAILABLE', providerId: deps.providers.avatar.providerId },
+    };
+  });
   app.get('/api/v1/projects/:projectId/digital-human/voices', async (request, reply) => { const id = projectId(request); return { items: await deps.digitalHuman.listVoiceProfiles(id) }; });
   app.post('/api/v1/projects/:projectId/digital-human/voices', async (request, reply) => { const parsed = voiceInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues); const id = projectId(request); if (!(await deps.projects.get(id))) return fail(reply, 404, 'PROJECT_NOT_FOUND', 'Project not found'); try { return reply.code(201).send(await deps.digitalHuman.createVoiceProfile({ projectId: id, ...parsed.data })); } catch (error) { return fail(reply, 409, 'VOICE_PROFILE_CONFLICT', error instanceof Error ? error.message : 'Unable to create Voice Profile'); } });
   app.get('/api/v1/projects/:projectId/digital-human/avatars', async (request) => { const id = projectId(request); const profiles = await deps.digitalHuman.listAvatarProfiles(id); return { items: await Promise.all(profiles.map(async (profile) => ({ ...profile, clips: await deps.digitalHuman.listAvatarClips(id, profile.id) }))) }; });
