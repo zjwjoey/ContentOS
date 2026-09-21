@@ -43,6 +43,8 @@ test('unconfigured runtime providers fail closed during capability checks', asyn
   assert.equal(runtime.mediaStagingConfigured, false);
   const mappedWithoutEndpoints = createRuntimeDigitalHumanProviders({ CONTENTOS_AVATAR_PROVIDER: 'hzagent', HZAGENT_API_KEY: 'test-only' });
   await assert.rejects(() => mappedWithoutEndpoints.avatar.getCapabilities(), /endpoint and authentication mapping/);
+  const mappedWithoutAuthHeader = createRuntimeDigitalHumanProviders({ CONTENTOS_AVATAR_PROVIDER: 'hzagent', HZAGENT_API_KEY: 'test-only', HZAGENT_CAPABILITIES_PATH: '/capabilities', HZAGENT_SUBMIT_PATH: '/submit', HZAGENT_TASK_PATH: '/tasks/:id', HZAGENT_AUTH_HEADER: '', HZAGENT_AUTH_SCHEME: 'Bearer' });
+  await assert.rejects(() => mappedWithoutAuthHeader.avatar.getCapabilities(), /endpoint and authentication mapping/);
 });
 
 test('HTTP adapters preserve provider capability, task status, model version, and billing', async () => {

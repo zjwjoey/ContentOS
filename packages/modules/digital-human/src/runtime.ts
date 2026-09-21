@@ -36,7 +36,7 @@ export function createRuntimeDigitalHumanProviders(env: RuntimeDigitalHumanEnvir
       : new UnavailableSpeechProvider(speechId, `Speech provider ${speechId} is not configured`);
   const avatarId = env.CONTENTOS_AVATAR_PROVIDER || 'hzagent';
   const hzagentApiKey = env.HZAGENT_API_KEY?.trim();
-  const hzagentMappingConfigured = Boolean(env.HZAGENT_CAPABILITIES_PATH?.trim() && env.HZAGENT_SUBMIT_PATH?.trim() && env.HZAGENT_TASK_PATH?.trim() && env.HZAGENT_AUTH_HEADER !== undefined && env.HZAGENT_AUTH_SCHEME !== undefined);
+  const hzagentMappingConfigured = Boolean(env.HZAGENT_CAPABILITIES_PATH?.trim() && env.HZAGENT_SUBMIT_PATH?.trim() && env.HZAGENT_TASK_PATH?.trim() && env.HZAGENT_AUTH_HEADER?.trim() && env.HZAGENT_AUTH_SCHEME !== undefined);
   const avatar = avatarId === 'fake-avatar'
     ? new FakeAvatarProvider()
     : hzagentApiKey && (avatarId !== 'hzagent' || hzagentMappingConfigured)

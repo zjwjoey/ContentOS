@@ -96,7 +96,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     avatarSubmitPath: env.HZAGENT_SUBMIT_PATH || '',
     avatarTaskPath: env.HZAGENT_TASK_PATH || '',
     avatarAuthHeader: env.HZAGENT_AUTH_HEADER || '',
-    avatarAuthScheme: env.HZAGENT_AUTH_SCHEME === undefined ? 'Bearer' : env.HZAGENT_AUTH_SCHEME,
+    // Keep the vendor authentication scheme explicit. The runtime must not invent a
+    // Bearer mapping for an unverified HZAgent contract.
+    avatarAuthScheme: env.HZAGENT_AUTH_SCHEME || '',
     mediaStagingProvider: env.CONTENTOS_MEDIA_STAGING_PROVIDER || 'http',
     mediaStagingBaseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL || '',
     mediaStagingApiKey: env.CONTENTOS_MEDIA_STAGING_API_KEY || '',
