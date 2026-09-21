@@ -85,6 +85,8 @@ test('Avatar output enters the existing EditManifest and VIDEO_RENDER path idemp
     const distinctProfileGeneration = await digitalHuman.createAvatarGeneration({ projectId: project.id, avatarProfileId: secondAvatar.id, avatarClipId: secondClip.id, speechAssetId, correlationId: 'distinct-profile' });
     assert.equal(distinctProfileGeneration.created, true); assert.notEqual(distinctProfileGeneration.generation.id, avatarResults[0]!.generation.id);
     const avatarJobCount = await db.query<{ count: string }>('select count(*)::text as count from jobs where project_id = $1 and type = $2', [project.id, 'AVATAR_LIPSYNC_GENERATE']); assert.equal(avatarJobCount.rows[0]?.count, '5');
+    await db.query("update speech_generations set status = 'CANCELLED' where id = $1", [speechResults[0]!.generation.id]); await db.query("update jobs set state = 'RUNNING' where id = $1", [speechResults[0]!.job.id]);
+    const activeSpeechRetry = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/digital-human/speech-generations/${speechResults[0]!.generation.id}/retry` }); assert.equal(activeSpeechRetry.statusCode, 409, activeSpeechRetry.body); assert.equal(activeSpeechRetry.json<{ error: { code: string } }>().error.code, 'SPEECH_GENERATION_JOB_NOT_TERMINAL');
     await db.query("update speech_generations set status = 'FAILED', error = '{\"code\":\"TEST_FAILURE\"}'::jsonb where id = $1", [speechResults[0]!.generation.id]);
     await db.query("update jobs set state = 'FAILED', error = '{\"code\":\"TEST_FAILURE\"}'::jsonb where id = $1", [speechResults[0]!.job.id]);
     const speechRetry = await digitalHuman.createSpeechGeneration({ projectId: project.id, voiceProfileId: raceVoiceId, text: '并发幂等测试。', correlationId: 'retry-speech' });

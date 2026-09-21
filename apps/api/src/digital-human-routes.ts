@@ -153,6 +153,9 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
     const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getSpeechGeneration(params.projectId, params.generationId);
     if (!generation) return fail(reply, 404, 'SPEECH_GENERATION_NOT_FOUND', 'Speech Generation not found');
     if (generation.status !== 'FAILED' && generation.status !== 'CANCELLED') return fail(reply, 409, 'SPEECH_GENERATION_NOT_RETRYABLE', 'Only failed or cancelled Speech Generations can be retried');
+    const job = await deps.jobs.get(generation.jobId);
+    if (!job) return fail(reply, 409, 'SPEECH_GENERATION_JOB_NOT_FOUND', 'Speech Generation Job not found');
+    if (job.state !== 'FAILED' && job.state !== 'CANCELLED') return fail(reply, 409, 'SPEECH_GENERATION_JOB_NOT_TERMINAL', 'Speech Generation Job is still active; retry after cancellation or failure completes');
     if (deps.providers) {
       const profile = await deps.digitalHuman.getVoiceProfile(params.projectId, generation.voiceProfileId);
       if (!profile) return fail(reply, 404, 'VOICE_PROFILE_NOT_FOUND', 'Voice Profile not found');
@@ -211,6 +214,9 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
     const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getAvatarGeneration(params.projectId, params.generationId);
     if (!generation) return fail(reply, 404, 'AVATAR_GENERATION_NOT_FOUND', 'Avatar Generation not found');
     if (generation.status !== 'FAILED' && generation.status !== 'CANCELLED') return fail(reply, 409, 'AVATAR_GENERATION_NOT_RETRYABLE', 'Only failed or cancelled Avatar Generations can be retried');
+    const job = await deps.jobs.get(generation.jobId);
+    if (!job) return fail(reply, 409, 'AVATAR_GENERATION_JOB_NOT_FOUND', 'Avatar Generation Job not found');
+    if (job.state !== 'FAILED' && job.state !== 'CANCELLED') return fail(reply, 409, 'AVATAR_GENERATION_JOB_NOT_TERMINAL', 'Avatar Generation Job is still active; retry after cancellation or failure completes');
     const preflight = await runAvatarPreflight(params.projectId, { avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId }, deps); if (preflight.status === 'BLOCKED') return preflightFailure(reply, preflight);
     try {
       const parameters = generation.provenance.parameters && typeof generation.provenance.parameters === 'object' && !Array.isArray(generation.provenance.parameters) ? generation.provenance.parameters as Record<string, unknown> : {};
