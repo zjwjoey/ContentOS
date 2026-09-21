@@ -10,6 +10,7 @@
     "dev:operator": "tsx scripts/dev-operator.ts",
     "doctor": "tsx scripts/doctor.ts",
     "benchmark:script-editing-v3": "tsx scripts/script-editing-v3-benchmark.ts",
+    "benchmark:script-editing-v3:db": "tsx scripts/script-editing-v3-db-benchmark.ts",
     "benchmark:script-editing-v3-ai": "tsx scripts/script-editing-v3-ai-benchmark.ts",
     "goldset:script-editing-v3": "tsx scripts/script-editing-v3-gold-set-export.ts",
     "build:jianying-helper": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/jianying-draft-helper/build.ps1",

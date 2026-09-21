@@ -13,7 +13,7 @@ import type { LocalStorageProvider } from '../../../packages/infrastructure/stor
 import { prepareVoiceTiming } from '../../../packages/modules/video/src/index.js';
 import { DEFAULT_SHOT_DETECTION_THRESHOLD } from '../../../packages/modules/video/src/shot-detection.js';
 
-const scanInput = z.object({ workspaceId: z.string().trim().min(1), sourceRoot: z.string().trim().min(1), recursive: z.boolean().default(true) });
+const scanInput = z.object({ workspaceId: z.string().trim().min(1), sourceRoot: z.string().trim().min(1), recursive: z.boolean().default(true), idempotencyKey: z.string().trim().min(1).max(200).optional() });
 const snapshotInput = z.object({ workspaceId: z.string().trim().min(1), sourceRootIds: z.array(z.string().trim().min(1)).default([]), sourceFiles: z.array(z.string().trim().min(1)).max(100).default([]), sourceKind: z.enum(['MANUAL', 'JIANYING_DRAFT', 'MIXED']).default('MANUAL') });
 const sessionInput = z.object({
   workspaceId: z.string().trim().min(1),
@@ -111,7 +111,7 @@ export function registerScriptEditingV3Routes(app: FastifyInstance, dependencies
   });
   app.post('/api/v1/edit/v3/scans', async (request, reply) => {
     const parsed = scanInput.safeParse(request.body || {}); if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', details: parsed.error.issues } });
-    const input = parsed.data; const canonical = dependencies.localPathAccess ? await dependencies.localPathAccess.authorize(input.sourceRoot, 'MEDIA_ROOT') : input.sourceRoot; const rootId = sourceRootId(canonical); const key = `v3-material-scan:${input.workspaceId}:${rootId}:${input.recursive}`; const existing = await dependencies.jobs.getByIdempotencyKey(key); if (existing) return reply.code(202).send({ scanId: (existing.payload as { scanId?: string }).scanId, jobId: existing.id, state: existing.state, sourceRootId: rootId });
+    const input = parsed.data; const canonical = dependencies.localPathAccess ? await dependencies.localPathAccess.authorize(input.sourceRoot, 'MEDIA_ROOT') : input.sourceRoot; const rootId = sourceRootId(canonical); const key = input.idempotencyKey || `v3-material-scan:${input.workspaceId}:${rootId}:${input.recursive}`; const existing = await dependencies.jobs.getByIdempotencyKey(key); if (existing) return reply.code(202).send({ scanId: (existing.payload as { scanId?: string }).scanId, jobId: existing.id, state: existing.state, sourceRootId: rootId });
     await dependencies.db.query("insert into video_workspaces (id,type,project_id) values ($1,'STANDALONE',null) on conflict (id) do nothing", [input.workspaceId]);
     const scanId = `scan-${randomUUID()}`; await dependencies.localMedia.createScan({ id: scanId, workspaceId: input.workspaceId, sourceRoot: canonical, sourceRootId: rootId, recursive: input.recursive });
     const job = await dependencies.jobs.createIdempotent({ id: `job-${randomUUID()}`, projectId: null, workspaceId: input.workspaceId, type: 'LOCAL_MEDIA_SCAN', payload: { schemaVersion: 'LOCAL_MEDIA_SCAN_V1', workspaceId: input.workspaceId, scanId, sourceRoot: canonical, sourceRootId: rootId, recursive: input.recursive }, idempotencyKey: key, maxAttempts: 3 });

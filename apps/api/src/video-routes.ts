@@ -36,6 +36,7 @@ const localMediaScanInput = z.object({ projectId: z.string().trim().min(1).optio
 const localMediaContentInput = z.object({ projectId: z.string().trim().min(1).optional(), workspaceId: z.string().trim().min(1).optional(), sourceRootId: z.string().trim().min(1), fileId: z.string().trim().min(1) }).refine((value) => Boolean(value.projectId || value.workspaceId));
 const localMediaIndexQuery = z.object({ projectId: z.string().trim().min(1).optional(), workspaceId: z.string().trim().min(1).optional(), query: z.string().max(200).optional(), orientation: z.enum(['ALL', 'VERTICAL', 'HORIZONTAL', 'SQUARE', 'UNKNOWN']).optional(), category: z.string().max(100).optional(), usage: z.enum(['ALL', 'UNUSED', 'RECENT', 'FREQUENT']).optional(), sort: z.enum(['NAME', 'UPDATED', 'DURATION', 'USAGE', 'RECENT', 'RECOMMENDED', 'NEWEST', 'LEAST_USED', 'MOST_RECENT']).optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }).refine((value) => Boolean(value.projectId || value.workspaceId));
 const localMediaMetaInput = z.object({ category: z.string().max(100).nullable().optional(), tags: z.array(z.string().max(80)).max(64).optional(), gold: z.boolean().optional(), disabled: z.boolean().optional() });
+const localMediaBatchTagsInput = z.object({ fileIds: z.array(z.string().trim().min(1)).min(1).max(100), tags: z.array(z.string().trim().max(80)).max(64) });
 const localMediaRelinkInput = z.object({ sourcePath: z.string().trim().min(1), actor: z.string().trim().min(1).max(100).optional(), force: z.boolean().default(false) });
 const presetFields = z.object({ name: z.string().trim().min(1).max(120), description: z.string().max(500).optional(), editModeDefault: z.enum(['SCRIPT', 'RANDOM']).optional(), minClipDurationMs: z.number().int().positive().optional(), maxClipDurationMs: z.number().int().positive().optional(), preferUnusedMedia: z.boolean().optional(), introAssetId: z.string().trim().nullable().optional(), outroAssetId: z.string().trim().nullable().optional(), canvas: z.object({ width: z.literal(1080), height: z.literal(1920), aspectRatio: z.literal('9:16') }).optional(), fps: z.number().int().positive().max(120).optional() });
 const presetDurationValidation = (value: { minClipDurationMs?: number | undefined; maxClipDurationMs?: number | undefined }, context: z.RefinementCtx) => { if (value.minClipDurationMs !== undefined && value.maxClipDurationMs !== undefined && value.maxClipDurationMs < value.minClipDurationMs) context.addIssue({ code: z.ZodIssueCode.custom, path: ['maxClipDurationMs'], message: '最长镜头不能短于最短镜头' }); };
@@ -152,6 +153,12 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     const result = parsed.data.workspaceId ? await dependencies.localMedia.listWorkspaceIndexPage(parsed.data.workspaceId, filters) : await dependencies.localMedia.listIndexPage(parsed.data.projectId!, filters);
     const items = parsed.data.workspaceId ? result.items : result.items.map(LocalMediaSourceService.toPublicFile);
     return { items, total: result.total, page: result.page, pageSize: result.pageSize, hasNext: result.page * result.pageSize < result.total };
+  });
+  app.post('/api/v1/video/local-media/index/batch/tags', async (request, reply) => {
+    const parsed = localMediaBatchTagsInput.safeParse(request.body || {}); const workspaceId = String((request.query as { workspaceId?: string } | undefined)?.workspaceId || '');
+    if (!parsed.success || !workspaceId || !dependencies.localMedia) return reply.code(422).send({ error: { code: 'LOCAL_MEDIA_BATCH_TAGS_INVALID', details: parsed.success ? [] : parsed.error.issues } });
+    const updated = await dependencies.localMedia.updateWorkspaceTags(parsed.data.fileIds, workspaceId, parsed.data.tags);
+    return { ok: true, updated };
   });
   app.patch('/api/v1/video/local-media/index/:fileId', async (request, reply) => {
     const parsed = localMediaMetaInput.safeParse(request.body || {});

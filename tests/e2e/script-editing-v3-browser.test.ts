@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, rm, unlink, writeFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { join } from 'node:path';
@@ -208,9 +209,9 @@ test('Script Editing V3.4 browser closure covers Asset Library and Gold Set work
   const browser = await chromium.launch({ headless: true, ...(process.env.CONTENTOS_BROWSER_EXECUTABLE ? { executablePath: process.env.CONTENTOS_BROWSER_EXECUTABLE } : {}) });
   const page = await browser.newPage();
   const workspaceId = 'workspace-v3';
-  const root = join(fixtureDir!, 'asset-library-closure');
+  const root = join(fixtureDir!, `asset-library-closure-${randomUUID()}`);
   const source = join(root, 'closure-original.mp4');
-  const movedRoot = join(fixtureDir!, 'asset-library-moved');
+  const movedRoot = join(fixtureDir!, `asset-library-moved-${randomUUID()}`);
   const moved = join(movedRoot, 'closure-moved.mp4');
   try {
     await mkdir(root, { recursive: true }); await mkdir(movedRoot, { recursive: true }); await copyFile(fixtureVideos[0]!, source); await copyFile(source, moved);
@@ -219,10 +220,26 @@ test('Script Editing V3.4 browser closure covers Asset Library and Gold Set work
     const scan = await scanResponse.json() as { scanId: string; jobId: string; sourceRootId: string };
     for (let attempt = 0; attempt < 90; attempt += 1) { const job = await page.request.get(`${baseUrl}/api/v1/jobs/${scan.jobId}`); if (job.ok() && (await job.json() as { state: string }).state === 'SUCCEEDED') break; await new Promise((resolve) => setTimeout(resolve, 250)); }
     await unlink(source);
+    const missingScanResponse = await page.request.post(`${baseUrl}/api/v1/edit/v3/scans`, { data: { workspaceId, sourceRoot: root, recursive: false, idempotencyKey: `asset-library-missing-${randomUUID()}` } });
+    assert.ok([201, 202].includes(missingScanResponse.status()), await missingScanResponse.text());
+    const missingScan = await missingScanResponse.json() as { jobId: string };
+    for (let attempt = 0; attempt < 90; attempt += 1) { const job = await page.request.get(`${baseUrl}/api/v1/jobs/${missingScan.jobId}`); if (job.ok() && (await job.json() as { state: string }).state === 'SUCCEEDED') break; await new Promise((resolve) => setTimeout(resolve, 250)); }
+    const missingIndex = await page.request.get(`${baseUrl}/api/v1/video/local-media/index?workspaceId=${encodeURIComponent(workspaceId)}&query=closure-original.mp4&page=1&pageSize=10`);
+    assert.equal(missingIndex.status(), 200, await missingIndex.text());
+    const missingItems = await missingIndex.json() as { items: Array<{ available: boolean }> };
+    assert.equal(missingItems.items[0]?.available, false, JSON.stringify(missingItems));
     await page.goto(`${baseUrl}/assets/library`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('heading', { name: '长期素材库' }).waitFor({ state: 'visible', timeout: 15_000 });
+    const libraryQuery = page.locator('input[placeholder="搜索文件名、相对路径或人工标签"]');
+    await libraryQuery.fill('closure-original.mp4');
+    await page.getByRole('button', { name: '查询' }).click();
+    await page.getByText('closure-original.mp4', { exact: true }).first().waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByText('MISSING').first().waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByText('完整路径').first().waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByLabel('选择素材').first().check();
+    await page.getByPlaceholder('批量添加标签，逗号分隔').fill('批量验证');
+    await page.getByRole('button', { name: '批量添加标签' }).click();
+    await page.getByText(/已为 1 个素材保存标签/).waitFor({ state: 'visible', timeout: 10_000 });
     await page.getByRole('button', { name: '禁用素材' }).first().click();
     await page.getByRole('button', { name: '恢复素材' }).first().waitFor({ state: 'visible', timeout: 10_000 });
     await page.getByRole('button', { name: '选择文件' }).first().waitFor({ state: 'visible', timeout: 10_000 });
