@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { DigitalHumanService, SyntheticTimingProvider, subtitleTimelineToAss, subtitleTimelineToManifestCues, subtitleTimelineToSrt } from '../../../packages/modules/digital-human/src/index.js';
+import { DigitalHumanService, SyntheticTimingProvider, subtitleTimelineToAss, subtitleTimelineToManifestCues, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../../packages/modules/digital-human/src/index.js';
 import type { RuntimeDigitalHumanProviders } from '../../../packages/modules/digital-human/src/index.js';
 import { DEFAULT_PRESENTATION_SETTINGS_V1, type EditManifestV0 } from '../../../packages/contracts/src/index.js';
 import type { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
@@ -16,12 +17,20 @@ const speechInput = z.object({ voiceProfileId: z.string().trim().min(1).max(200)
 const avatarGenerationInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), avatarClipId: z.string().trim().min(1).max(200), speechAssetId: z.string().trim().min(1).max(200), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), parameters: z.record(z.string(), z.unknown()).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
 const editManifestInput = z.object({ seed: z.number().int().default(1), includeSubtitles: z.boolean().default(true) }).strict();
 
-export interface DigitalHumanRouteDependencies { digitalHuman: DigitalHumanService; projects: ProjectService; providers?: RuntimeDigitalHumanProviders; quickEdit?: VideoAdjustmentService; video?: VideoService; assets?: AssetCatalogService; storage?: LocalStorageProvider; }
+export interface DigitalHumanRouteDependencies { digitalHuman: DigitalHumanService; projects: ProjectService; providers?: RuntimeDigitalHumanProviders; quickEdit?: VideoAdjustmentService; video?: VideoService; assets?: AssetCatalogService; storage?: LocalStorageProvider; mediaStagingSecret?: string | undefined; }
 function fail(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, status: number, code: string, message: string): unknown { return reply.code(status).send({ error: { code, message, details: [] } }); }
 function invalid(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, details: unknown): unknown { return reply.code(422).send({ error: { code: 'DIGITAL_HUMAN_VALIDATION_ERROR', message: 'Invalid digital human input', details } }); }
 function projectId(request: { params: unknown }): string { return (request.params as { projectId: string }).projectId; }
 
 export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHumanRouteDependencies): void {
+  app.get('/api/v1/provider-media', async (request, reply) => {
+    const token = (request.query as { token?: string }).token || ''; const secret = deps.mediaStagingSecret?.trim();
+    if (!secret || !deps.assets || !deps.storage) return reply.code(404).send({ error: { code: 'PROVIDER_MEDIA_NOT_FOUND', message: 'Provider media is not available', details: [] } });
+    const verified = verifyProviderMediaToken(token, secret); if (!verified) return reply.code(404).send({ error: { code: 'PROVIDER_MEDIA_NOT_FOUND', message: 'Provider media is not available', details: [] } });
+    const asset = await deps.assets.getReadyAssetForProviderStaging(verified.assetId); if (!asset || !await deps.storage.exists(asset.storageKey)) return reply.code(404).send({ error: { code: 'PROVIDER_MEDIA_NOT_FOUND', message: 'Provider media is not available', details: [] } });
+    const contentType = asset.kind === 'VIDEO' ? 'video/mp4' : asset.metadata.format === 'mp3' ? 'audio/mpeg' : 'audio/wav';
+    return reply.header('cache-control', 'private, max-age=0, no-store').header('content-length', asset.byteSize).type(contentType).send(createReadStream(deps.storage.objectPath(asset.storageKey)));
+  });
   app.get('/api/v1/projects/:projectId/digital-human/capabilities', async (_request, reply) => {
     if (!deps.providers) return { speech: { status: 'UNCONFIGURED' }, avatar: { status: 'UNCONFIGURED' } };
     const [speech, avatar] = await Promise.allSettled([deps.providers.speech.getCapabilities(), deps.providers.avatar.getCapabilities()]);

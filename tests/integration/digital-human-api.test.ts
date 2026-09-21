@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -10,7 +10,7 @@ import { createDatabase, migrateUp } from '../../packages/database/src/index.js'
 import { LocalStorageProvider } from '../../packages/infrastructure/storage/src/index.js';
 import { JobService } from '../../packages/modules/job/src/index.js';
 import { ProjectService } from '../../packages/modules/project/src/index.js';
-import { DigitalHumanService } from '../../packages/modules/digital-human/src/index.js';
+import { DigitalHumanService, SignedProviderMediaStaging } from '../../packages/modules/digital-human/src/index.js';
 
 const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55433/contentos_test';
 
@@ -23,7 +23,7 @@ async function temporaryDatabase(): Promise<{ url: string; close: () => Promise<
 }
 
 test('Avatar output enters the existing EditManifest and VIDEO_RENDER path idempotently', async () => {
-  const temporary = await temporaryDatabase(); const db = await createDatabase(temporary.url); const storageRoot = await mkdtemp(join(tmpdir(), 'contentos-digital-human-api-')); const storage = new LocalStorageProvider(storageRoot);
+  const temporary = await temporaryDatabase(); const db = await createDatabase(temporary.url); const storageRoot = await mkdtemp(join(tmpdir(), 'contentos-digital-human-api-')); const storage = new LocalStorageProvider(storageRoot); const previousStagingSecret = process.env.CONTENTOS_MEDIA_STAGING_SECRET;
   try {
     await migrateUp(db);
     const project = await new ProjectService(db).create('Digital Human API integration'); const jobs = new JobService(db);
@@ -38,7 +38,10 @@ test('Avatar output enters the existing EditManifest and VIDEO_RENDER path idemp
     const speechGenerationId = `speech-generation-${randomUUID()}`; await db.query('insert into speech_generations (id,project_id,voice_profile_id,provider,model,text,text_hash,parameters,status,job_id,output_asset_id,duration_ms,latency_ms,provenance) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)', [speechGenerationId, project.id, voiceId, 'indextts25', 'indextts-2.5', '这是集成测试文案。', `hash-${randomUUID()}`, { language: 'zh', speed: 1, emotion: 'natural' }, 'SUCCEEDED', speechJob.id, speechAssetId, 2_000, 100, { provider: 'indextts25' }]);
     const avatarProfileId = `avatar-profile-${randomUUID()}`; const avatarClipId = `avatar-clip-${randomUUID()}`; await db.query('insert into avatar_profiles (id,project_id,name,owner_name,status) values ($1,$2,$3,$4,$5)', [avatarProfileId, project.id, 'Integration Avatar', 'test', 'READY']); await db.query('insert into avatar_clips (id,project_id,avatar_profile_id,asset_id,name,duration_ms,status) values ($1,$2,$3,$4,$5,$6,$7)', [avatarClipId, project.id, avatarProfileId, clipAssetId, 'Integration Clip', 2_000, 'READY']);
     const avatarGenerationId = `avatar-generation-${randomUUID()}`; const avatarJob = await jobs.create({ id: `job-avatar-${randomUUID()}`, projectId: project.id, type: 'AVATAR_LIPSYNC_GENERATE', payload: {}, idempotencyKey: `dh-avatar-${randomUUID()}`, maxAttempts: 3 }); await db.query('insert into avatar_generations (id,project_id,avatar_profile_id,avatar_clip_id,speech_asset_id,provider,status,job_id,output_asset_id,duration_ms,request_hash,provenance) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [avatarGenerationId, project.id, avatarProfileId, avatarClipId, speechAssetId, 'hzagent', 'SUCCEEDED', avatarJob.id, avatarAssetId, 2_000, `request-${randomUUID()}`, { provider: 'hzagent' }]);
+    await mkdir(join(storageRoot, 'objects'), { recursive: true }); await writeFile(join(storageRoot, 'objects/speech.wav'), Buffer.alloc(10, 97));
+    process.env.CONTENTOS_MEDIA_STAGING_SECRET = 'integration-staging-secret';
     const app = await buildApi({ db, storage }); await app.ready();
+    const signedStaging = new SignedProviderMediaStaging({ baseUrl: 'https://contentos.test', secret: 'integration-staging-secret' }); const staged = await signedStaging.stageAsset(speechAssetId, { ttlSeconds: 60 }); const stagedUrl = new URL(staged.publicUrl); const stagedResponse = await app.inject({ method: 'GET', url: `${stagedUrl.pathname}${stagedUrl.search}` }); assert.equal(stagedResponse.statusCode, 200, stagedResponse.body); assert.equal(stagedResponse.body.length, 10); assert.match(stagedResponse.headers['content-type'] || '', /^audio\/wav/);
     const first = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/digital-human/avatar-generations/${avatarGenerationId}/edit-manifest`, payload: {} }); assert.equal(first.statusCode, 201, first.body); const firstBody = first.json() as { manifestId: string; jobId: string; deduplicated: boolean }; assert.equal(firstBody.deduplicated, false);
     const manifest = (await db.query<{ manifest: Record<string, unknown> }>('select manifest from edit_manifests where id=$1', [firstBody.manifestId])).rows[0]?.manifest; assert.equal(manifest?.projectId, project.id); assert.equal((manifest?.timeline as Array<{ assetId: string }>)[0]?.assetId, avatarAssetId); assert.equal((manifest?.audio as { voiceAssetId?: string }).voiceAssetId, speechAssetId); assert.equal((manifest?.metadata as { digitalHumanGenerationId?: string }).digitalHumanGenerationId, avatarGenerationId);
     const second = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/digital-human/avatar-generations/${avatarGenerationId}/edit-manifest`, payload: {} }); assert.equal(second.statusCode, 200, second.body); const secondBody = second.json() as { manifestId: string; jobId: string; deduplicated: boolean }; assert.deepEqual(secondBody, { manifestId: firstBody.manifestId, jobId: firstBody.jobId, deduplicated: true, editUrl: `/projects/${project.id}/video` });
@@ -59,5 +62,5 @@ test('Avatar output enters the existing EditManifest and VIDEO_RENDER path idemp
     assert.equal(avatarResults.filter((result) => result.created).length, 1);
     const avatarJobCount = await db.query<{ count: string }>('select count(*)::text as count from jobs where project_id = $1 and type = $2', [project.id, 'AVATAR_LIPSYNC_GENERATE']); assert.equal(avatarJobCount.rows[0]?.count, '2');
     await app.close();
-  } finally { await db.end(); await rm(storageRoot, { recursive: true, force: true }); await temporary.close(); }
+  } finally { if (previousStagingSecret === undefined) delete process.env.CONTENTOS_MEDIA_STAGING_SECRET; else process.env.CONTENTOS_MEDIA_STAGING_SECRET = previousStagingSecret; await db.end(); await rm(storageRoot, { recursive: true, force: true }); await temporary.close(); }
 });

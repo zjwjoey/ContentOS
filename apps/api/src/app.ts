@@ -91,7 +91,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
   registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, assetService, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes, localMedia, presets });
   registerLocalPathRoutes(app, { access: localPathAccess, picker: nativePathPicker });
-  registerDigitalHumanRoutes(app, { digitalHuman, projects, providers: createRuntimeDigitalHumanProviders(), quickEdit, video, assets, storage });
+  registerDigitalHumanRoutes(app, { digitalHuman, projects, providers: createRuntimeDigitalHumanProviders(), quickEdit, video, assets, storage, mediaStagingSecret: process.env.CONTENTOS_MEDIA_STAGING_SECRET });
   registerEditingWorkbenchRoutes(app, { db, localMedia, localPathAccess, quickEdit, video, jobs, assets, assetService, storage, maxUploadBytes: uploadMaxBytes, presets });
   registerScriptEditingV2Routes(app, { db, jobs, localPathAccess, video, assets, presets, storage });
   registerMediaProviderRoutes(app, createExternalVideoProvider(), db);

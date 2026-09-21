@@ -26,8 +26,10 @@ export interface AppConfig {
   digitalHumanAvatarProvider: string;
   avatarBaseUrl: string;
   avatarApiKey: string;
+  mediaStagingProvider: string;
   mediaStagingBaseUrl: string;
   mediaStagingApiKey: string;
+  mediaStagingSecret: string;
 }
 
 function required(env: Record<string, string | undefined>, key: string): string {
@@ -82,7 +84,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     digitalHumanAvatarProvider: env.CONTENTOS_AVATAR_PROVIDER || 'hzagent',
     avatarBaseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn',
     avatarApiKey: env.HZAGENT_API_KEY || '',
+    mediaStagingProvider: env.CONTENTOS_MEDIA_STAGING_PROVIDER || 'http',
     mediaStagingBaseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL || '',
     mediaStagingApiKey: env.CONTENTOS_MEDIA_STAGING_API_KEY || '',
+    mediaStagingSecret: env.CONTENTOS_MEDIA_STAGING_SECRET || '',
   };
 }

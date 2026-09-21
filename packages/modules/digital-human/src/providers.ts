@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { basename } from 'node:path';
 import type {
   AlignmentProvider, AlignmentRequest, AvatarCapabilities, AvatarExternalTask, AvatarGenerationRequest, AvatarProvider, AvatarTaskStatus,
@@ -137,6 +137,39 @@ export class HttpProviderMediaStaging implements ProviderMediaStaging {
     const body = jsonObject(await response.json());
     if (typeof body.publicUrl !== 'string' || !/^https?:\/\//.test(body.publicUrl) || typeof body.expiresAt !== 'string') throw new DigitalHumanProviderError('EXTERNAL_FAILED', 'Media staging service returned an invalid result', false);
     return { publicUrl: body.publicUrl, expiresAt: body.expiresAt };
+  }
+}
+
+export interface SignedProviderMediaStagingOptions { baseUrl: string; secret: string; }
+
+function base64UrlEncode(value: string): string { return Buffer.from(value, 'utf8').toString('base64url'); }
+function base64UrlDecode(value: string): string { return Buffer.from(value, 'base64url').toString('utf8'); }
+function providerMediaSignature(payload: string, secret: string): string { return createHmac('sha256', secret).update(payload).digest('base64url'); }
+
+export function createProviderMediaToken(assetId: string, expiresAtSeconds: number, secret: string): string {
+  if (!assetId.trim() || !Number.isSafeInteger(expiresAtSeconds) || expiresAtSeconds <= Math.floor(Date.now() / 1000) || !secret.trim()) throw new Error('Invalid provider media token input');
+  const payload = base64UrlEncode(JSON.stringify({ assetId, expiresAtSeconds }));
+  return `${payload}.${providerMediaSignature(payload, secret)}`;
+}
+
+export function verifyProviderMediaToken(token: string, secret: string): { assetId: string; expiresAtSeconds: number } | null {
+  if (!token || !secret.trim()) return null;
+  const separator = token.lastIndexOf('.'); if (separator <= 0 || separator === token.length - 1) return null;
+  const payload = token.slice(0, separator); const signature = token.slice(separator + 1); const expected = providerMediaSignature(payload, secret);
+  const actualBytes = Buffer.from(signature); const expectedBytes = Buffer.from(expected); if (actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes)) return null;
+  try {
+    const value = JSON.parse(base64UrlDecode(payload)) as { assetId?: unknown; expiresAtSeconds?: unknown }; const expiresAtSeconds = value.expiresAtSeconds;
+    if (typeof value.assetId !== 'string' || !value.assetId.trim() || typeof expiresAtSeconds !== 'number' || !Number.isSafeInteger(expiresAtSeconds) || expiresAtSeconds <= Math.floor(Date.now() / 1000)) return null;
+    return { assetId: value.assetId, expiresAtSeconds };
+  } catch { return null; }
+}
+
+export class SignedProviderMediaStaging implements ProviderMediaStaging {
+  constructor(private readonly options: SignedProviderMediaStagingOptions) {}
+  async stageAsset(assetId: string, options: { ttlSeconds?: number } = {}): Promise<{ publicUrl: string; expiresAt: string }> {
+    const ttlSeconds = Math.min(3600, Math.max(60, Math.floor(options.ttlSeconds || 900))); const expiresAtSeconds = Math.floor(Date.now() / 1000) + ttlSeconds;
+    const token = createProviderMediaToken(assetId, expiresAtSeconds, this.options.secret); const publicUrl = new URL('/api/v1/provider-media', this.options.baseUrl); publicUrl.searchParams.set('token', token);
+    return { publicUrl: publicUrl.toString(), expiresAt: new Date(expiresAtSeconds * 1000).toISOString() };
   }
 }
 

@@ -1,5 +1,5 @@
 import type { AvatarCapabilities, AvatarProvider, AvatarTaskStatus, SpeechCapabilities, SpeechGenerationRequest, SpeechGenerationResult, SpeechProvider, ProviderMediaStaging } from '../../../contracts/src/index.js';
-import { DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, HttpAvatarProvider, HttpProviderMediaStaging, HzAgentAvatarProvider, IndexTTS25SpeechProvider } from './providers.js';
+import { DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, HttpAvatarProvider, HttpProviderMediaStaging, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging } from './providers.js';
 
 class UnavailableSpeechProvider implements SpeechProvider {
   readonly providerId: string;
@@ -22,7 +22,7 @@ class UnavailableAvatarProvider implements AvatarProvider {
 }
 
 export interface RuntimeDigitalHumanProviders { speech: SpeechProvider; avatar: AvatarProvider; staging: ProviderMediaStaging; mediaStagingConfigured: boolean; }
-export interface RuntimeDigitalHumanEnvironment { CONTENTOS_SPEECH_PROVIDER?: string; CONTENTOS_INDEXTTS_BASE_URL?: string; CONTENTOS_AVATAR_PROVIDER?: string; HZAGENT_BASE_URL?: string; HZAGENT_API_KEY?: string; CONTENTOS_MEDIA_STAGING_BASE_URL?: string; CONTENTOS_MEDIA_STAGING_API_KEY?: string; CONTENTOS_FAKE_SPEECH_OUTPUT_PATH?: string; }
+export interface RuntimeDigitalHumanEnvironment { CONTENTOS_SPEECH_PROVIDER?: string; CONTENTOS_INDEXTTS_BASE_URL?: string; CONTENTOS_AVATAR_PROVIDER?: string; HZAGENT_BASE_URL?: string; HZAGENT_API_KEY?: string; CONTENTOS_MEDIA_STAGING_PROVIDER?: string; CONTENTOS_MEDIA_STAGING_BASE_URL?: string; CONTENTOS_MEDIA_STAGING_API_KEY?: string; CONTENTOS_MEDIA_STAGING_SECRET?: string; CONTENTOS_FAKE_SPEECH_OUTPUT_PATH?: string; }
 
 export function createRuntimeDigitalHumanProviders(env: RuntimeDigitalHumanEnvironment = process.env as RuntimeDigitalHumanEnvironment): RuntimeDigitalHumanProviders {
   const speechId = env.CONTENTOS_SPEECH_PROVIDER || 'indextts25';
@@ -39,8 +39,12 @@ export function createRuntimeDigitalHumanProviders(env: RuntimeDigitalHumanEnvir
         ? new HzAgentAvatarProvider({ baseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn', apiKey: env.HZAGENT_API_KEY })
         : new HttpAvatarProvider({ providerId: avatarId, baseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn', apiKey: env.HZAGENT_API_KEY })
       : new UnavailableAvatarProvider(avatarId, 'Avatar provider API key is not configured');
-  const staging = env.CONTENTOS_MEDIA_STAGING_BASE_URL
-    ? new HttpProviderMediaStaging({ baseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL, ...(env.CONTENTOS_MEDIA_STAGING_API_KEY ? { apiKey: env.CONTENTOS_MEDIA_STAGING_API_KEY } : {}) })
-    : new UnavailableMediaStaging('Provider media staging is not configured');
-  return { speech, avatar, staging, mediaStagingConfigured: Boolean(env.CONTENTOS_MEDIA_STAGING_BASE_URL) || avatarId === 'fake-avatar' };
+  const stagingProvider = env.CONTENTOS_MEDIA_STAGING_PROVIDER || 'http';
+  const staging = stagingProvider === 'signed-url' && env.CONTENTOS_MEDIA_STAGING_BASE_URL && env.CONTENTOS_MEDIA_STAGING_SECRET
+    ? new SignedProviderMediaStaging({ baseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL, secret: env.CONTENTOS_MEDIA_STAGING_SECRET })
+    : stagingProvider === 'http' && env.CONTENTOS_MEDIA_STAGING_BASE_URL
+      ? new HttpProviderMediaStaging({ baseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL, ...(env.CONTENTOS_MEDIA_STAGING_API_KEY ? { apiKey: env.CONTENTOS_MEDIA_STAGING_API_KEY } : {}) })
+      : new UnavailableMediaStaging('Provider media staging is not configured');
+  const mediaStagingConfigured = avatarId === 'fake-avatar' || (stagingProvider === 'signed-url' ? Boolean(env.CONTENTOS_MEDIA_STAGING_BASE_URL && env.CONTENTOS_MEDIA_STAGING_SECRET) : Boolean(env.CONTENTOS_MEDIA_STAGING_BASE_URL));
+  return { speech, avatar, staging, mediaStagingConfigured };
 }

@@ -21,6 +21,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Stable request-derived Generation/Job identifiers plus `INSERT ... RETURNING` conflict handling prevent concurrent idempotent requests from creating orphan Jobs; the integration test exercises concurrent Speech and Avatar submissions.
 - The shared Job idempotent insert path now handles concurrent primary-key and idempotency-key races without creating duplicate or orphaned Jobs.
 - A named `HzAgentAvatarProvider` adapter now forms the vendor boundary; other remote providers continue to use the generic HTTP adapter.
+- Built-in HMAC/TTL Provider Media Staging is available with `CONTENTOS_MEDIA_STAGING_PROVIDER=signed-url`; ContentOS serves only READY AUDIO/VIDEO Assets through a signed query URL and never exposes `STORAGE_ROOT` or persists the temporary URL.
 - Remote avatar task adapters now preserve normalized status, model version, cost, and provider provenance; result downloads require HTTP(S) and honor Job cancellation signals.
 - Synthetic subtitle timeline export as Edit Manifest cues, SRT, and ASS through the Speech Generation API.
 - Capability endpoint at `/api/v1/projects/:projectId/digital-human/capabilities`, with the UI displaying live speech/avatar availability instead of assuming a provider is configured.
@@ -33,7 +34,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 
 - Targeted TypeScript compilation: passed.
 - Digital Human/config/worker unit tests and provider contract checks: passed.
-- Digital Human API integration suite: 8 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow and concurrent Speech/Avatar idempotency checks.
+- Digital Human API integration suite: 9 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, concurrent Speech/Avatar idempotency checks, and the signed staging route.
 - Format check: passed (302 files).
 - Lint check: passed (151 TypeScript files).
 - `git diff --check`: passed.

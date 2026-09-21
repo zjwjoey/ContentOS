@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateAvatarGenerationRequest, validateSpeechGenerationRequest } from '../../packages/contracts/src/index.js';
-import { FakeAvatarProvider, FakeSpeechProvider, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SyntheticTimingProvider, createRuntimeDigitalHumanProviders, subtitleTimelineToAss, subtitleTimelineToSrt } from '../../packages/modules/digital-human/src/index.js';
+import { FakeAvatarProvider, FakeSpeechProvider, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging, SyntheticTimingProvider, createRuntimeDigitalHumanProviders, subtitleTimelineToAss, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../packages/modules/digital-human/src/index.js';
 
 test('digital human contracts reject unsafe generation requests', () => {
   assert.doesNotThrow(() => validateSpeechGenerationRequest({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', text: '你好', language: 'zh', speed: 1, emotion: 'natural' }));
@@ -45,4 +45,11 @@ test('HTTP adapters preserve provider capability, task status, model version, an
   const submitted = await avatar.submitLipSync({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', audioUrl: 'https://cdn.test/a.wav', videoUrl: 'https://cdn.test/v.mp4', parameters: {} });
   assert.equal(submitted.status, 'RUNNING'); assert.equal(submitted.modelVersion, '2026.09'); assert.equal(submitted.costAmount, 1.25);
   const completed = await avatar.getTask('task-1'); assert.equal(completed.status, 'SUCCEEDED'); assert.equal(completed.outputUrl, 'https://cdn.test/result.mp4'); assert.equal(completed.costCurrency, 'RMB');
+});
+
+test('signed provider media staging issues expiring, tamper-resistant URLs', async () => {
+  const staging = new SignedProviderMediaStaging({ baseUrl: 'https://contentos.example', secret: 'test-staging-secret' });
+  const result = await staging.stageAsset('asset-video-1', { ttlSeconds: 60 }); const token = new URL(result.publicUrl).searchParams.get('token') || '';
+  const verified = verifyProviderMediaToken(token, 'test-staging-secret'); assert.equal(verified?.assetId, 'asset-video-1'); assert.ok(verified && verified.expiresAtSeconds > Math.floor(Date.now() / 1000));
+  assert.equal(verifyProviderMediaToken(`${token}tampered`, 'test-staging-secret'), null); assert.equal(verifyProviderMediaToken(token, 'wrong-secret'), null);
 });
