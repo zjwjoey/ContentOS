@@ -73,6 +73,7 @@ export function speechCapabilityError(capabilities: SpeechCapabilities, request:
   if (request.hasProviderVoiceId && !capabilities.supportsVoiceId) return { code: 'PROVIDER_VOICE_ID_UNSUPPORTED', message: 'This speech provider does not support provider voice IDs' };
   if (capabilities.languages.length > 0 && !capabilities.languages.includes(request.language)) return { code: 'SPEECH_LANGUAGE_UNSUPPORTED', message: `This speech provider does not support ${request.language}` };
   if (!capabilities.speed && request.speed !== 1) return { code: 'SPEECH_SPEED_UNSUPPORTED', message: 'This speech provider does not support custom speed' };
+  if ((capabilities.minSpeed !== undefined && request.speed < capabilities.minSpeed) || (capabilities.maxSpeed !== undefined && request.speed > capabilities.maxSpeed)) return { code: 'SPEECH_SPEED_UNSUPPORTED', message: `This speech provider supports speed from ${capabilities.minSpeed ?? 0.5} to ${capabilities.maxSpeed ?? 2}` };
   if (!capabilities.emotion && !['natural', 'neutral'].includes(request.emotion.trim().toLowerCase())) return { code: 'SPEECH_EMOTION_UNSUPPORTED', message: 'This speech provider does not support custom emotion' };
   if (capabilities.maxTextCharacters !== undefined && request.text.length > capabilities.maxTextCharacters) return { code: 'SPEECH_TEXT_TOO_LONG', message: `Speech text exceeds the provider limit of ${capabilities.maxTextCharacters} characters` };
   return null;
@@ -103,6 +104,7 @@ export class IndexTTS25SpeechProvider implements SpeechProvider {
     return {
       providerId: this.providerId, local: true,
       voiceClone: capabilities.voiceClone !== false, emotion: capabilities.emotion !== false, speed: capabilities.speed !== false,
+      minSpeed: 0.5, maxSpeed: 2,
       languages: Array.isArray(capabilities.languages) ? capabilities.languages.filter((value): value is string => typeof value === 'string') : ['zh'],
       supportsReferenceAudio: capabilities.supportsReferenceAudio !== false, requiresReferenceAudio: capabilities.requiresReferenceAudio === true, supportsVoiceId: capabilities.supportsVoiceId === true,
       ...(maxTextCharacters === undefined ? {} : { maxTextCharacters }),
@@ -129,7 +131,7 @@ export class IndexTTS25SpeechProvider implements SpeechProvider {
 export class FakeSpeechProvider implements SpeechProvider {
   readonly providerId = 'fake-speech';
   constructor(private readonly outputPath: string) {}
-  async getCapabilities(): Promise<SpeechCapabilities> { return { providerId: this.providerId, local: true, voiceClone: true, emotion: true, speed: true, languages: ['zh', 'en'], supportsReferenceAudio: true, requiresReferenceAudio: false, supportsVoiceId: false, maxTextCharacters: 20_000 }; }
+  async getCapabilities(): Promise<SpeechCapabilities> { return { providerId: this.providerId, local: true, voiceClone: true, emotion: true, speed: true, minSpeed: 0.5, maxSpeed: 2, languages: ['zh', 'en'], supportsReferenceAudio: true, requiresReferenceAudio: false, supportsVoiceId: false, maxTextCharacters: 20_000 }; }
   async generateSpeech(_request: SpeechGenerationRequest): Promise<SpeechGenerationResult> { return { providerId: this.providerId, model: 'fake-speech', modelVersion: '1', outputPath: this.outputPath, durationMs: 1_000, latencyMs: 1, provenance: { fake: true } }; }
 }
 
@@ -139,30 +141,31 @@ function base64UrlEncode(value: string): string { return Buffer.from(value, 'utf
 function base64UrlDecode(value: string): string { return Buffer.from(value, 'base64url').toString('utf8'); }
 function providerMediaSignature(payload: string, secret: string): string { return createHmac('sha256', secret).update(payload).digest('base64url'); }
 
-export function createProviderMediaToken(assetId: string, expiresAtSeconds: number, secret: string): string {
-  if (!assetId.trim() || !Number.isSafeInteger(expiresAtSeconds) || expiresAtSeconds <= Math.floor(Date.now() / 1000) || !secret.trim()) throw new Error('Invalid provider media token input');
-  const payload = base64UrlEncode(JSON.stringify({ assetId, expiresAtSeconds }));
+export function createProviderMediaToken(projectId: string, assetId: string, expiresAtSeconds: number, secret: string): string {
+  if (!projectId.trim() || !assetId.trim() || !Number.isSafeInteger(expiresAtSeconds) || expiresAtSeconds <= Math.floor(Date.now() / 1000) || !secret.trim()) throw new Error('Invalid provider media token input');
+  const payload = base64UrlEncode(JSON.stringify({ projectId, assetId, expiresAtSeconds }));
   return `${payload}.${providerMediaSignature(payload, secret)}`;
 }
 
-export function verifyProviderMediaToken(token: string, secret: string): { assetId: string; expiresAtSeconds: number } | null {
+export function verifyProviderMediaToken(token: string, secret: string): { projectId: string; assetId: string; expiresAtSeconds: number } | null {
   if (!token || !secret.trim()) return null;
   const separator = token.lastIndexOf('.'); if (separator <= 0 || separator === token.length - 1) return null;
   const payload = token.slice(0, separator); const signature = token.slice(separator + 1); const expected = providerMediaSignature(payload, secret);
   const actualBytes = Buffer.from(signature); const expectedBytes = Buffer.from(expected); if (actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes)) return null;
   try {
-    const value = JSON.parse(base64UrlDecode(payload)) as { assetId?: unknown; expiresAtSeconds?: unknown }; const expiresAtSeconds = value.expiresAtSeconds;
-    if (typeof value.assetId !== 'string' || !value.assetId.trim() || typeof expiresAtSeconds !== 'number' || !Number.isSafeInteger(expiresAtSeconds) || expiresAtSeconds <= Math.floor(Date.now() / 1000)) return null;
-    return { assetId: value.assetId, expiresAtSeconds };
+    const value = JSON.parse(base64UrlDecode(payload)) as { projectId?: unknown; assetId?: unknown; expiresAtSeconds?: unknown }; const expiresAtSeconds = value.expiresAtSeconds;
+    if (typeof value.projectId !== 'string' || !value.projectId.trim() || typeof value.assetId !== 'string' || !value.assetId.trim() || typeof expiresAtSeconds !== 'number' || !Number.isSafeInteger(expiresAtSeconds) || expiresAtSeconds <= Math.floor(Date.now() / 1000)) return null;
+    return { projectId: value.projectId, assetId: value.assetId, expiresAtSeconds };
   } catch { return null; }
 }
 
 export class SignedProviderMediaStaging implements ProviderMediaStaging {
   constructor(private readonly options: SignedProviderMediaStagingOptions) {}
-  async stageAsset(assetId: string, options: { ttlSeconds?: number } = {}): Promise<{ publicUrl: string; expiresAt: string }> {
+  async stageAsset(assetId: string, options: { ttlSeconds?: number; projectId?: string } = {}): Promise<{ publicUrl: string; expiresAt: string }> {
     if (!isPublicHttpUrl(this.options.baseUrl)) throw new DigitalHumanProviderError('UNAVAILABLE', 'Provider media staging base URL is not public', false);
+    if (!options.projectId?.trim()) throw new DigitalHumanProviderError('INVALID_REQUEST', 'Provider media staging requires a project binding', false);
     const ttlSeconds = Math.min(3600, Math.max(60, Math.floor(options.ttlSeconds || 900))); const expiresAtSeconds = Math.floor(Date.now() / 1000) + ttlSeconds;
-    const token = createProviderMediaToken(assetId, expiresAtSeconds, this.options.secret); const publicUrl = new URL('/api/v1/provider-media', this.options.baseUrl); publicUrl.searchParams.set('token', token);
+    const token = createProviderMediaToken(options.projectId, assetId, expiresAtSeconds, this.options.secret); const publicUrl = new URL('/api/v1/provider-media', this.options.baseUrl); publicUrl.searchParams.set('token', token);
     return { publicUrl: publicUrl.toString(), expiresAt: new Date(expiresAtSeconds * 1000).toISOString() };
   }
 }

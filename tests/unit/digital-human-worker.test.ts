@@ -109,7 +109,22 @@ test('Digital Human worker records Speech preflight failures on the Generation',
   } as never;
   const job = { id: 'job-speech-preflight', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'SPEECH', generationId: 'generation-speech-preflight', projectId: 'project-1', correlationId: 'corr-preflight' } } as never;
   await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-speech-preflight', new AbortController().signal), /Voice Profile not found/);
-  assert.deepEqual(failures, [{ id: 'generation-speech-preflight', code: 'SPEECH_GENERATION_FAILED' }]);
+  assert.deepEqual(failures, [{ id: 'generation-speech-preflight', code: 'VOICE_PROFILE_NOT_FOUND' }]);
+});
+
+test('Digital Human worker fails closed when Generation provider identity differs from runtime', async () => {
+  const failures: Array<{ id: string; code: string }> = [];
+  const deps = {
+    digitalHuman: {
+      getSpeechGeneration: async () => ({ id: 'generation-provider-mismatch', status: 'PENDING', provider: 'wrong-speech', outputAssetId: null }),
+      markSpeechRunning: async () => undefined,
+      failSpeech: async (id: string, error: { code: string }) => { failures.push({ id, code: error.code }); },
+    },
+    speechProvider: { providerId: 'indextts25' },
+  } as never;
+  const job = { id: 'job-provider-mismatch', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'SPEECH', generationId: 'generation-provider-mismatch', projectId: 'project-1', correlationId: 'corr-provider-mismatch' } } as never;
+  await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-provider-mismatch', new AbortController().signal), /configured runtime provider/);
+  assert.deepEqual(failures, [{ id: 'generation-provider-mismatch', code: 'SPEECH_PROVIDER_IDENTITY_MISMATCH' }]);
 });
 
 test('Digital Human worker prefers probed Speech Asset duration for completion', async () => {
@@ -166,6 +181,7 @@ test('Digital Human worker rejects an oversized remote Avatar result before impo
     staging: { stageAsset: async (id: string) => ({ assetId: id, publicUrl: `https://provider.test/${id}`, expiresAt: new Date(Date.now() + 60_000).toISOString() }) },
     storage: { root: 'C:/contentos-test-storage' },
     fetchImpl: async () => new Response(Buffer.from('large'), { status: 200, headers: { 'content-length': '5' } }),
+    resolveRemoteMedia: async () => [{ address: '93.184.216.34', family: 4 }],
     maxRemoteResultBytes: 4,
   } as never;
   const job = { id: 'job-avatar-large', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-avatar-large', projectId: 'project-1', correlationId: 'corr-large' } } as never;
@@ -188,6 +204,7 @@ test('Digital Human worker bounds remote Avatar result downloads', async () => {
     staging: { stageAsset: async (id: string) => ({ assetId: id, publicUrl: `https://provider.test/${id}`, expiresAt: new Date(Date.now() + 60_000).toISOString() }) },
     storage: { root: 'C:/contentos-test-storage' },
     fetchImpl: async (_input: RequestInfo | URL, init?: RequestInit) => await new Promise<Response>((_resolve, reject) => { init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }); }),
+    resolveRemoteMedia: async () => [{ address: '93.184.216.34', family: 4 }],
     remoteResultTimeoutMs: 10,
   } as never;
   const job = { id: 'job-avatar-timeout', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-avatar-timeout', projectId: 'project-1', correlationId: 'corr-timeout' } } as never;

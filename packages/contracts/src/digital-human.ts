@@ -8,6 +8,8 @@ export interface SpeechCapabilities {
   voiceClone: boolean;
   emotion: boolean;
   speed: boolean;
+  minSpeed?: number;
+  maxSpeed?: number;
   languages: string[];
   supportsReferenceAudio: boolean;
   requiresReferenceAudio: boolean;
@@ -96,7 +98,7 @@ export interface AvatarProvider {
 }
 
 export interface ProviderMediaStaging {
-  stageAsset(assetId: string, options?: { ttlSeconds?: number }): Promise<{ publicUrl: string; expiresAt: string }>;
+  stageAsset(assetId: string, options?: { ttlSeconds?: number; projectId?: string }): Promise<{ publicUrl: string; expiresAt: string }>;
 }
 
 export interface AlignmentRequest {
@@ -222,7 +224,7 @@ export function validateSpeechGenerationRequest(value: SpeechGenerationRequest):
   nonEmpty(value.requestId, 'requestId'); nonEmpty(value.projectId, 'projectId'); nonEmpty(value.jobId, 'jobId');
   nonEmpty(value.attemptId, 'attemptId'); nonEmpty(value.correlationId, 'correlationId'); nonEmpty(value.text, 'text'); nonEmpty(value.language, 'language'); nonEmpty(value.emotion, 'emotion');
   if (value.text.length > 100_000) throw new Error('text exceeds maximum length');
-  if (!Number.isFinite(value.speed) || value.speed < 0.25 || value.speed > 4) throw new Error('speed must be between 0.25 and 4');
+  if (!Number.isFinite(value.speed) || value.speed < 0.5 || value.speed > 2) throw new Error('speed must be between 0.5 and 2');
 }
 
 export function validateAvatarGenerationRequest(value: AvatarGenerationRequest): void {

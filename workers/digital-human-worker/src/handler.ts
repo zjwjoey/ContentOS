@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Transform, Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { JobRunner, type JobLeaseCancellationHandler, type JobRecord, type JobService } from '../../../packages/modules/job/src/index.js';
-import { DigitalHumanProviderError, DigitalHumanService, speechCapabilityError } from '../../../packages/modules/digital-human/src/index.js';
+import { DigitalHumanProviderError, DigitalHumanService, safeFetchRemoteMedia, speechCapabilityError, type RemoteMediaResolver } from '../../../packages/modules/digital-human/src/index.js';
 import type { AvatarProvider, ProviderMediaStaging, SpeechProvider } from '../../../packages/contracts/src/index.js';
 import { AssetCatalogService, AssetService } from '../../../packages/modules/asset/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
@@ -20,6 +20,7 @@ export interface DigitalHumanWorkerDependencies {
   avatarProvider: AvatarProvider;
   staging: ProviderMediaStaging;
   fetchImpl?: typeof fetch;
+  resolveRemoteMedia?: RemoteMediaResolver;
   maxRemoteResultBytes?: number;
   remoteResultTimeoutMs?: number;
 }
@@ -66,11 +67,11 @@ function remoteResultTimeout(deps: DigitalHumanWorkerDependencies): number {
   return value;
 }
 
-async function fetchRemoteResult(fetchImpl: typeof fetch, url: string, signal: AbortSignal, timeout: number): Promise<Response> {
+async function fetchRemoteResult(fetchImpl: typeof fetch, url: string, signal: AbortSignal, timeout: number, resolveRemoteMedia?: RemoteMediaResolver): Promise<Response> {
   const controller = new AbortController(); let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeout); const abort = () => controller.abort(signal.reason);
   if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
-  try { return await fetchImpl(url, { signal: controller.signal }); }
+  try { return await safeFetchRemoteMedia(url, { fetchImpl, ...(resolveRemoteMedia ? { resolveAll: resolveRemoteMedia } : {}), signal: controller.signal }); }
   catch (error) { if (timedOut) throw Object.assign(new Error('Avatar provider result download timed out'), { code: 'AVATAR_RESULT_DOWNLOAD_TIMEOUT', retryable: true }); throw error; }
   finally { clearTimeout(timer); signal.removeEventListener('abort', abort); }
 }
@@ -95,16 +96,19 @@ async function processSpeech(job: JobRecord, attemptId: string, signal: AbortSig
   if (generation.status === 'SUCCEEDED') return { generationId: generation.id, outputAssetId: generation.outputAssetId, state: generation.status };
   await deps.digitalHuman.markSpeechRunning(generation.id);
   try {
+    if (deps.speechProvider?.providerId && generation.provider !== deps.speechProvider.providerId) throw Object.assign(new Error('Speech Generation provider does not match the configured runtime provider'), { code: 'SPEECH_PROVIDER_IDENTITY_MISMATCH', retryable: false });
     const voice = await deps.digitalHuman.getVoiceProfile(payload.projectId, generation.voiceProfileId); if (!voice) throw Object.assign(new Error('Voice Profile not found'), { code: 'VOICE_PROFILE_NOT_FOUND', retryable: false });
     const reference = voice.referenceAssetId ? await deps.assets.getProjectAsset(payload.projectId, voice.referenceAssetId) : null;
     if (voice.referenceAssetId && !reference) throw Object.assign(new Error('Voice reference asset not found'), { code: 'VOICE_REFERENCE_ASSET_NOT_READY', retryable: false });
     const capabilities = await deps.speechProvider.getCapabilities();
+    if (deps.speechProvider?.providerId && capabilities.providerId !== deps.speechProvider.providerId) throw Object.assign(new Error('Speech provider capability identity does not match the configured runtime provider'), { code: 'SPEECH_PROVIDER_IDENTITY_MISMATCH', retryable: false });
     const language = String(generation.parameters.language || voice.language); const speed = Number(generation.parameters.speed || voice.defaultSpeed); const emotion = String(generation.parameters.emotion || voice.defaultEmotion);
     const capabilityError = speechCapabilityError(capabilities, { text: generation.text, language, speed, emotion, hasReferenceAudio: Boolean(reference), hasProviderVoiceId: Boolean(voice.providerVoiceId) });
     if (capabilityError) throw Object.assign(new Error(capabilityError.message), { code: capabilityError.code, retryable: false });
     signal.throwIfAborted();
     const result = await deps.speechProvider.generateSpeech({ requestId: generation.id, projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, text: generation.text, language, speed, emotion, ...(reference ? { referenceAudioPath: deps.storage.objectPath(reference.storageKey) } : {}), ...(voice.providerVoiceId ? { providerVoiceId: voice.providerVoiceId } : {}) });
     signal.throwIfAborted();
+    if (deps.speechProvider?.providerId && result.providerId !== deps.speechProvider.providerId) throw Object.assign(new Error('Speech provider returned a mismatched provider identity'), { code: 'SPEECH_PROVIDER_IDENTITY_MISMATCH', retryable: false });
     if (!Number.isFinite(result.durationMs) || result.durationMs <= 0) throw Object.assign(new Error('Speech provider returned an invalid duration'), { code: 'SPEECH_DURATION_INVALID', retryable: false });
     const asset = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: result.outputPath, kind: 'AUDIO', role: 'OUTPUT', metadata: { digitalHuman: { generationId: generation.id, provider: result.providerId, model: result.model, modelVersion: result.modelVersion } } });
     signal.throwIfAborted();
@@ -114,8 +118,8 @@ async function processSpeech(job: JobRecord, attemptId: string, signal: AbortSig
     return { generationId: generation.id, outputAssetId: asset.id, state: 'SUCCEEDED' };
   } catch (error) {
     if (signal.aborted) { await deps.digitalHuman.cancelSpeech(generation.id); throw error; }
-    const providerError = error instanceof DigitalHumanProviderError ? error : null;
-    await deps.digitalHuman.failSpeech(generation.id, { code: providerError?.code || 'SPEECH_GENERATION_FAILED', message: error instanceof Error ? error.message.slice(0, 200) : 'Speech generation failed' });
+    const providerError = error instanceof DigitalHumanProviderError ? error : null; const errorCode = typeof (error as { code?: unknown }).code === 'string' ? String((error as { code: string }).code) : undefined;
+    await deps.digitalHuman.failSpeech(generation.id, { code: providerError?.code || errorCode || 'SPEECH_GENERATION_FAILED', message: error instanceof Error ? error.message.slice(0, 200) : 'Speech generation failed' });
     throw error;
   }
 }
@@ -126,6 +130,7 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
   await deps.digitalHuman.markAvatarRunning(generation.id);
   let remoteTaskId = generation.externalTaskId;
   try {
+    if (deps.avatarProvider?.providerId && generation.provider !== deps.avatarProvider.providerId) throw Object.assign(new Error('Avatar Generation provider does not match the configured runtime provider'), { code: 'AVATAR_PROVIDER_IDENTITY_MISMATCH', retryable: false });
     const clip = await deps.digitalHuman.getAvatarClip(payload.projectId, generation.avatarClipId); const video = clip ? await deps.assets.getProjectAsset(payload.projectId, clip.assetId) : null; const audio = video ? await deps.assets.getProjectAsset(payload.projectId, generation.speechAssetId) : null;
     if (!clip || !video || video.kind !== 'VIDEO' || video.lifecycle !== 'READY') throw Object.assign(new Error('Avatar source video is not ready'), { code: 'AVATAR_CLIP_ASSET_NOT_READY', retryable: false });
     if (!audio || audio.kind !== 'AUDIO' || audio.lifecycle !== 'READY') throw Object.assign(new Error('Speech asset is not ready'), { code: 'SPEECH_ASSET_NOT_READY', retryable: false });
@@ -133,6 +138,7 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
     if (!Number.isFinite(videoDurationMs) || videoDurationMs <= 0) throw Object.assign(new Error('Avatar source video duration is invalid'), { code: 'AVATAR_CLIP_DURATION_INVALID', retryable: false });
     if (!Number.isFinite(audioDurationMs) || audioDurationMs <= 0) throw Object.assign(new Error('Speech asset duration is invalid'), { code: 'SPEECH_ASSET_DURATION_INVALID', retryable: false });
     const capabilities = await deps.avatarProvider.getCapabilities();
+    if (deps.avatarProvider?.providerId && capabilities.providerId !== deps.avatarProvider.providerId) throw Object.assign(new Error('Avatar provider capability identity does not match the configured runtime provider'), { code: 'AVATAR_PROVIDER_IDENTITY_MISMATCH', retryable: false });
     if (!capabilities.videoToVideo) throw Object.assign(new Error('Avatar provider does not support video-to-video generation for this video clip'), { code: 'AVATAR_VIDEO_TO_VIDEO_UNSUPPORTED', retryable: false });
     const videoFormat = String(video.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || ''; const audioFormat = String(audio.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || '';
     if (videoFormat && capabilities.supportedFormats.length > 0 && !capabilities.supportedFormats.some((format) => format.toLowerCase().replace(/^\./, '') === videoFormat)) throw Object.assign(new Error(`Avatar provider does not support ${videoFormat} video input`), { code: 'AVATAR_VIDEO_FORMAT_UNSUPPORTED', retryable: false });
@@ -141,16 +147,16 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
     signal.throwIfAborted();
     const existingTask = generation.externalTaskId ? await deps.avatarProvider.getTask(generation.externalTaskId) : null;
     const replaceTerminalTask = existingTask && (existingTask.status === 'FAILED' || existingTask.status === 'CANCELLED');
-    const task = !replaceTerminalTask && existingTask ? existingTask : await deps.avatarProvider.submitLipSync({ requestId: generation.id, projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, audioUrl: (await deps.staging.stageAsset(audio.id)).publicUrl, videoUrl: (await deps.staging.stageAsset(video.id)).publicUrl, ...(generation.model ? { model: generation.model } : {}), parameters: generation.provenance.parameters && typeof generation.provenance.parameters === 'object' ? generation.provenance.parameters as Record<string, unknown> : {} });
+    const task = !replaceTerminalTask && existingTask ? existingTask : await deps.avatarProvider.submitLipSync({ requestId: generation.id, projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, audioUrl: (await deps.staging.stageAsset(audio.id, { projectId: payload.projectId })).publicUrl, videoUrl: (await deps.staging.stageAsset(video.id, { projectId: payload.projectId })).publicUrl, ...(generation.model ? { model: generation.model } : {}), parameters: generation.provenance.parameters && typeof generation.provenance.parameters === 'object' ? generation.provenance.parameters as Record<string, unknown> : {} });
     remoteTaskId = task.externalTaskId;
     if (!generation.externalTaskId) await deps.digitalHuman.markAvatarWaiting(generation.id, task.externalTaskId, { provider: task.providerId, externalTaskId: task.externalTaskId });
     else if (replaceTerminalTask) await deps.digitalHuman.replaceAvatarWaiting(generation.id, task.externalTaskId, { provider: task.providerId, externalTaskId: task.externalTaskId });
     if (task.status === 'QUEUED' || task.status === 'RUNNING') throw Object.assign(new Error('Avatar provider task is still running'), { code: 'EXTERNAL_TASK_PENDING', retryable: true, defer: true, retryDelayMs: 1_000 });
     const taskError = task as { errorCode?: string; errorMessage?: string };
     if (task.status === 'FAILED' || task.status === 'CANCELLED' || !task.outputUrl) throw Object.assign(new Error(taskError.errorMessage || 'Avatar provider task failed'), { code: taskError.errorCode || 'AVATAR_PROVIDER_FAILED', retryable: false });
+    if (deps.avatarProvider?.providerId && task.providerId !== deps.avatarProvider.providerId) throw Object.assign(new Error('Avatar provider task identity does not match the configured runtime provider'), { code: 'AVATAR_PROVIDER_IDENTITY_MISMATCH', retryable: false });
     signal.throwIfAborted();
-    if (!/^https?:\/\//i.test(task.outputUrl)) throw Object.assign(new Error('Avatar provider returned an unsafe output URL'), { code: 'AVATAR_RESULT_URL_INVALID', retryable: false });
-    const fetchImpl = deps.fetchImpl || fetch; const response = await fetchRemoteResult(fetchImpl, task.outputUrl, signal, remoteResultTimeout(deps)); if (!response.ok) throw Object.assign(new Error('Unable to download avatar result'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: response.status >= 500 });
+    const fetchImpl = deps.fetchImpl || fetch; const response = await fetchRemoteResult(fetchImpl, task.outputUrl, signal, remoteResultTimeout(deps), deps.resolveRemoteMedia); if (!response.ok) throw Object.assign(new Error('Unable to download avatar result'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: response.status >= 500 });
     const tempPath = join(deps.storage.root, 'staging', `${generation.id}.avatar.mp4`); await mkdir(join(deps.storage.root, 'staging'), { recursive: true }); await streamRemoteResult(response, tempPath, remoteResultLimit(deps));
     try {
       const asset = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: tempPath, kind: 'VIDEO', role: 'OUTPUT', metadata: { digitalHuman: { generationId: generation.id, provider: task.providerId, externalTaskId: task.externalTaskId } } });

@@ -13,14 +13,14 @@ import type { LocalStorageProvider } from '../../../packages/infrastructure/stor
 import type { ProjectService } from '../../../packages/modules/project/src/index.js';
 import type { JobService } from '../../../packages/modules/job/src/index.js';
 
-const voiceInput = z.object({ name: z.string().trim().min(1).max(200), provider: z.string().trim().min(1).max(100).default('indextts25'), referenceAssetId: z.string().trim().min(1).max(200).optional(), providerVoiceId: z.string().trim().min(1).max(200).optional(), language: z.string().trim().min(1).max(20).default('zh'), defaultSpeed: z.number().min(.25).max(4).default(1), defaultEmotion: z.string().trim().min(1).max(100).default('natural') }).strict();
-const voicePatch = z.object({ name: z.string().trim().min(1).max(200).optional(), referenceAssetId: z.string().trim().min(1).max(200).nullable().optional(), providerVoiceId: z.string().trim().min(1).max(200).nullable().optional(), language: z.string().trim().min(1).max(20).optional(), defaultSpeed: z.number().min(.25).max(4).optional(), defaultEmotion: z.string().trim().min(1).max(100).optional(), status: z.enum(['DRAFT', 'READY', 'DISABLED']).optional() }).strict();
+const voiceInput = z.object({ name: z.string().trim().min(1).max(200), provider: z.string().trim().min(1).max(100).optional(), referenceAssetId: z.string().trim().min(1).max(200).optional(), providerVoiceId: z.string().trim().min(1).max(200).optional(), language: z.string().trim().min(1).max(20).default('zh'), defaultSpeed: z.number().min(.5).max(2).default(1), defaultEmotion: z.string().trim().min(1).max(100).default('natural') }).strict();
+const voicePatch = z.object({ name: z.string().trim().min(1).max(200).optional(), referenceAssetId: z.string().trim().min(1).max(200).nullable().optional(), providerVoiceId: z.string().trim().min(1).max(200).nullable().optional(), language: z.string().trim().min(1).max(20).optional(), defaultSpeed: z.number().min(.5).max(2).optional(), defaultEmotion: z.string().trim().min(1).max(100).optional(), status: z.enum(['DRAFT', 'READY', 'DISABLED']).optional() }).strict();
 const avatarInput = z.object({ name: z.string().trim().min(1).max(200), ownerName: z.string().trim().max(200).default('') }).strict();
 const avatarPatch = z.object({ name: z.string().trim().min(1).max(200).optional(), ownerName: z.string().trim().max(200).optional(), status: z.enum(['DRAFT', 'READY', 'DISABLED']).optional() }).strict();
 const clipInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), assetId: z.string().trim().min(1).max(200), name: z.string().trim().min(1).max(200), durationMs: z.number().int().positive().optional(), width: z.number().int().positive().optional(), height: z.number().int().positive().optional(), fps: z.number().positive().optional(), sceneType: z.string().trim().max(100).optional(), gestureLevel: z.string().trim().max(100).optional(), tags: z.array(z.string().trim().min(1).max(100)).max(64).optional() }).strict();
 const clipPatch = z.object({ assetId: z.string().trim().min(1).max(200).optional(), name: z.string().trim().min(1).max(200).optional(), durationMs: z.number().int().positive().nullable().optional(), width: z.number().int().positive().nullable().optional(), height: z.number().int().positive().nullable().optional(), fps: z.number().positive().nullable().optional(), sceneType: z.string().trim().max(100).nullable().optional(), gestureLevel: z.string().trim().max(100).nullable().optional(), tags: z.array(z.string().trim().min(1).max(100)).max(64).optional(), status: z.enum(['DRAFT', 'READY', 'DISABLED']).optional() }).strict();
 const avatarPreflightInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), avatarClipId: z.string().trim().min(1).max(200), speechAssetId: z.string().trim().min(1).max(200) }).strict();
-const speechInput = z.object({ voiceProfileId: z.string().trim().min(1).max(200), text: z.string().trim().min(1).max(100_000), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), language: z.string().trim().min(1).max(20).optional(), speed: z.number().min(.25).max(4).optional(), emotion: z.string().trim().min(1).max(100).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
+const speechInput = z.object({ voiceProfileId: z.string().trim().min(1).max(200), text: z.string().trim().min(1).max(100_000), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), language: z.string().trim().min(1).max(20).optional(), speed: z.number().min(.5).max(2).optional(), emotion: z.string().trim().min(1).max(100).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
 const avatarGenerationInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), avatarClipId: z.string().trim().min(1).max(200), speechAssetId: z.string().trim().min(1).max(200), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), parameters: z.record(z.string(), z.unknown()).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
 const editManifestInput = z.object({ seed: z.number().int().default(1), includeSubtitles: z.boolean().default(true) }).strict();
 
@@ -28,6 +28,8 @@ export interface DigitalHumanRouteDependencies { digitalHuman: DigitalHumanServi
 function fail(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, status: number, code: string, message: string): unknown { return reply.code(status).send({ error: { code, message, details: [] } }); }
 function invalid(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, details: unknown): unknown { return reply.code(422).send({ error: { code: 'DIGITAL_HUMAN_VALIDATION_ERROR', message: 'Invalid digital human input', details } }); }
 function projectId(request: { params: unknown }): string { return (request.params as { projectId: string }).projectId; }
+function configuredProviderId(deps: DigitalHumanRouteDependencies, kind: 'speech' | 'avatar'): string | undefined { return deps.providers?.[kind].providerId; }
+function providerMismatch(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, kind: 'SPEECH' | 'AVATAR', expected: string, received: string): unknown { return fail(reply, 409, `${kind}_PROVIDER_ID_MISMATCH`, `${kind === 'SPEECH' ? 'Speech' : 'Avatar'} provider must be ${expected}; received ${received}`); }
 
 type PreflightCheck = { code: string; status: 'READY' | 'BLOCKED'; message: string };
 type AvatarPreflightResult = { status: 'READY' | 'BLOCKED'; checks: PreflightCheck[] };
@@ -51,20 +53,21 @@ async function runAvatarPreflight(projectId: string, input: { avatarProfileId: s
   if (!deps.providers) {
     block('DIGITAL_HUMAN_PROVIDERS_UNCONFIGURED', 'Digital Human providers are not configured');
   } else {
-    try { await deps.providers.speech.getCapabilities(); ready('SPEECH_RUNTIME_HEALTHY', 'Speech runtime is reachable'); }
-    catch { block('SPEECH_RUNTIME_UNAVAILABLE', 'Speech runtime is unavailable'); }
     try {
-      const capabilities = await deps.providers.avatar.getCapabilities();
-      if (!capabilities.videoToVideo && !capabilities.imageToVideo) block('AVATAR_PROVIDER_UNAVAILABLE', 'Avatar provider does not support video generation');
-      else if (!capabilities.videoToVideo) block('AVATAR_VIDEO_TO_VIDEO_UNSUPPORTED', 'Avatar provider does not support video-to-video generation for this video clip');
-      else ready('AVATAR_PROVIDER_HEALTHY', 'Avatar provider is reachable for video-to-video generation');
-      if (capabilities.requiresPublicUrl && !deps.providers.mediaStagingConfigured) block('MEDIA_STAGING_NOT_CONFIGURED', 'Public media staging is required for this avatar provider');
-      else if (capabilities.requiresPublicUrl) ready('MEDIA_STAGING_READY', 'Public media staging is configured');
-      const videoFormat = String(video?.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || '';
-      const audioFormat = String(speech?.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || '';
-      if (videoFormat && capabilities.supportedFormats.length > 0 && !capabilities.supportedFormats.some((format) => format.toLowerCase().replace(/^\./, '') === videoFormat)) block('AVATAR_VIDEO_FORMAT_UNSUPPORTED', `Avatar provider does not support ${videoFormat} video input`);
-      if (audioFormat && capabilities.supportedAudioFormats?.length && !capabilities.supportedAudioFormats.some((format) => format.toLowerCase().replace(/^\./, '') === audioFormat)) block('AVATAR_AUDIO_FORMAT_UNSUPPORTED', `Avatar provider does not support ${audioFormat} audio input`);
-      if (video && capabilities.maxDurationSeconds !== undefined && Number(video.metadata.durationMs) > capabilities.maxDurationSeconds * 1_000) block('AVATAR_DURATION_EXCEEDS_PROVIDER_LIMIT', 'Avatar source video exceeds provider duration limit');
+       const capabilities = await deps.providers.avatar.getCapabilities();
+       if (capabilities.providerId !== deps.providers.avatar.providerId) block('AVATAR_PROVIDER_IDENTITY_MISMATCH', 'Avatar provider capability identity does not match the configured runtime provider');
+       else {
+         if (!capabilities.videoToVideo && !capabilities.imageToVideo) block('AVATAR_PROVIDER_UNAVAILABLE', 'Avatar provider does not support video generation');
+         else if (!capabilities.videoToVideo) block('AVATAR_VIDEO_TO_VIDEO_UNSUPPORTED', 'Avatar provider does not support video-to-video generation for this video clip');
+         else ready('AVATAR_PROVIDER_HEALTHY', 'Avatar provider is reachable for video-to-video generation');
+         if (capabilities.requiresPublicUrl && !deps.providers.mediaStagingConfigured) block('MEDIA_STAGING_NOT_CONFIGURED', 'Public media staging is required for this avatar provider');
+         else if (capabilities.requiresPublicUrl) ready('MEDIA_STAGING_READY', 'Public media staging is configured');
+         const videoFormat = String(video?.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || '';
+         const audioFormat = String(speech?.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || '';
+         if (videoFormat && capabilities.supportedFormats.length > 0 && !capabilities.supportedFormats.some((format) => format.toLowerCase().replace(/^\./, '') === videoFormat)) block('AVATAR_VIDEO_FORMAT_UNSUPPORTED', `Avatar provider does not support ${videoFormat} video input`);
+         if (audioFormat && capabilities.supportedAudioFormats?.length && !capabilities.supportedAudioFormats.some((format) => format.toLowerCase().replace(/^\./, '') === audioFormat)) block('AVATAR_AUDIO_FORMAT_UNSUPPORTED', `Avatar provider does not support ${audioFormat} audio input`);
+         if (video && capabilities.maxDurationSeconds !== undefined && Number(video.metadata.durationMs) > capabilities.maxDurationSeconds * 1_000) block('AVATAR_DURATION_EXCEEDS_PROVIDER_LIMIT', 'Avatar source video exceeds provider duration limit');
+       }
     } catch { block('AVATAR_PROVIDER_UNAVAILABLE', 'Avatar provider capability check failed'); }
   }
   return { status: checks.some((check) => check.status === 'BLOCKED') ? 'BLOCKED' : 'READY', checks };
@@ -80,7 +83,7 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
     const token = (request.query as { token?: string }).token || ''; const secret = deps.mediaStagingSecret?.trim();
     if (!secret || !deps.assets || !deps.storage) return reply.code(404).send({ error: { code: 'PROVIDER_MEDIA_NOT_FOUND', message: 'Provider media is not available', details: [] } });
     const verified = verifyProviderMediaToken(token, secret); if (!verified) return reply.code(404).send({ error: { code: 'PROVIDER_MEDIA_NOT_FOUND', message: 'Provider media is not available', details: [] } });
-    const asset = await deps.assets.getReadyAssetForProviderStaging(verified.assetId); if (!asset || !await deps.storage.exists(asset.storageKey)) return reply.code(404).send({ error: { code: 'PROVIDER_MEDIA_NOT_FOUND', message: 'Provider media is not available', details: [] } });
+    const asset = await deps.assets.getReadyAssetForProviderStaging(verified.projectId, verified.assetId); if (!asset || !await deps.storage.exists(asset.storageKey)) return reply.code(404).send({ error: { code: 'PROVIDER_MEDIA_NOT_FOUND', message: 'Provider media is not available', details: [] } });
     const contentType = asset.kind === 'VIDEO' ? 'video/mp4' : asset.metadata.format === 'mp3' ? 'audio/mpeg' : 'audio/wav';
     return reply.header('cache-control', 'private, max-age=0, no-store').header('content-length', asset.byteSize).type(contentType).send(createReadStream(deps.storage.objectPath(asset.storageKey)));
   });
@@ -115,7 +118,7 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
     return reply.code(record.created === false ? 200 : 201).send({ manifestId: record.id, jobId: job.id, deduplicated: record.created === false, editUrl: `/projects/${params.projectId}/video` });
   });
   app.get('/api/v1/projects/:projectId/digital-human/voices', async (request, reply) => { const id = projectId(request); return { items: await deps.digitalHuman.listVoiceProfiles(id) }; });
-  app.post('/api/v1/projects/:projectId/digital-human/voices', async (request, reply) => { const parsed = voiceInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues); const id = projectId(request); if (!(await deps.projects.get(id))) return fail(reply, 404, 'PROJECT_NOT_FOUND', 'Project not found'); try { return reply.code(201).send(await deps.digitalHuman.createVoiceProfile({ projectId: id, ...parsed.data })); } catch (error) { return fail(reply, 409, 'VOICE_PROFILE_CONFLICT', error instanceof Error ? error.message : 'Unable to create Voice Profile'); } });
+  app.post('/api/v1/projects/:projectId/digital-human/voices', async (request, reply) => { const parsed = voiceInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues); const id = projectId(request); if (!(await deps.projects.get(id))) return fail(reply, 404, 'PROJECT_NOT_FOUND', 'Project not found'); const runtimeProvider = configuredProviderId(deps, 'speech'); if (runtimeProvider && parsed.data.provider && parsed.data.provider !== runtimeProvider) return providerMismatch(reply, 'SPEECH', runtimeProvider, parsed.data.provider); try { return reply.code(201).send(await deps.digitalHuman.createVoiceProfile({ projectId: id, ...parsed.data, provider: parsed.data.provider || runtimeProvider || 'indextts25' })); } catch (error) { return fail(reply, 409, 'VOICE_PROFILE_CONFLICT', error instanceof Error ? error.message : 'Unable to create Voice Profile'); } });
   app.patch('/api/v1/projects/:projectId/digital-human/voices/:voiceId', async (request, reply) => { const parsed = voicePatch.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues); const params = request.params as { projectId: string; voiceId: string }; try { const voice = await deps.digitalHuman.updateVoiceProfile(params.projectId, params.voiceId, parsed.data); return voice ? voice : fail(reply, 404, 'VOICE_PROFILE_NOT_FOUND', 'Voice Profile not found'); } catch (error) { return fail(reply, 409, 'VOICE_PROFILE_CONFLICT', error instanceof Error ? error.message : 'Unable to update Voice Profile'); } });
   app.delete('/api/v1/projects/:projectId/digital-human/voices/:voiceId', async (request, reply) => { const params = request.params as { projectId: string; voiceId: string }; const voice = await deps.digitalHuman.disableVoiceProfile(params.projectId, params.voiceId); return voice ? voice : fail(reply, 404, 'VOICE_PROFILE_NOT_FOUND', 'Voice Profile not found'); });
   app.get('/api/v1/projects/:projectId/digital-human/avatars', async (request) => { const id = projectId(request); const profiles = await deps.digitalHuman.listAvatarProfiles(id); return { items: await Promise.all(profiles.map(async (profile) => ({ ...profile, clips: await deps.digitalHuman.listAvatarClips(id, profile.id) }))) }; });
@@ -128,16 +131,20 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
   app.post('/api/v1/projects/:projectId/digital-human/speech-generations', async (request, reply) => {
     const parsed = speechInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues);
     const id = projectId(request);
+    const runtimeProvider = configuredProviderId(deps, 'speech');
+    if (runtimeProvider && parsed.data.provider && parsed.data.provider !== runtimeProvider) return providerMismatch(reply, 'SPEECH', runtimeProvider, parsed.data.provider);
     if (deps.providers) {
       const profile = await deps.digitalHuman.getVoiceProfile(id, parsed.data.voiceProfileId);
       if (!profile) return fail(reply, 404, 'VOICE_PROFILE_NOT_FOUND', 'Voice Profile not found');
+      if (runtimeProvider && profile.provider !== runtimeProvider) return providerMismatch(reply, 'SPEECH', runtimeProvider, profile.provider);
       try {
-        const capabilities = await deps.providers.speech.getCapabilities();
+       const capabilities = await deps.providers.speech.getCapabilities();
+       if (runtimeProvider && capabilities.providerId !== runtimeProvider) return fail(reply, 503, 'SPEECH_PROVIDER_IDENTITY_MISMATCH', 'Speech provider capability identity does not match the configured runtime provider');
         const capabilityError = speechCapabilityError(capabilities, { text: parsed.data.text, language: parsed.data.language || profile.language, speed: parsed.data.speed ?? profile.defaultSpeed, emotion: parsed.data.emotion || profile.defaultEmotion, hasReferenceAudio: Boolean(profile.referenceAssetId), hasProviderVoiceId: Boolean(profile.providerVoiceId) });
         if (capabilityError) return fail(reply, 409, capabilityError.code, capabilityError.message);
       } catch (error) { return fail(reply, 503, 'SPEECH_PROVIDER_UNAVAILABLE', error instanceof Error ? error.message : 'Speech provider is unavailable'); }
     }
-    try { const result = await deps.digitalHuman.createSpeechGeneration({ projectId: id, ...parsed.data, correlationId: parsed.data.correlationId || `api-${randomUUID()}` }); return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: !result.created }); } catch (error) { return fail(reply, 409, 'SPEECH_GENERATION_CONFLICT', error instanceof Error ? error.message : 'Unable to create Speech Generation'); }
+    try { const result = await deps.digitalHuman.createSpeechGeneration({ projectId: id, ...parsed.data, ...(runtimeProvider ? { provider: runtimeProvider } : {}), correlationId: parsed.data.correlationId || `api-${randomUUID()}` }); return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: !result.created }); } catch (error) { return fail(reply, 409, 'SPEECH_GENERATION_CONFLICT', error instanceof Error ? error.message : 'Unable to create Speech Generation'); }
   });
   app.get('/api/v1/projects/:projectId/digital-human/speech-generations', async (request) => ({ items: await deps.digitalHuman.listSpeechGenerations(projectId(request)) }));
   app.get('/api/v1/projects/:projectId/digital-human/speech-generations/:generationId', async (request, reply) => { const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getSpeechGeneration(params.projectId, params.generationId); return generation || fail(reply, 404, 'SPEECH_GENERATION_NOT_FOUND', 'Speech Generation not found'); });
@@ -153,17 +160,19 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
     const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getSpeechGeneration(params.projectId, params.generationId);
     if (!generation) return fail(reply, 404, 'SPEECH_GENERATION_NOT_FOUND', 'Speech Generation not found');
     if (generation.status !== 'FAILED' && generation.status !== 'CANCELLED') return fail(reply, 409, 'SPEECH_GENERATION_NOT_RETRYABLE', 'Only failed or cancelled Speech Generations can be retried');
+    const runtimeProvider = configuredProviderId(deps, 'speech');
+    if (runtimeProvider && generation.provider !== runtimeProvider) return providerMismatch(reply, 'SPEECH', runtimeProvider, generation.provider);
     const job = await deps.jobs.get(generation.jobId);
     if (!job) return fail(reply, 409, 'SPEECH_GENERATION_JOB_NOT_FOUND', 'Speech Generation Job not found');
     if (job.state !== 'FAILED' && job.state !== 'CANCELLED') return fail(reply, 409, 'SPEECH_GENERATION_JOB_NOT_TERMINAL', 'Speech Generation Job is still active; retry after cancellation or failure completes');
     if (deps.providers) {
       const profile = await deps.digitalHuman.getVoiceProfile(params.projectId, generation.voiceProfileId);
       if (!profile) return fail(reply, 404, 'VOICE_PROFILE_NOT_FOUND', 'Voice Profile not found');
-      try { const capabilities = await deps.providers.speech.getCapabilities(); const capabilityError = speechCapabilityError(capabilities, { text: generation.text, language: typeof generation.parameters.language === 'string' ? generation.parameters.language : profile.language, speed: typeof generation.parameters.speed === 'number' ? generation.parameters.speed : profile.defaultSpeed, emotion: typeof generation.parameters.emotion === 'string' ? generation.parameters.emotion : profile.defaultEmotion, hasReferenceAudio: Boolean(profile.referenceAssetId), hasProviderVoiceId: Boolean(profile.providerVoiceId) }); if (capabilityError) return fail(reply, 409, capabilityError.code, capabilityError.message); }
+       try { const capabilities = await deps.providers.speech.getCapabilities(); if (runtimeProvider && capabilities.providerId !== runtimeProvider) return fail(reply, 503, 'SPEECH_PROVIDER_IDENTITY_MISMATCH', 'Speech provider capability identity does not match the configured runtime provider'); const capabilityError = speechCapabilityError(capabilities, { text: generation.text, language: typeof generation.parameters.language === 'string' ? generation.parameters.language : profile.language, speed: typeof generation.parameters.speed === 'number' ? generation.parameters.speed : profile.defaultSpeed, emotion: typeof generation.parameters.emotion === 'string' ? generation.parameters.emotion : profile.defaultEmotion, hasReferenceAudio: Boolean(profile.referenceAssetId), hasProviderVoiceId: Boolean(profile.providerVoiceId) }); if (capabilityError) return fail(reply, 409, capabilityError.code, capabilityError.message); }
       catch (error) { return fail(reply, 503, 'SPEECH_PROVIDER_UNAVAILABLE', error instanceof Error ? error.message : 'Speech provider is unavailable'); }
     }
     try {
-      const result = await deps.digitalHuman.createSpeechGeneration({ projectId: params.projectId, voiceProfileId: generation.voiceProfileId, text: generation.text, provider: generation.provider, model: generation.model, language: typeof generation.parameters.language === 'string' ? generation.parameters.language : undefined, speed: typeof generation.parameters.speed === 'number' ? generation.parameters.speed : undefined, emotion: typeof generation.parameters.emotion === 'string' ? generation.parameters.emotion : undefined, correlationId: `retry-${randomUUID()}` });
+      const result = await deps.digitalHuman.createSpeechGeneration({ projectId: params.projectId, voiceProfileId: generation.voiceProfileId, text: generation.text, provider: runtimeProvider || generation.provider, model: generation.model, language: typeof generation.parameters.language === 'string' ? generation.parameters.language : undefined, speed: typeof generation.parameters.speed === 'number' ? generation.parameters.speed : undefined, emotion: typeof generation.parameters.emotion === 'string' ? generation.parameters.emotion : undefined, correlationId: `retry-${randomUUID()}` });
       return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: true });
     } catch (error) { return fail(reply, 409, 'SPEECH_GENERATION_RETRY_CONFLICT', error instanceof Error ? error.message : 'Unable to retry Speech Generation'); }
   });
@@ -192,9 +201,12 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
   app.post('/api/v1/projects/:projectId/digital-human/avatar-generations', async (request, reply) => {
     const parsed = avatarGenerationInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues);
     const id = projectId(request);
-    const existing = await deps.digitalHuman.findAvatarGenerationForRequest({ projectId: id, ...parsed.data });
+    const runtimeProvider = configuredProviderId(deps, 'avatar');
+    if (runtimeProvider && parsed.data.provider && parsed.data.provider !== runtimeProvider) return providerMismatch(reply, 'AVATAR', runtimeProvider, parsed.data.provider);
+    const provider = runtimeProvider || parsed.data.provider;
+    const existing = await deps.digitalHuman.findAvatarGenerationForRequest({ projectId: id, ...parsed.data, ...(provider ? { provider } : {}) });
     if (!existing || existing.status === 'FAILED' || existing.status === 'CANCELLED') { const preflight = await runAvatarPreflight(id, parsed.data, deps); if (preflight.status === 'BLOCKED') return preflightFailure(reply, preflight); }
-    try { const result = await deps.digitalHuman.createAvatarGeneration({ projectId: id, ...parsed.data, correlationId: parsed.data.correlationId || `api-${randomUUID()}` }); return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: !result.created }); } catch (error) { return fail(reply, 409, 'AVATAR_GENERATION_CONFLICT', error instanceof Error ? error.message : 'Unable to create Avatar Generation'); }
+    try { const result = await deps.digitalHuman.createAvatarGeneration({ projectId: id, ...parsed.data, ...(provider ? { provider } : {}), correlationId: parsed.data.correlationId || `api-${randomUUID()}` }); return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: !result.created }); } catch (error) { return fail(reply, 409, 'AVATAR_GENERATION_CONFLICT', error instanceof Error ? error.message : 'Unable to create Avatar Generation'); }
   });
   app.get('/api/v1/projects/:projectId/digital-human/avatar-generations', async (request) => ({ items: await deps.digitalHuman.listAvatarGenerations(projectId(request)) }));
   app.get('/api/v1/projects/:projectId/digital-human/avatar-generations/:generationId', async (request, reply) => { const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getAvatarGeneration(params.projectId, params.generationId); return generation || fail(reply, 404, 'AVATAR_GENERATION_NOT_FOUND', 'Avatar Generation not found'); });
@@ -214,13 +226,15 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
     const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getAvatarGeneration(params.projectId, params.generationId);
     if (!generation) return fail(reply, 404, 'AVATAR_GENERATION_NOT_FOUND', 'Avatar Generation not found');
     if (generation.status !== 'FAILED' && generation.status !== 'CANCELLED') return fail(reply, 409, 'AVATAR_GENERATION_NOT_RETRYABLE', 'Only failed or cancelled Avatar Generations can be retried');
+    const runtimeProvider = configuredProviderId(deps, 'avatar');
+    if (runtimeProvider && generation.provider !== runtimeProvider) return providerMismatch(reply, 'AVATAR', runtimeProvider, generation.provider);
     const job = await deps.jobs.get(generation.jobId);
     if (!job) return fail(reply, 409, 'AVATAR_GENERATION_JOB_NOT_FOUND', 'Avatar Generation Job not found');
     if (job.state !== 'FAILED' && job.state !== 'CANCELLED') return fail(reply, 409, 'AVATAR_GENERATION_JOB_NOT_TERMINAL', 'Avatar Generation Job is still active; retry after cancellation or failure completes');
     const preflight = await runAvatarPreflight(params.projectId, { avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId }, deps); if (preflight.status === 'BLOCKED') return preflightFailure(reply, preflight);
     try {
       const parameters = generation.provenance.parameters && typeof generation.provenance.parameters === 'object' && !Array.isArray(generation.provenance.parameters) ? generation.provenance.parameters as Record<string, unknown> : {};
-      const result = await deps.digitalHuman.createAvatarGeneration({ projectId: params.projectId, avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, provider: generation.provider, model: generation.model || undefined, parameters, correlationId: `retry-${randomUUID()}` });
+      const result = await deps.digitalHuman.createAvatarGeneration({ projectId: params.projectId, avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, provider: runtimeProvider || generation.provider, model: generation.model || undefined, parameters, correlationId: `retry-${randomUUID()}` });
       return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: true });
     } catch (error) { return fail(reply, 409, 'AVATAR_GENERATION_RETRY_CONFLICT', error instanceof Error ? error.message : 'Unable to retry Avatar Generation'); }
   });

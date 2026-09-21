@@ -21,6 +21,7 @@ const iso = (value: unknown): string => new Date(text(value)).toISOString();
 const hash = (value: unknown): string => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 const stableId = (prefix: string, projectId: string, requestHash: string): string => `${prefix}-${hash({ projectId, requestHash })}`;
 const positiveDuration = (metadata: Record<string, unknown>): boolean => Number.isFinite(Number(metadata.durationMs)) && Number(metadata.durationMs) > 0;
+const validSpeed = (value: number, field: string): number => { if (!Number.isFinite(value) || value < .5 || value > 2) throw new Error(`${field} must be between 0.5 and 2`); return value; };
 
 function mapVoice(row: Record<string, unknown>): VoiceProfileV1 { return { id: text(row.id), projectId: text(row.project_id), name: text(row.name), provider: text(row.provider), referenceAssetId: optionalText(row.reference_asset_id), providerVoiceId: optionalText(row.provider_voice_id), language: text(row.language), defaultSpeed: Number(row.default_speed), defaultEmotion: text(row.default_emotion), status: row.status as ProfileStatus, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) }; }
 function mapAvatar(row: Record<string, unknown>): AvatarProfileV1 { return { id: text(row.id), projectId: text(row.project_id), name: text(row.name), ownerName: text(row.owner_name), status: row.status as ProfileStatus, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) }; }
@@ -33,7 +34,8 @@ export class DigitalHumanService {
 
   async createVoiceProfile(input: CreateVoiceProfileInput): Promise<VoiceProfileV1> {
     if (input.referenceAssetId) { const asset = await this.assets.getProjectAsset(input.projectId, input.referenceAssetId); if (!asset || asset.kind !== 'AUDIO' || asset.lifecycle !== 'READY' || !positiveDuration(asset.metadata)) throw new Error('VOICE_REFERENCE_ASSET_NOT_READY'); }
-    const result = await this.db.query('insert into voice_profiles (id, project_id, name, provider, reference_asset_id, provider_voice_id, language, default_speed, default_emotion, status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *', [`voice-profile-${randomUUID()}`, input.projectId, input.name.trim(), input.provider.trim(), input.referenceAssetId || null, input.providerVoiceId || null, input.language || 'zh', input.defaultSpeed ?? 1, input.defaultEmotion || 'natural', input.status || 'DRAFT']);
+    const defaultSpeed = validSpeed(input.defaultSpeed ?? 1, 'defaultSpeed');
+    const result = await this.db.query('insert into voice_profiles (id, project_id, name, provider, reference_asset_id, provider_voice_id, language, default_speed, default_emotion, status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *', [`voice-profile-${randomUUID()}`, input.projectId, input.name.trim(), input.provider.trim(), input.referenceAssetId || null, input.providerVoiceId || null, input.language || 'zh', defaultSpeed, input.defaultEmotion || 'natural', input.status || 'DRAFT']);
     return mapVoice(result.rows[0] as Record<string, unknown>);
   }
   async listVoiceProfiles(projectId: string): Promise<VoiceProfileV1[]> { const result = await this.db.query('select * from voice_profiles where project_id = $1 order by updated_at desc, id desc', [projectId]); return result.rows.map((row) => mapVoice(row as Record<string, unknown>)); }
@@ -42,7 +44,8 @@ export class DigitalHumanService {
     const current = await this.getVoiceProfile(projectId, id); if (!current) return null;
     const referenceAssetId = input.referenceAssetId === undefined ? current.referenceAssetId : input.referenceAssetId;
     if (referenceAssetId) { const asset = await this.assets.getProjectAsset(projectId, referenceAssetId); if (!asset || asset.kind !== 'AUDIO' || asset.lifecycle !== 'READY' || !positiveDuration(asset.metadata)) throw new Error('VOICE_REFERENCE_ASSET_NOT_READY'); }
-    const result = await this.db.query('update voice_profiles set name=$3, reference_asset_id=$4, provider_voice_id=$5, language=$6, default_speed=$7, default_emotion=$8, status=$9, updated_at=now() where project_id=$1 and id=$2 returning *', [projectId, id, input.name?.trim() || current.name, referenceAssetId, input.providerVoiceId === undefined ? current.providerVoiceId : input.providerVoiceId, input.language?.trim() || current.language, input.defaultSpeed ?? current.defaultSpeed, input.defaultEmotion?.trim() || current.defaultEmotion, input.status || current.status]);
+    const defaultSpeed = validSpeed(input.defaultSpeed ?? current.defaultSpeed, 'defaultSpeed');
+    const result = await this.db.query('update voice_profiles set name=$3, reference_asset_id=$4, provider_voice_id=$5, language=$6, default_speed=$7, default_emotion=$8, status=$9, updated_at=now() where project_id=$1 and id=$2 returning *', [projectId, id, input.name?.trim() || current.name, referenceAssetId, input.providerVoiceId === undefined ? current.providerVoiceId : input.providerVoiceId, input.language?.trim() || current.language, defaultSpeed, input.defaultEmotion?.trim() || current.defaultEmotion, input.status || current.status]);
     return result.rows[0] ? mapVoice(result.rows[0] as Record<string, unknown>) : null;
   }
   async disableVoiceProfile(projectId: string, id: string): Promise<VoiceProfileV1 | null> { return this.updateVoiceProfile(projectId, id, { status: 'DISABLED' }); }
@@ -73,7 +76,7 @@ export class DigitalHumanService {
     const profile = await this.getVoiceProfile(input.projectId, input.voiceProfileId); if (!profile || profile.status === 'DISABLED') throw new Error('VOICE_PROFILE_NOT_FOUND');
     const reference = profile.referenceAssetId ? await this.assets.getProjectAsset(input.projectId, profile.referenceAssetId) : null;
     if (profile.referenceAssetId && (!reference || reference.kind !== 'AUDIO' || reference.lifecycle !== 'READY')) throw new Error('VOICE_REFERENCE_ASSET_NOT_READY');
-    const provider = input.provider || profile.provider; const model = input.model || 'indextts-2.5'; const parameters = { language: input.language || profile.language, speed: input.speed ?? profile.defaultSpeed, emotion: input.emotion || profile.defaultEmotion };
+    const provider = input.provider || profile.provider; const model = input.model || 'indextts-2.5'; const speed = validSpeed(input.speed ?? profile.defaultSpeed, 'speed'); const parameters = { language: input.language || profile.language, speed, emotion: input.emotion || profile.defaultEmotion };
     const textHash = hash({ provider, model, voiceProfileId: profile.id, referenceChecksum: reference?.checksum || null, text: input.text, parameters });
     const existing = await this.db.query('select * from speech_generations where project_id = $1 and text_hash = $2 and voice_profile_id = $3 and provider = $4 and model = $5', [input.projectId, textHash, profile.id, provider, model]);
     if (existing.rows[0]) {

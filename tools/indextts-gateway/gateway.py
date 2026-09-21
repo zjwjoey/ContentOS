@@ -104,14 +104,14 @@ class Runtime:
             speed = float(body.get("speed", 1.0))
         except (TypeError, ValueError) as exc:
             raise GatewayError(HTTPStatus.BAD_REQUEST, "INVALID_SPEED", "speed must be numeric") from exc
-        if speed <= 0 or speed > 4:
-            raise GatewayError(HTTPStatus.UNPROCESSABLE_ENTITY, "INVALID_SPEED", "speed must be between 0.01 and 4")
+        if speed < 0.5 or speed > 2.0:
+            raise GatewayError(HTTPStatus.UNPROCESSABLE_ENTITY, "INVALID_SPEED", "speed must be between 0.5 and 2.0")
         emotion = str(body.get("emotion") or "natural").strip().lower()
         if emotion not in {"", "natural", "neutral"} and not self.use_qwen_emo:
             raise GatewayError(HTTPStatus.UNPROCESSABLE_ENTITY, "EMOTION_UNAVAILABLE", "This runtime was started without emotion guidance")
 
         # IndexTTS duration_factor is inverse to user-facing playback speed.
-        duration_factor = max(0.5, min(2.0, 1.0 / speed))
+        duration_factor = 1.0 / speed
         output = self.output_root / f"indextts-{uuid.uuid4().hex}.wav"
         started = time.perf_counter()
         with self.lock:
@@ -151,6 +151,8 @@ class Runtime:
             "voiceClone": True,
             "emotion": self.use_qwen_emo,
             "speed": True,
+            "minSpeed": 0.5,
+            "maxSpeed": 2.0,
             "languages": sorted(self.language_map),
             "supportsReferenceAudio": True,
             "requiresReferenceAudio": True,

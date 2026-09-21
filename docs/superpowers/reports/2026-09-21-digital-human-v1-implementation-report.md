@@ -10,7 +10,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - IndexTTS 2.5 HTTP adapter and fake speech provider.
 - AvatarProvider contract boundary and fake avatar provider; the unverified cloud API remains intentionally unwired.
 - Synthetic sentence timing provider.
-- PostgreSQL migrations `0031_digital_human.sql` and `0032_digital_human_billing.sql` with Voice Profile, Avatar Profile/Clip, Speech Generation, Avatar Generation, and nullable remote billing quantity/unit fields.
+- PostgreSQL migrations `0031`–`0037` are present from the current `origin/main` sequence, followed by Digital Human migrations `0038_digital_human.sql` and `0039_digital_human_billing.sql` with Voice Profile, Avatar Profile/Clip, Speech Generation, Avatar Generation, and nullable remote billing quantity/unit fields.
 - Digital Human service with project ownership checks, Asset readiness checks, provenance fields, output Asset references, and request-hash idempotency.
 - API routes under `/api/v1/projects/:projectId/digital-human/*`.
 - Durable speech/avatar worker handlers with retry behavior and external-task recovery.
@@ -34,11 +34,14 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - The `AvatarGenerationRequest` contract carries the stable Generation request ID so a future provider implementation can deduplicate submit-after-uncertain-write recovery without changing the service boundary.
 - Durable Job execution now supports explicit deferred polling: an external Avatar task that remains `QUEUED`/`RUNNING` is rescheduled without consuming the Job's terminal retry budget, so long-running paid tasks do not become false failures after a fixed number of polls.
 - Remote Avatar result downloads now have a separately configurable timeout (`CONTENTOS_AVATAR_RESULT_TIMEOUT_MS`) and abort/cleanup partial work when the timeout expires.
-- Worker-side result handling rejects private or loopback URLs before download; Avatar Clip usage counters and `last_used_at` are updated only for the first idempotent generation request.
+- Worker-side result handling uses a dedicated SSRF boundary: literal and DNS-resolved IPv4/IPv6 addresses are checked against private, loopback, link-local, mapped-private, multicast, reserved, and documentation ranges; blocked hostnames are rejected; redirects are manual, bounded, and revalidated at every hop. Native fetch DNS pinning remains an infrastructure concern outside this TypeScript boundary. Avatar Clip usage counters and `last_used_at` are updated only for the first idempotent generation request.
 - Remote Avatar result downloads now stream directly to staging with a configurable byte limit (defaulting to the asset upload limit), reject oversized responses before Asset import, and clean partial files on failure.
 - Speech provider requests now have configurable bounded timeouts (`CONTENTOS_PROVIDER_REQUEST_TIMEOUT_MS` / `CONTENTOS_PROVIDER_CAPABILITY_TIMEOUT_MS`) and normalize network/timeout failures as retryable provider outages.
-- Provider Media Staging now rejects loopback, private-network, `.local`, and `.internal` base/result URLs; runtime capability readiness is false when the configured staging address cannot be publicly reached.
+- Provider Media Staging now rejects loopback, private-network, `.local`, and `.internal` base/result URLs; runtime capability readiness is false when the configured staging address cannot be publicly reached, and signed staging tokens are project-bound before serving READY media.
 - The HZAgent/cloud-avatar API portion is intentionally interface-only in V1; runtime selection exposes only the `AvatarProvider` boundary and returns an explicit unavailable state for the default `hzagent` provider.
+- Runtime provider identity is fail-closed across API requests, persisted Generations, worker configuration, capability responses, and provider results; a mismatched client or stored Generation is rejected instead of being silently attributed to another provider.
+- Avatar preflight no longer depends on SpeechProvider online health once a READY AUDIO Asset already exists; it checks Avatar capability, source media, duration, format, and staging requirements only.
+- Speech speed is unified to the provider-supported range `0.5`–`2.0` across contracts, API validation, service validation, UI controls, IndexTTS gateway behavior, and capabilities; out-of-range values are rejected rather than clamped.
 - Synthetic subtitle timeline export as Edit Manifest cues, SRT, and ASS through the Speech Generation API.
 - SRT/ASS subtitle downloads now persist idempotent `TEXT` Assets with project ownership and expose the Asset content route, so subtitle files are traceable and reusable rather than transient response bodies.
 - A real PostgreSQL temporary-schema Worker vertical slice now runs the durable `AVATAR_LIPSYNC_GENERATE` handler, fetches a remote result through the staging boundary, and imports it as a distinct READY project `VIDEO` Asset with duration metadata and provider task provenance.
@@ -63,17 +66,15 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 
 - Targeted TypeScript compilation: passed.
 - Digital Human/config/worker unit tests and provider contract checks: passed.
-- Digital Human/API/provider suite: the interface-only avatar boundary and fake provider remain covered alongside the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, the Worker-to-Asset vertical slice, probed Speech Asset duration, API cancellation, lease-recovery cancellation, graceful shutdown waiting, Worker preflight failure recording, bounded speech-provider failures, signed staging, subtitle Asset persistence, public-staging URL validation, fail-closed capability checks, external-task cancellation, and terminal-task replacement.
+- Digital Human/API/provider suite: 39/39 tests passed, covering the interface-only avatar boundary and fake provider, SSRF-safe remote result handling, provider identity mismatch rejection, the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, the Worker-to-Asset vertical slice, probed Speech Asset duration, Speech-offline Avatar preflight, API cancellation, lease-recovery cancellation, graceful shutdown waiting, Worker preflight failure recording, bounded speech-provider failures, project-bound signed staging, subtitle Asset persistence, public-staging URL validation, fail-closed capability checks, external-task cancellation, and terminal-task replacement.
 - Job service integration suite: 15 tests passed, including deferred external work being rescheduled beyond `maxAttempts` while preserving attempt history and eventual completion.
+- Job service integration suite: 15/15 passed again against an isolated PostgreSQL schema on the running test service; the shared public database remains unsuitable because of the legacy migration history described below.
 - The Digital Human API integration suite also verifies subtitle generation creates a `TEXT` Asset and that the stored subtitle can be downloaded through the project Asset route.
-- Format check: passed (470 files).
-- Lint check: passed (177 TypeScript files).
+- Format check: passed (472 files).
+- Lint check: passed (178 TypeScript files).
 - `git diff --check`: passed.
-- Full TypeScript baseline: passed after restoring the workspace dependency links with the lockfile's `autoInstallPeers=false` setting.
-- Full baseline test run: the latest direct run recorded 281 passed / 3 failed when pointed at the configured PostgreSQL test service on port `55433`. The one branch-owned migration-chain assertion was updated from `0031` to the shipped `0032` billing migration and now passes. The remaining three failures are shared test-database migration-history issues: that database still records the pre-existing `0037_script_editing_v3_settings` migration, whose down file is not present in this isolated branch. The clean temporary-schema migration matrix passes 9/9, and the current Digital Human test suite passes 24/24.
-- Latest direct rerun after restoring PostgreSQL availability on port `55433`: Job integration suite 15/15 passed and migration matrix 9/9 passed. The initial connection-refused result was an environment outage; no Job or migration assertion failure remained after the database accepted connections.
-- The full baseline rerun reaches 281/284: all non-legacy-history tests pass; the only remaining failures are the three rollback tests attempting to read the absent pre-existing `0037_script_editing_v3_settings.down.sql` from the shared database history.
-- Root TypeScript build, Web production build, format, lint, typecheck, and `git diff --check` pass on the current worktree. The Web build was run directly from `apps/web` because the isolated worktree's root `node_modules` is a junction to the original repository and pnpm 11 refuses that junction for task-state storage.
+- Root TypeScript typecheck and build pass, and the clean temporary-schema migration matrix passes 9/9. The shared `contentos_test` public database is not clean: its `schema_migrations` history still contains the old pre-renumbering `0031_digital_human.sql`/`0032_digital_human_billing.sql` entries, so the legacy database integration tests fail when the new `0038`/`0039` files attempt to create already-existing Digital Human tables. The database was not reset or its history rewritten.
+- Web production build passed with Next.js 14.2.21, and `python -m py_compile tools/indextts-gateway/gateway.py` passed.
 
 ## Runtime status
 

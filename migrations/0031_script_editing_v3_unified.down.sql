@@ -1,0 +1,12 @@
+drop table if exists script_editing_v3_operations;
+drop table if exists clip_instances;
+drop table if exists candidate_rankings;
+drop table if exists visual_queries;
+drop table if exists script_editing_v3_sessions;
+drop table if exists jianying_asset_usages;
+drop table if exists jianying_draft_imports;
+drop table if exists asset_tag_evidence;
+drop table if exists asset_visual_profiles;
+drop table if exists source_segments;
+drop table if exists material_pool_items;
+drop table if exists material_pool_snapshots;
