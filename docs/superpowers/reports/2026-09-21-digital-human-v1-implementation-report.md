@@ -47,6 +47,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Worker preflight failures now transition the corresponding Speech/Avatar Generation to `FAILED` instead of leaving it `RUNNING`; API and Workspace cancellation controls request Job cancellation and persist Generation `CANCELLED`, while cancelling an existing remote Avatar task before local cancellation and preserving the Worker race-safe cancellation path.
 - Capability endpoint at `/api/v1/projects/:projectId/digital-human/capabilities`, with the UI displaying live speech/avatar availability instead of assuming a provider is configured.
 - Successful Avatar Generations can now create an idempotent `EDIT_MANIFEST_V0` plus the existing `VIDEO_RENDER` Job; the workspace redirects to the existing video editor, preserving generated speech, synthetic subtitle cues, 9:16 canvas, and FFmpeg rendering.
+- Digital Human Edit Manifest handoff now uses the existing project-level idempotency index and transaction advisory lock, with a concurrent integration test proving two handoff requests converge on one manifest and one render Job.
 - Loopback IndexTTS gateway source at `tools/indextts-gateway/gateway.py` with input-root allowlisting, output-root isolation, request correlation logging, and `/health`, `/capabilities`, and `/v1/speech/generate` endpoints.
 - Workspace UI actions for Voice Profile, Avatar Profile, Avatar Clip, speech generation, avatar generation, output preview, and subtitle download.
 - Contract/provider/worker/config tests and a proposed ADR.
