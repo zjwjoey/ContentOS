@@ -30,6 +30,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Failed or cancelled Speech/Avatar requests can be explicitly retried through dedicated API/UI actions; terminal local Jobs are requeued idempotently, and a prior remote Avatar task is replaced only after the provider reports `FAILED` or `CANCELLED`.
 - Avatar preflight now requires positive source/audio durations, checks provider video/audio formats and maximum duration before staging or charging the remote provider, and completion writes are conditional on the Generation remaining active, preventing cancellation races from becoming false successes.
 - Remote Avatar submissions carry the stable Generation request ID through a configurable idempotency header and request field, allowing a compatible provider to deduplicate the submit-after-uncertain-write recovery path.
+- Durable Job execution now supports explicit deferred polling: an external Avatar task that remains `QUEUED`/`RUNNING` is rescheduled without consuming the Job's terminal retry budget, so long-running paid tasks do not become false failures after a fixed number of polls.
 - Remote Avatar result downloads now stream directly to staging with a configurable byte limit (defaulting to the asset upload limit), reject oversized responses before Asset import, and clean partial files on failure.
 - Configured remote Avatar providers now health-check the authenticated, configurable capabilities endpoint with a timeout; authentication or availability failures are surfaced before a paid generation Job is created.
 - Speech, Avatar, and HTTP media-staging adapter requests now have configurable bounded timeouts (`CONTENTOS_PROVIDER_REQUEST_TIMEOUT_MS` / `CONTENTOS_PROVIDER_CAPABILITY_TIMEOUT_MS`) and normalize network/timeout failures as retryable provider outages.
@@ -51,6 +52,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Targeted TypeScript compilation: passed.
 - Digital Human/config/worker unit tests and provider contract checks: passed.
 - Digital Human/API/provider suite: 22 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, the Worker-to-Asset vertical slice, probed Speech Asset duration, API cancellation with remote `cancelTask` invocation, lease-recovery cancellation, graceful shutdown waiting, Worker preflight failure recording, oversized-result protection, concurrent Speech/Avatar idempotency and retry checks, signed staging, subtitle Asset persistence, authenticated capability health-checks, bounded provider request failures, public-staging URL validation, fail-closed capability checks, external-task cancellation, and terminal-task replacement.
+- Job service integration suite: 15 tests passed, including deferred external work being rescheduled beyond `maxAttempts` while preserving attempt history and eventual completion.
 - The Digital Human API integration suite also verifies subtitle generation creates a `TEXT` Asset and that the stored subtitle can be downloaded through the project Asset route.
 - Format check: passed (469 files).
 - Lint check: passed (177 TypeScript files).

@@ -175,6 +175,27 @@ export class JobService {
     finally { scope?.close(); client.release(); }
   }
 
+  async defer(id: string, attemptId: string, error: unknown, retryDelayMs = 1_000): Promise<JobRecord> {
+    const client = await this.db.connect();
+    try {
+      await client.query('begin');
+      const selected = await client.query('select * from jobs where id = $1 for update', [id]);
+      const current = selected.rows[0] as Record<string, unknown> | undefined;
+      if (!current) throw new Error(`Job ${id} not found`);
+      const attempt = await client.query<{ attempt_number: number; status: string }>('select attempt_number, status from job_attempts where id = $1 and job_id = $2', [attemptId, id]);
+      const active = attempt.rows[0];
+      if (!active || active.status !== 'RUNNING' || Number(active.attempt_number) !== Number(current.attempt_count) || current.state !== 'RUNNING') { await client.query('commit'); return mapJob(current); }
+      const delay = Number.isSafeInteger(retryDelayMs) && retryDelayMs > 0 ? Math.min(retryDelayMs, 3_600_000) : 1_000;
+      const retryAt = new Date(Date.now() + delay);
+      await client.query('update job_attempts set status = $2, error = $3, finished_at = now() where id = $1', [attemptId, 'FAILED', error]);
+      const result = await client.query('update jobs set state = $2, error = $3, retry_at = $4, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 returning *', [id, 'RETRY_WAIT', error, retryAt]);
+      await client.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [id, 'job.deferred', { attemptId, retryDelayMs: delay }]);
+      await client.query('commit');
+      return mapJob(result.rows[0] as Record<string, unknown>);
+    } catch (failure) { await client.query('rollback'); throw failure; }
+    finally { client.release(); }
+  }
+
   async requeue(id: string): Promise<void> { await this.db.query("update jobs set state = 'QUEUED', retry_at = null, updated_at = now() where id = $1 and state = 'RETRY_WAIT'", [id]); }
 
   async requeueTerminal(id: string): Promise<JobRecord> {
@@ -366,7 +387,8 @@ export class JobRunner {
       const state = heartbeatState === 'ACTIVE' ? await pulse() : heartbeatState;
       if (state === 'CANCEL_REQUESTED') return this.service.cancelAttempt(id, claimed.attemptId);
       if (state === 'STALE') return (await this.service.get(id)) as JobRecord;
-      const candidate = error as { code?: unknown; retryable?: unknown };
+      const candidate = error as { code?: unknown; retryable?: unknown; defer?: unknown; retryDelayMs?: unknown };
+      if (candidate.defer === true) return this.service.defer(id, claimed.attemptId, { code: typeof candidate.code === 'string' ? candidate.code : 'HANDLER_DEFERRED', message: error instanceof Error ? error.message : 'handler deferred' }, typeof (candidate as { retryDelayMs?: unknown }).retryDelayMs === 'number' ? (candidate as { retryDelayMs: number }).retryDelayMs : 1_000);
       const retryable = typeof candidate.retryable === 'boolean' ? candidate.retryable : true;
       const code = typeof candidate.code === 'string' ? candidate.code : 'HANDLER_FAILED';
       return this.service.fail(id, claimed.attemptId, { code, message: error instanceof Error ? error.message : 'unknown' }, retryable);

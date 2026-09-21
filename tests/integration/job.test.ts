@@ -63,6 +63,21 @@ test('retryable failure retains attempt history and succeeds on the next attempt
   } finally { await db.end(); }
 });
 
+test('deferred external work is rescheduled without consuming the terminal retry budget', async () => {
+  const db = await setup();
+  try {
+    const service = new JobService(db); const runner = new JobRunner(service, 'worker-deferred');
+    await service.create({ id: 'job-integration-deferred', type: 'AVATAR_LIPSYNC_GENERATE', projectId: null, payload: {}, idempotencyKey: 'job-integration-deferred', maxAttempts: 1 });
+    const deferred = await runner.run('job-integration-deferred', async () => { throw Object.assign(new Error('remote task is still running'), { code: 'EXTERNAL_TASK_PENDING', defer: true, retryDelayMs: 10 }); });
+    assert.equal(deferred.state, 'RETRY_WAIT'); assert.equal(deferred.attemptCount, 1);
+    assert.equal((await service.attempts('job-integration-deferred'))[0]?.status, 'FAILED');
+    await service.requeue('job-integration-deferred');
+    const completed = await runner.run('job-integration-deferred', async () => ({ output: 'remote-result' }));
+    assert.equal(completed.state, 'SUCCEEDED'); assert.equal(completed.attemptCount, 2);
+    assert.equal((await db.query("select 1 from job_events where job_id = 'job-integration-deferred' and event_type = 'job.deferred'")).rowCount, 1);
+  } finally { await db.end(); }
+});
+
 test('cooperative cancellation is durable and lease reconciliation recovers crashed work', async () => {
   const db = await setup();
   try {
