@@ -83,13 +83,13 @@ export class AssetCatalogService {
 
   async listReadySourceAssets(projectId: string, assetIds: string[], kind: SourceAssetKind): Promise<ReadySourceAsset[]> {
     if (assetIds.length === 0) return [];
-    const roleClause = kind === 'VIDEO' ? "pa.role in ('SOURCE','OUTPUT')" : "pa.role = 'SOURCE'";
+    const roleClause = "pa.role in ('SOURCE','OUTPUT')";
     const result = await this.db.query(`select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and ${roleClause} where a.id = any($2::text[]) and a.kind = $3 and a.lifecycle = $4`, [projectId, assetIds, kind, 'READY']);
     return result.rows.map((row) => mapSourceAsset(row as Record<string, unknown>));
   }
 
   async getReadySourceAsset(projectId: string, assetId: string, kind: SourceAssetKind): Promise<ReadySourceAsset | null> {
-    const roleClause = kind === 'VIDEO' ? "pa.role in ('SOURCE','OUTPUT')" : "pa.role = 'SOURCE'";
+    const roleClause = "pa.role in ('SOURCE','OUTPUT')";
     const result = await this.db.query(`select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and ${roleClause} where a.id = $2 and a.kind = $3 and a.lifecycle = $4`, [projectId, assetId, kind, 'READY']);
     return result.rows[0] ? mapSourceAsset(result.rows[0] as Record<string, unknown>) : null;
   }
