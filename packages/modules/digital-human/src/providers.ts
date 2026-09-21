@@ -24,12 +24,14 @@ function jsonObject(value: unknown): Record<string, unknown> {
 
 const externalStatuses = ['QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'] as const;
 function externalStatus(value: unknown, fallback: typeof externalStatuses[number] = 'QUEUED'): typeof externalStatuses[number] {
-  return externalStatuses.includes(String(value) as typeof externalStatuses[number]) ? String(value) as typeof externalStatuses[number] : fallback;
+  const normalized = String(value || '').toUpperCase(); return externalStatuses.includes(normalized as typeof externalStatuses[number]) ? normalized as typeof externalStatuses[number] : normalized === 'COMPLETED' ? 'SUCCEEDED' : fallback;
 }
 function optionalNumber(value: unknown): number | undefined {
   const result = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(result) ? result : undefined;
 }
+function optionalString(value: unknown): string | undefined { return typeof value === 'string' && value.trim() ? value : undefined; }
+function firstString(body: Record<string, unknown>, ...keys: string[]): string | undefined { for (const key of keys) { const value = optionalString(body[key]); if (value) return value; } return undefined; }
 
 export interface IndexTTS25SpeechProviderOptions {
   baseUrl: string;
@@ -89,6 +91,8 @@ export interface HttpAvatarProviderOptions {
   submitPath?: string;
   taskPath?: string;
   model?: string;
+  authHeaderName?: string;
+  authScheme?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -96,28 +100,29 @@ export class HttpAvatarProvider implements AvatarProvider {
   readonly providerId: string;
   private readonly fetchImpl: typeof fetch;
   constructor(private readonly options: HttpAvatarProviderOptions) { this.providerId = options.providerId; this.fetchImpl = options.fetchImpl || fetch; }
+  private authHeaders(): Record<string, string> { const name = this.options.authHeaderName || 'authorization'; const value = this.options.authScheme === '' ? this.options.apiKey : `${this.options.authScheme || 'Bearer'} ${this.options.apiKey}`; return { [name]: value }; }
   async getCapabilities(): Promise<AvatarCapabilities> { return { providerId: this.providerId, local: false, videoToVideo: true, imageToVideo: false, requiresPublicUrl: true, supportedFormats: ['mp4'] }; }
   async submitLipSync(request: AvatarGenerationRequest): Promise<AvatarExternalTask> {
     const response = await this.fetchImpl(new URL(this.options.submitPath || '/v1/lipsync/tasks', this.options.baseUrl), {
-      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.options.apiKey}` },
+      method: 'POST', headers: { 'content-type': 'application/json', ...this.authHeaders() },
       body: JSON.stringify({ audioUrl: request.audioUrl, videoUrl: request.videoUrl, model: request.model || this.options.model, parameters: request.parameters }),
     });
     if (!response.ok) throw responseError(response.status);
-    const body = jsonObject(await response.json()); const taskId = typeof body.taskId === 'string' ? body.taskId : typeof body.id === 'string' ? body.id : '';
+    const body = jsonObject(await response.json()); const taskId = firstString(body, 'taskId', 'task_id', 'id') || '';
     if (!taskId) throw new DigitalHumanProviderError('EXTERNAL_FAILED', 'Avatar provider returned no task id', false);
-    const costAmount = optionalNumber(body.costAmount); const provenance = jsonObject(body.provenance);
-    return { externalTaskId: taskId, providerId: this.providerId, status: externalStatus(body.status), ...(typeof body.outputUrl === 'string' ? { outputUrl: body.outputUrl } : {}), ...(typeof body.model === 'string' ? { model: body.model } : {}), ...(typeof body.modelVersion === 'string' ? { modelVersion: body.modelVersion } : {}), ...(costAmount === undefined ? {} : { costAmount }), ...(typeof body.costCurrency === 'string' ? { costCurrency: body.costCurrency } : {}), ...(Object.keys(provenance).length ? { provenance } : {}) };
+    const costAmount = optionalNumber(body.costAmount ?? body.cost_amount); const provenance = jsonObject(body.provenance); const outputUrl = firstString(body, 'outputUrl', 'output_url', 'resultUrl', 'result_url', 'videoUrl', 'video_url'); const model = firstString(body, 'model'); const modelVersion = firstString(body, 'modelVersion', 'model_version'); const costCurrency = firstString(body, 'costCurrency', 'cost_currency');
+    return { externalTaskId: taskId, providerId: this.providerId, status: externalStatus(body.status ?? body.state), ...(outputUrl ? { outputUrl } : {}), ...(model ? { model } : {}), ...(modelVersion ? { modelVersion } : {}), ...(costAmount === undefined ? {} : { costAmount }), ...(costCurrency ? { costCurrency } : {}), ...(Object.keys(provenance).length ? { provenance } : {}) };
   }
   async getTask(externalTaskId: string): Promise<AvatarTaskStatus> {
     const path = (this.options.taskPath || '/v1/lipsync/tasks/:id').replace(':id', encodeURIComponent(externalTaskId));
-    const response = await this.fetchImpl(new URL(path, this.options.baseUrl), { headers: { authorization: `Bearer ${this.options.apiKey}` } });
+    const response = await this.fetchImpl(new URL(path, this.options.baseUrl), { headers: this.authHeaders() });
     if (!response.ok) throw responseError(response.status);
-    const body = jsonObject(await response.json()); const status = body.status;
-    if (!externalStatuses.includes(String(status) as typeof externalStatuses[number])) throw new DigitalHumanProviderError('EXTERNAL_FAILED', 'Avatar provider returned an invalid task status', false);
-    const costAmount = optionalNumber(body.costAmount); const provenance = jsonObject(body.provenance);
-    return { externalTaskId, providerId: this.providerId, status: status as AvatarTaskStatus['status'], ...(typeof body.outputUrl === 'string' ? { outputUrl: body.outputUrl } : {}), ...(typeof body.model === 'string' ? { model: body.model } : {}), ...(typeof body.modelVersion === 'string' ? { modelVersion: body.modelVersion } : {}), ...(costAmount === undefined ? {} : { costAmount }), ...(typeof body.costCurrency === 'string' ? { costCurrency: body.costCurrency } : {}), ...(Object.keys(provenance).length ? { provenance } : {}), ...(typeof body.errorCode === 'string' ? { errorCode: body.errorCode } : {}), ...(typeof body.errorMessage === 'string' ? { errorMessage: body.errorMessage } : {}) };
+    const body = jsonObject(await response.json()); const rawStatus = String(body.status ?? body.state ?? '').toUpperCase();
+    if (!externalStatuses.includes(rawStatus as typeof externalStatuses[number]) && rawStatus !== 'COMPLETED') throw new DigitalHumanProviderError('EXTERNAL_FAILED', 'Avatar provider returned an invalid task status', false);
+    const costAmount = optionalNumber(body.costAmount ?? body.cost_amount); const provenance = jsonObject(body.provenance); const outputUrl = firstString(body, 'outputUrl', 'output_url', 'resultUrl', 'result_url', 'videoUrl', 'video_url'); const model = firstString(body, 'model'); const modelVersion = firstString(body, 'modelVersion', 'model_version'); const costCurrency = firstString(body, 'costCurrency', 'cost_currency'); const errorCode = firstString(body, 'errorCode', 'error_code'); const errorMessage = firstString(body, 'errorMessage', 'error_message');
+    return { externalTaskId, providerId: this.providerId, status: rawStatus === 'COMPLETED' ? 'SUCCEEDED' : rawStatus as AvatarTaskStatus['status'], ...(outputUrl ? { outputUrl } : {}), ...(model ? { model } : {}), ...(modelVersion ? { modelVersion } : {}), ...(costAmount === undefined ? {} : { costAmount }), ...(costCurrency ? { costCurrency } : {}), ...(Object.keys(provenance).length ? { provenance } : {}), ...(errorCode ? { errorCode } : {}), ...(errorMessage ? { errorMessage } : {}) };
   }
-  async cancelTask(externalTaskId: string): Promise<void> { const path = (this.options.taskPath || '/v1/lipsync/tasks/:id').replace(':id', encodeURIComponent(externalTaskId)); const response = await this.fetchImpl(new URL(path, this.options.baseUrl), { method: 'DELETE', headers: { authorization: `Bearer ${this.options.apiKey}` } }); if (!response.ok && response.status !== 404) throw responseError(response.status); }
+  async cancelTask(externalTaskId: string): Promise<void> { const path = (this.options.taskPath || '/v1/lipsync/tasks/:id').replace(':id', encodeURIComponent(externalTaskId)); const response = await this.fetchImpl(new URL(path, this.options.baseUrl), { method: 'DELETE', headers: this.authHeaders() }); if (!response.ok && response.status !== 404) throw responseError(response.status); }
 }
 
 /** HZAgent's vendor-specific boundary. Keep all HZAgent field/path choices here. */
