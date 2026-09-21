@@ -19,6 +19,7 @@ const avatarInput = z.object({ name: z.string().trim().min(1).max(200), ownerNam
 const avatarPatch = z.object({ name: z.string().trim().min(1).max(200).optional(), ownerName: z.string().trim().max(200).optional(), status: z.enum(['DRAFT', 'READY', 'DISABLED']).optional() }).strict();
 const clipInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), assetId: z.string().trim().min(1).max(200), name: z.string().trim().min(1).max(200), durationMs: z.number().int().positive().optional(), width: z.number().int().positive().optional(), height: z.number().int().positive().optional(), fps: z.number().positive().optional(), sceneType: z.string().trim().max(100).optional(), gestureLevel: z.string().trim().max(100).optional(), tags: z.array(z.string().trim().min(1).max(100)).max(64).optional() }).strict();
 const clipPatch = z.object({ assetId: z.string().trim().min(1).max(200).optional(), name: z.string().trim().min(1).max(200).optional(), durationMs: z.number().int().positive().nullable().optional(), width: z.number().int().positive().nullable().optional(), height: z.number().int().positive().nullable().optional(), fps: z.number().positive().nullable().optional(), sceneType: z.string().trim().max(100).nullable().optional(), gestureLevel: z.string().trim().max(100).nullable().optional(), tags: z.array(z.string().trim().min(1).max(100)).max(64).optional(), status: z.enum(['DRAFT', 'READY', 'DISABLED']).optional() }).strict();
+const avatarPreflightInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), avatarClipId: z.string().trim().min(1).max(200), speechAssetId: z.string().trim().min(1).max(200) }).strict();
 const speechInput = z.object({ voiceProfileId: z.string().trim().min(1).max(200), text: z.string().trim().min(1).max(100_000), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), language: z.string().trim().min(1).max(20).optional(), speed: z.number().min(.25).max(4).optional(), emotion: z.string().trim().min(1).max(100).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
 const avatarGenerationInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), avatarClipId: z.string().trim().min(1).max(200), speechAssetId: z.string().trim().min(1).max(200), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), parameters: z.record(z.string(), z.unknown()).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
 const editManifestInput = z.object({ seed: z.number().int().default(1), includeSubtitles: z.boolean().default(true) }).strict();
@@ -27,6 +28,51 @@ export interface DigitalHumanRouteDependencies { digitalHuman: DigitalHumanServi
 function fail(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, status: number, code: string, message: string): unknown { return reply.code(status).send({ error: { code, message, details: [] } }); }
 function invalid(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, details: unknown): unknown { return reply.code(422).send({ error: { code: 'DIGITAL_HUMAN_VALIDATION_ERROR', message: 'Invalid digital human input', details } }); }
 function projectId(request: { params: unknown }): string { return (request.params as { projectId: string }).projectId; }
+
+type PreflightCheck = { code: string; status: 'READY' | 'BLOCKED'; message: string };
+type AvatarPreflightResult = { status: 'READY' | 'BLOCKED'; checks: PreflightCheck[] };
+
+async function runAvatarPreflight(projectId: string, input: { avatarProfileId: string; avatarClipId: string; speechAssetId: string }, deps: DigitalHumanRouteDependencies): Promise<AvatarPreflightResult> {
+  const checks: PreflightCheck[] = [];
+  const block = (code: string, message: string) => checks.push({ code, status: 'BLOCKED', message });
+  const ready = (code: string, message: string) => checks.push({ code, status: 'READY', message });
+  const profile = await deps.digitalHuman.getAvatarProfile(projectId, input.avatarProfileId);
+  if (!profile || profile.status === 'DISABLED') block('AVATAR_PROFILE_NOT_READY', 'Avatar Profile is missing or disabled');
+  const clip = await deps.digitalHuman.getAvatarClip(projectId, input.avatarClipId);
+  if (!clip || clip.avatarProfileId !== input.avatarProfileId || clip.status === 'DISABLED') block('AVATAR_CLIP_NOT_READY', 'Avatar Clip is missing, mismatched, or disabled');
+  const video = clip && deps.assets ? await deps.assets.getReadySourceAsset(projectId, clip.assetId, 'VIDEO') : null;
+  if (!video) block('AVATAR_CLIP_ASSET_NOT_READY', 'Avatar source video must be READY');
+  else if (!(Number(video.metadata.durationMs) > 0)) block('AVATAR_CLIP_DURATION_INVALID', 'Avatar source video duration must be positive');
+  else ready('AVATAR_CLIP_ASSET_READY', 'Avatar source video is READY');
+  const speech = deps.assets ? await deps.assets.getReadySourceAsset(projectId, input.speechAssetId, 'AUDIO') : null;
+  if (!speech) block('SPEECH_ASSET_NOT_READY', 'Speech audio Asset must be READY');
+  else if (!(Number(speech.metadata.durationMs) > 0)) block('SPEECH_ASSET_DURATION_INVALID', 'Speech audio duration must be positive');
+  else ready('SPEECH_ASSET_READY', 'Speech audio Asset is READY');
+  if (!deps.providers) {
+    block('DIGITAL_HUMAN_PROVIDERS_UNCONFIGURED', 'Digital Human providers are not configured');
+  } else {
+    try { await deps.providers.speech.getCapabilities(); ready('SPEECH_RUNTIME_HEALTHY', 'Speech runtime is reachable'); }
+    catch { block('SPEECH_RUNTIME_UNAVAILABLE', 'Speech runtime is unavailable'); }
+    try {
+      const capabilities = await deps.providers.avatar.getCapabilities();
+      if (!capabilities.videoToVideo && !capabilities.imageToVideo) block('AVATAR_PROVIDER_UNAVAILABLE', 'Avatar provider does not support video generation');
+      else ready('AVATAR_PROVIDER_HEALTHY', 'Avatar provider is reachable');
+      if (capabilities.requiresPublicUrl && !deps.providers.mediaStagingConfigured) block('MEDIA_STAGING_NOT_CONFIGURED', 'Public media staging is required for this avatar provider');
+      else if (capabilities.requiresPublicUrl) ready('MEDIA_STAGING_READY', 'Public media staging is configured');
+      const videoFormat = String(video?.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || '';
+      const audioFormat = String(speech?.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || '';
+      if (videoFormat && capabilities.supportedFormats.length > 0 && !capabilities.supportedFormats.some((format) => format.toLowerCase().replace(/^\./, '') === videoFormat)) block('AVATAR_VIDEO_FORMAT_UNSUPPORTED', `Avatar provider does not support ${videoFormat} video input`);
+      if (audioFormat && capabilities.supportedAudioFormats?.length && !capabilities.supportedAudioFormats.some((format) => format.toLowerCase().replace(/^\./, '') === audioFormat)) block('AVATAR_AUDIO_FORMAT_UNSUPPORTED', `Avatar provider does not support ${audioFormat} audio input`);
+      if (video && capabilities.maxDurationSeconds !== undefined && Number(video.metadata.durationMs) > capabilities.maxDurationSeconds * 1_000) block('AVATAR_DURATION_EXCEEDS_PROVIDER_LIMIT', 'Avatar source video exceeds provider duration limit');
+    } catch { block('AVATAR_PROVIDER_UNAVAILABLE', 'Avatar provider capability check failed'); }
+  }
+  return { status: checks.some((check) => check.status === 'BLOCKED') ? 'BLOCKED' : 'READY', checks };
+}
+
+function preflightFailure(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, result: AvatarPreflightResult): unknown {
+  const first = result.checks.find((check) => check.status === 'BLOCKED');
+  return reply.code(409).send({ error: { code: first?.code || 'DIGITAL_HUMAN_PREFLIGHT_BLOCKED', message: first?.message || 'Digital Human preflight blocked', details: result.checks }, preflight: result });
+}
 
 export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHumanRouteDependencies): void {
   app.get('/api/v1/provider-media', async (request, reply) => {
@@ -46,6 +92,7 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
       mediaStaging: { status: deps.providers.mediaStagingConfigured ? 'READY' : 'UNAVAILABLE' },
     };
   });
+  app.post('/api/v1/projects/:projectId/digital-human/avatar-generations/preflight', async (request, reply) => { const parsed = avatarPreflightInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues); const result = await runAvatarPreflight(projectId(request), parsed.data, deps); return result; });
   app.post('/api/v1/projects/:projectId/digital-human/avatar-generations/:generationId/edit-manifest', async (request, reply) => {
     const parsed = editManifestInput.safeParse(request.body || {}); if (!parsed.success) return invalid(reply, parsed.error.issues);
     if (!deps.quickEdit || !deps.video || !deps.assets || !deps.storage) return fail(reply, 503, 'VIDEO_EDIT_INTEGRATION_UNAVAILABLE', 'Video editing integration is not configured');
@@ -141,13 +188,7 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
   app.post('/api/v1/projects/:projectId/digital-human/avatar-generations', async (request, reply) => {
     const parsed = avatarGenerationInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues);
     const id = projectId(request);
-    if (deps.providers) {
-      try {
-        const capabilities = await deps.providers.avatar.getCapabilities();
-        if (!capabilities.videoToVideo && !capabilities.imageToVideo) return fail(reply, 503, 'AVATAR_PROVIDER_UNAVAILABLE', 'Avatar provider is unavailable');
-        if (capabilities.requiresPublicUrl && !deps.providers.mediaStagingConfigured) return fail(reply, 503, 'MEDIA_STAGING_NOT_CONFIGURED', 'Public media staging is required for this avatar provider');
-      } catch (error) { return fail(reply, 503, 'AVATAR_PROVIDER_UNAVAILABLE', error instanceof Error ? error.message : 'Avatar provider is unavailable'); }
-    }
+    const preflight = await runAvatarPreflight(id, parsed.data, deps); if (preflight.status === 'BLOCKED') return preflightFailure(reply, preflight);
     try { const result = await deps.digitalHuman.createAvatarGeneration({ projectId: id, ...parsed.data, correlationId: parsed.data.correlationId || `api-${randomUUID()}` }); return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: !result.created }); } catch (error) { return fail(reply, 409, 'AVATAR_GENERATION_CONFLICT', error instanceof Error ? error.message : 'Unable to create Avatar Generation'); }
   });
   app.get('/api/v1/projects/:projectId/digital-human/avatar-generations', async (request) => ({ items: await deps.digitalHuman.listAvatarGenerations(projectId(request)) }));
@@ -168,10 +209,7 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
     const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getAvatarGeneration(params.projectId, params.generationId);
     if (!generation) return fail(reply, 404, 'AVATAR_GENERATION_NOT_FOUND', 'Avatar Generation not found');
     if (generation.status !== 'FAILED' && generation.status !== 'CANCELLED') return fail(reply, 409, 'AVATAR_GENERATION_NOT_RETRYABLE', 'Only failed or cancelled Avatar Generations can be retried');
-    if (deps.providers) {
-      try { const capabilities = await deps.providers.avatar.getCapabilities(); if (!capabilities.videoToVideo && !capabilities.imageToVideo) return fail(reply, 503, 'AVATAR_PROVIDER_UNAVAILABLE', 'Avatar provider is unavailable'); if (capabilities.requiresPublicUrl && !deps.providers.mediaStagingConfigured) return fail(reply, 503, 'MEDIA_STAGING_NOT_CONFIGURED', 'Public media staging is required for this avatar provider'); }
-      catch (error) { return fail(reply, 503, 'AVATAR_PROVIDER_UNAVAILABLE', error instanceof Error ? error.message : 'Avatar provider is unavailable'); }
-    }
+    const preflight = await runAvatarPreflight(params.projectId, { avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId }, deps); if (preflight.status === 'BLOCKED') return preflightFailure(reply, preflight);
     try {
       const parameters = generation.provenance.parameters && typeof generation.provenance.parameters === 'object' && !Array.isArray(generation.provenance.parameters) ? generation.provenance.parameters as Record<string, unknown> : {};
       const result = await deps.digitalHuman.createAvatarGeneration({ projectId: params.projectId, avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, provider: generation.provider, model: generation.model || undefined, parameters, correlationId: `retry-${randomUUID()}` });
