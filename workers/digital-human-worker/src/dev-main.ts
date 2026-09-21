@@ -20,7 +20,7 @@ export function createDigitalHumanDevRunner(dependencies: DigitalHumanWorkerDepe
   const recoverOnce = async (): Promise<void> => { if (recoveryPass) return recoveryPass; recoveryPass = dependencies.jobs.reconcileExpiredLeases(new Date(), cancellation).then(() => undefined).finally(() => { recoveryPass = null; }); return recoveryPass; };
   return {
     pollOnce, recoverOnce,
-    async start() { if (started) return; await recoverOnce(); await runtime.start(); started = true; await pollOnce(); pollTimer = setInterval(() => { void pollOnce(); }, pollIntervalMs); recoveryTimer = setInterval(() => { void recoverOnce(); }, recoveryIntervalMs); pollTimer.unref(); recoveryTimer.unref(); },
+    async start() { if (started) return; await recoverOnce(); await runtime.start(); started = true; await pollOnce(); pollTimer = setInterval(() => { void pollOnce().catch(() => undefined); }, pollIntervalMs); recoveryTimer = setInterval(() => { void recoverOnce().catch(() => undefined); }, recoveryIntervalMs); pollTimer.unref(); recoveryTimer.unref(); },
     async stop(signal = 'SIGTERM') { if (pollTimer) { clearInterval(pollTimer); pollTimer = undefined; } if (recoveryTimer) { clearInterval(recoveryTimer); recoveryTimer = undefined; } if (pollingPass) await pollingPass; if (recoveryPass) await recoveryPass; if (!started) return; await runtime.shutdown(signal); started = false; },
   };
 }
