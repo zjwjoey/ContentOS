@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateAvatarGenerationRequest, validateSpeechGenerationRequest } from '../../packages/contracts/src/index.js';
-import { FakeAvatarProvider, FakeSpeechProvider, SyntheticTimingProvider } from '../../packages/modules/digital-human/src/index.js';
+import { FakeAvatarProvider, FakeSpeechProvider, SyntheticTimingProvider, createRuntimeDigitalHumanProviders, subtitleTimelineToAss, subtitleTimelineToSrt } from '../../packages/modules/digital-human/src/index.js';
 
 test('digital human contracts reject unsafe generation requests', () => {
   assert.doesNotThrow(() => validateSpeechGenerationRequest({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', text: '你好', language: 'zh', speed: 1, emotion: 'natural' }));
@@ -26,4 +26,12 @@ test('fake providers expose capabilities and preserve external task identity', a
   const task = await avatar.submitLipSync({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', audioUrl: 'https://a.invalid/a.wav', videoUrl: 'https://a.invalid/v.mp4', parameters: {} });
   assert.equal((await avatar.getTask(task.externalTaskId)).externalTaskId, task.externalTaskId);
   assert.equal((await avatar.getTask(task.externalTaskId)).status, 'SUCCEEDED');
+});
+
+test('runtime provider selection is environment-driven and subtitle exports preserve timing', async () => {
+  const runtime = createRuntimeDigitalHumanProviders({ CONTENTOS_SPEECH_PROVIDER: 'fake-speech', CONTENTOS_AVATAR_PROVIDER: 'fake-avatar', CONTENTOS_FAKE_SPEECH_OUTPUT_PATH: 'C:/tmp/test.wav' });
+  assert.equal(runtime.speech.providerId, 'fake-speech'); assert.equal(runtime.avatar.providerId, 'fake-avatar');
+  const timeline = await new SyntheticTimingProvider().align({ text: '第一句。第二句。', durationMs: 2_500, language: 'zh' });
+  assert.match(subtitleTimelineToSrt(timeline), /00:00:00,000 -->/); assert.match(subtitleTimelineToAss(timeline), /Dialogue: 0,/);
+  assert.match(subtitleTimelineToAss(timeline), /第一句。/);
 });
