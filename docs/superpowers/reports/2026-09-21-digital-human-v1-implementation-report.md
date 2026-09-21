@@ -28,10 +28,12 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 
 - Targeted TypeScript compilation: passed.
 - Digital Human/config/worker unit tests: 12 passed.
-- Format check: passed (301 files).
+- Digital Human API integration: 7 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER idempotency flow.
+- Format check: passed (302 files).
 - Lint check: passed (151 TypeScript files).
 - `git diff --check`: passed.
-- Full TypeScript baseline remains blocked by pre-existing workspace dependency resolution issues (`@fastify/multipart` and React type packages are not available in the isolated worktree cache). No Digital Human source error remains in the filtered compiler output.
+- Full TypeScript baseline: passed after restoring the workspace dependency links with the lockfile's `autoInstallPeers=false` setting.
+- Full baseline test run: 279 passed / 4 failed. The remaining failures are test-environment/migration-history issues: the shared test database contains stale migration rows `0032`–`0037` that are not present in this branch, including the pre-existing missing `0037_script_editing_v3_settings.down.sql`. A clean temporary-schema migration matrix passes 9/9, and the Digital Human test suite passes 7/7.
 
 ## Runtime status
 

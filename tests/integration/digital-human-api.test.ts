@@ -1,0 +1,46 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import pg from 'pg';
+import { buildApi } from '../../apps/api/src/app.js';
+import { createDatabase, migrateUp } from '../../packages/database/src/index.js';
+import { LocalStorageProvider } from '../../packages/infrastructure/storage/src/index.js';
+import { JobService } from '../../packages/modules/job/src/index.js';
+import { ProjectService } from '../../packages/modules/project/src/index.js';
+
+const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55433/contentos_test';
+
+async function temporaryDatabase(): Promise<{ url: string; close: () => Promise<void> }> {
+  const schema = `contentos_dh_api_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
+  const admin = new pg.Pool({ connectionString: adminUrl });
+  await admin.query(`create schema "${schema}"`);
+  const url = new URL(adminUrl); url.searchParams.set('options', `-c search_path=${schema}`);
+  return { url: url.toString(), close: async () => { await admin.query(`drop schema if exists "${schema}" cascade`); await admin.end(); } };
+}
+
+test('Avatar output enters the existing EditManifest and VIDEO_RENDER path idempotently', async () => {
+  const temporary = await temporaryDatabase(); const db = await createDatabase(temporary.url); const storageRoot = await mkdtemp(join(tmpdir(), 'contentos-digital-human-api-')); const storage = new LocalStorageProvider(storageRoot);
+  try {
+    await migrateUp(db);
+    const project = await new ProjectService(db).create('Digital Human API integration'); const jobs = new JobService(db);
+    const speechAssetId = `asset-dh-speech-${randomUUID()}`; const avatarAssetId = `asset-dh-avatar-${randomUUID()}`; const clipAssetId = `asset-dh-clip-${randomUUID()}`;
+    for (const [id, kind, storageKey, durationMs] of [[speechAssetId, 'AUDIO', 'objects/speech.wav', 2_000], [avatarAssetId, 'VIDEO', 'objects/avatar.mp4', 2_000], [clipAssetId, 'VIDEO', 'objects/clip.mp4', 2_000] as const]) {
+      await db.query('insert into assets (id, project_id, kind, checksum, byte_size, storage_key, lifecycle, metadata) values ($1,$2,$3,$4,$5,$6,$7,$8)', [id, project.id, kind, `sha256:${id}`, 10, storageKey, 'READY', { durationMs, width: 1080, height: 1920, format: kind === 'VIDEO' ? 'mp4' : 'wav' }]);
+      await db.query('insert into project_assets (project_id, asset_id, role) values ($1,$2,$3)', [project.id, id, kind === 'AUDIO' ? 'OUTPUT' : 'SOURCE']);
+    }
+    await db.query('insert into project_assets (project_id, asset_id, role) values ($1,$2,$3)', [project.id, avatarAssetId, 'OUTPUT']);
+    const voiceId = `voice-profile-${randomUUID()}`; const speechJob = await jobs.create({ id: `job-speech-${randomUUID()}`, projectId: project.id, type: 'SPEECH_GENERATE', payload: {}, idempotencyKey: `dh-speech-${randomUUID()}`, maxAttempts: 3 });
+    await db.query('insert into voice_profiles (id,project_id,name,provider,language,default_speed,default_emotion,status) values ($1,$2,$3,$4,$5,$6,$7,$8)', [voiceId, project.id, 'Integration Voice', 'indextts25', 'zh', 1, 'natural', 'READY']);
+    const speechGenerationId = `speech-generation-${randomUUID()}`; await db.query('insert into speech_generations (id,project_id,voice_profile_id,provider,model,text,text_hash,parameters,status,job_id,output_asset_id,duration_ms,latency_ms,provenance) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)', [speechGenerationId, project.id, voiceId, 'indextts25', 'indextts-2.5', '这是集成测试文案。', `hash-${randomUUID()}`, { language: 'zh', speed: 1, emotion: 'natural' }, 'SUCCEEDED', speechJob.id, speechAssetId, 2_000, 100, { provider: 'indextts25' }]);
+    const avatarProfileId = `avatar-profile-${randomUUID()}`; const avatarClipId = `avatar-clip-${randomUUID()}`; await db.query('insert into avatar_profiles (id,project_id,name,owner_name,status) values ($1,$2,$3,$4,$5)', [avatarProfileId, project.id, 'Integration Avatar', 'test', 'READY']); await db.query('insert into avatar_clips (id,project_id,avatar_profile_id,asset_id,name,duration_ms,status) values ($1,$2,$3,$4,$5,$6,$7)', [avatarClipId, project.id, avatarProfileId, clipAssetId, 'Integration Clip', 2_000, 'READY']);
+    const avatarGenerationId = `avatar-generation-${randomUUID()}`; const avatarJob = await jobs.create({ id: `job-avatar-${randomUUID()}`, projectId: project.id, type: 'AVATAR_LIPSYNC_GENERATE', payload: {}, idempotencyKey: `dh-avatar-${randomUUID()}`, maxAttempts: 3 }); await db.query('insert into avatar_generations (id,project_id,avatar_profile_id,avatar_clip_id,speech_asset_id,provider,status,job_id,output_asset_id,duration_ms,request_hash,provenance) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [avatarGenerationId, project.id, avatarProfileId, avatarClipId, speechAssetId, 'hzagent', 'SUCCEEDED', avatarJob.id, avatarAssetId, 2_000, `request-${randomUUID()}`, { provider: 'hzagent' }]);
+    const app = await buildApi({ db, storage }); await app.ready();
+    const first = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/digital-human/avatar-generations/${avatarGenerationId}/edit-manifest`, payload: {} }); assert.equal(first.statusCode, 201, first.body); const firstBody = first.json() as { manifestId: string; jobId: string; deduplicated: boolean }; assert.equal(firstBody.deduplicated, false);
+    const manifest = (await db.query<{ manifest: Record<string, unknown> }>('select manifest from edit_manifests where id=$1', [firstBody.manifestId])).rows[0]?.manifest; assert.equal(manifest?.projectId, project.id); assert.equal((manifest?.timeline as Array<{ assetId: string }>)[0]?.assetId, avatarAssetId); assert.equal((manifest?.audio as { voiceAssetId?: string }).voiceAssetId, speechAssetId); assert.equal((manifest?.metadata as { digitalHumanGenerationId?: string }).digitalHumanGenerationId, avatarGenerationId);
+    const second = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/digital-human/avatar-generations/${avatarGenerationId}/edit-manifest`, payload: {} }); assert.equal(second.statusCode, 200, second.body); const secondBody = second.json() as { manifestId: string; jobId: string; deduplicated: boolean }; assert.deepEqual(secondBody, { manifestId: firstBody.manifestId, jobId: firstBody.jobId, deduplicated: true, editUrl: `/projects/${project.id}/video` });
+    await app.close();
+  } finally { await db.end(); await rm(storageRoot, { recursive: true, force: true }); await temporary.close(); }
+});
