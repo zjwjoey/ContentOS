@@ -106,6 +106,7 @@ export class DigitalHumanService {
     const result = await this.db.query('insert into avatar_generations (id, project_id, avatar_profile_id, avatar_clip_id, speech_asset_id, provider, model, request_hash, provenance, job_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict (project_id, request_hash) do nothing returning *', [generationId, input.projectId, profile.id, clip.id, input.speechAssetId, provider, model, requestHash, JSON.stringify({ parameters }), job.id]);
     const row = result.rows[0] || (await this.db.query('select * from avatar_generations where project_id = $1 and request_hash = $2', [input.projectId, requestHash])).rows[0];
     if (!row) throw new Error('AVATAR_GENERATION_INSERT_FAILED');
+    if (result.rowCount === 1) await this.db.query('update avatar_clips set usage_count = usage_count + 1, last_used_at = now(), updated_at = now() where id = $1 and project_id = $2', [clip.id, input.projectId]);
     const generation = mapAvatarGeneration(row as Record<string, unknown>); return { generation, job, created: result.rowCount === 1 };
   }
   async getAvatarGeneration(projectId: string, id: string): Promise<AvatarGenerationV1 | null> { const result = await this.db.query('select * from avatar_generations where project_id = $1 and id = $2', [projectId, id]); return result.rows[0] ? mapAvatarGeneration(result.rows[0] as Record<string, unknown>) : null; }

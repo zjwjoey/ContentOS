@@ -62,6 +62,11 @@ test('HTTP avatar capabilities are health-checked with provider authentication',
   assert.equal(path, '/v1/capabilities'); assert.equal(authorization, 'Bearer test-only'); assert.equal(capabilities.maxDurationSeconds, 60); assert.deepEqual(capabilities.supportedFormats, ['mp4']); assert.deepEqual(capabilities.supportedAudioFormats, ['wav']);
 });
 
+test('HTTP avatar adapters reject private result URLs at the provider boundary', async () => {
+  const avatar = new HzAgentAvatarProvider({ baseUrl: 'https://avatar.test', apiKey: 'test-only', fetchImpl: async () => new Response(JSON.stringify({ status: 'SUCCEEDED', result_url: 'http://127.0.0.1:8788/result.mp4' }), { status: 200 }) });
+  await assert.rejects(() => avatar.getTask('task-private'), /unsafe result URL/);
+});
+
 test('provider HTTP failures are bounded and classified as retryable outages', async () => {
   const hangingFetch: typeof fetch = async (_input, init) => await new Promise<Response>((_resolve, reject) => { init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }); });
   const speech = new IndexTTS25SpeechProvider({ baseUrl: 'http://speech.test', requestTimeoutMs: 10, fetchImpl: hangingFetch });

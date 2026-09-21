@@ -172,3 +172,25 @@ test('Digital Human worker rejects an oversized remote Avatar result before impo
   await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-avatar-large', new AbortController().signal), /exceeds the configured size limit/);
   assert.deepEqual(failures, [{ id: 'generation-avatar-large', code: 'AVATAR_RESULT_TOO_LARGE' }]);
 });
+
+test('Digital Human worker bounds remote Avatar result downloads', async () => {
+  const failures: Array<{ id: string; code: string }> = [];
+  const deps = {
+    digitalHuman: {
+      getAvatarGeneration: async () => ({ id: 'generation-avatar-timeout', status: 'PENDING', outputAssetId: null, externalTaskId: null, avatarClipId: 'clip-1', speechAssetId: 'audio-1', avatarProfileId: 'profile-1', model: null, provenance: { parameters: {} } }),
+      markAvatarRunning: async () => undefined,
+      getAvatarClip: async () => ({ id: 'clip-1', assetId: 'video-1' }),
+      markAvatarWaiting: async () => undefined,
+      failAvatar: async (id: string, error: { code: string }) => { failures.push({ id, code: error.code }); },
+    },
+    assets: { getProjectAsset: async (_projectId: string, id: string) => id === 'video-1' ? { id, kind: 'VIDEO', lifecycle: 'READY', storageKey: 'video.mp4', metadata: { durationMs: 2_000, format: 'mp4' } } : { id, kind: 'AUDIO', lifecycle: 'READY', storageKey: 'audio.wav', metadata: { durationMs: 2_000, format: 'wav' } } },
+    avatarProvider: { getCapabilities: async () => ({ providerId: 'hzagent', local: false, videoToVideo: true, imageToVideo: false, requiresPublicUrl: true, supportedFormats: ['mp4'] }), submitLipSync: async () => ({ externalTaskId: 'remote-timeout', providerId: 'hzagent', status: 'SUCCEEDED', outputUrl: 'https://provider.test/result.mp4' }) },
+    staging: { stageAsset: async (id: string) => ({ assetId: id, publicUrl: `https://provider.test/${id}`, expiresAt: new Date(Date.now() + 60_000).toISOString() }) },
+    storage: { root: 'C:/contentos-test-storage' },
+    fetchImpl: async (_input: RequestInfo | URL, init?: RequestInit) => await new Promise<Response>((_resolve, reject) => { init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }); }),
+    remoteResultTimeoutMs: 10,
+  } as never;
+  const job = { id: 'job-avatar-timeout', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-avatar-timeout', projectId: 'project-1', correlationId: 'corr-timeout' } } as never;
+  await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-avatar-timeout', new AbortController().signal), /download timed out/);
+  assert.deepEqual(failures, [{ id: 'generation-avatar-timeout', code: 'AVATAR_RESULT_DOWNLOAD_TIMEOUT' }]);
+});

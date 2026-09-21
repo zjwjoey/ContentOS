@@ -61,6 +61,8 @@ test('Avatar output enters the existing EditManifest and VIDEO_RENDER path idemp
     assert.equal(new Set(avatarResults.map((result) => result.generation.id)).size, 1);
     assert.equal(new Set(avatarResults.map((result) => result.job.id)).size, 1);
     assert.equal(avatarResults.filter((result) => result.created).length, 1);
+    const clipUsage = await db.query<{ usage_count: number; last_used_at: string | null }>('select usage_count, last_used_at from avatar_clips where id = $1', [avatarClipId]);
+    assert.equal(Number(clipUsage.rows[0]?.usage_count), 1); assert.ok(clipUsage.rows[0]?.last_used_at);
     const avatarJobCount = await db.query<{ count: string }>('select count(*)::text as count from jobs where project_id = $1 and type = $2', [project.id, 'AVATAR_LIPSYNC_GENERATE']); assert.equal(avatarJobCount.rows[0]?.count, '2');
     await db.query("update speech_generations set status = 'FAILED', error = '{\"code\":\"TEST_FAILURE\"}'::jsonb where id = $1", [speechResults[0]!.generation.id]);
     await db.query("update jobs set state = 'FAILED', error = '{\"code\":\"TEST_FAILURE\"}'::jsonb where id = $1", [speechResults[0]!.job.id]);

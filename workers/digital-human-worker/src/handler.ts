@@ -21,6 +21,7 @@ export interface DigitalHumanWorkerDependencies {
   staging: ProviderMediaStaging;
   fetchImpl?: typeof fetch;
   maxRemoteResultBytes?: number;
+  remoteResultTimeoutMs?: number;
 }
 export interface DigitalHumanWorkerInvocation { jobId: string; }
 
@@ -51,11 +52,27 @@ export function createDigitalHumanLeaseCancellationHandler(deps: DigitalHumanWor
 }
 
 const DEFAULT_MAX_REMOTE_RESULT_BYTES = 500 * 1024 * 1024;
+const DEFAULT_REMOTE_RESULT_TIMEOUT_MS = 300_000;
 
 function remoteResultLimit(deps: DigitalHumanWorkerDependencies): number {
   const value = deps.maxRemoteResultBytes ?? DEFAULT_MAX_REMOTE_RESULT_BYTES;
   if (!Number.isSafeInteger(value) || value <= 0) throw Object.assign(new Error('Invalid remote result size limit'), { code: 'AVATAR_RESULT_LIMIT_INVALID', retryable: false });
   return value;
+}
+
+function remoteResultTimeout(deps: DigitalHumanWorkerDependencies): number {
+  const value = deps.remoteResultTimeoutMs ?? DEFAULT_REMOTE_RESULT_TIMEOUT_MS;
+  if (!Number.isSafeInteger(value) || value <= 0) throw Object.assign(new Error('Invalid remote result timeout'), { code: 'AVATAR_RESULT_TIMEOUT_INVALID', retryable: false });
+  return value;
+}
+
+async function fetchRemoteResult(fetchImpl: typeof fetch, url: string, signal: AbortSignal, timeout: number): Promise<Response> {
+  const controller = new AbortController(); let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeout); const abort = () => controller.abort(signal.reason);
+  if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
+  try { return await fetchImpl(url, { signal: controller.signal }); }
+  catch (error) { if (timedOut) throw Object.assign(new Error('Avatar provider result download timed out'), { code: 'AVATAR_RESULT_DOWNLOAD_TIMEOUT', retryable: true }); throw error; }
+  finally { clearTimeout(timer); signal.removeEventListener('abort', abort); }
 }
 
 async function streamRemoteResult(response: Response, tempPath: string, maxBytes: number): Promise<void> {
@@ -127,7 +144,7 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
     if (task.status === 'FAILED' || task.status === 'CANCELLED' || !task.outputUrl) throw Object.assign(new Error(taskError.errorMessage || 'Avatar provider task failed'), { code: taskError.errorCode || 'AVATAR_PROVIDER_FAILED', retryable: false });
     signal.throwIfAborted();
     if (!/^https?:\/\//i.test(task.outputUrl)) throw Object.assign(new Error('Avatar provider returned an unsafe output URL'), { code: 'AVATAR_RESULT_URL_INVALID', retryable: false });
-    const fetchImpl = deps.fetchImpl || fetch; const response = await fetchImpl(task.outputUrl, { signal }); if (!response.ok) throw Object.assign(new Error('Unable to download avatar result'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: response.status >= 500 });
+    const fetchImpl = deps.fetchImpl || fetch; const response = await fetchRemoteResult(fetchImpl, task.outputUrl, signal, remoteResultTimeout(deps)); if (!response.ok) throw Object.assign(new Error('Unable to download avatar result'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: response.status >= 500 });
     const tempPath = join(deps.storage.root, 'staging', `${generation.id}.avatar.mp4`); await mkdir(join(deps.storage.root, 'staging'), { recursive: true }); await streamRemoteResult(response, tempPath, remoteResultLimit(deps));
     try {
       const asset = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: tempPath, kind: 'VIDEO', role: 'OUTPUT', metadata: { digitalHuman: { generationId: generation.id, provider: task.providerId, externalTaskId: task.externalTaskId } } });

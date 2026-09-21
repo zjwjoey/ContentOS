@@ -17,7 +17,7 @@ test('config parses boot values without logging raw secrets', () => {
 
 test('config exposes digital human runtime defaults and overrides', () => {
   const defaults = loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgresql://user:password@localhost/db', STORAGE_ROOT: './storage/test' });
-  assert.equal(defaults.digitalHumanSpeechProvider, 'indextts25'); assert.equal(defaults.digitalHumanWorkerConcurrency, 1);
+  assert.equal(defaults.digitalHumanSpeechProvider, 'indextts25'); assert.equal(defaults.digitalHumanWorkerConcurrency, 1); assert.equal(defaults.digitalHumanRemoteResultTimeoutMs, 300_000);
   const configured = loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgresql://user:password@localhost/db', STORAGE_ROOT: './storage/test', CONTENTOS_SPEECH_PROVIDER: 'fake-speech', CONTENTOS_INDEXTTS_BASE_URL: 'http://127.0.0.1:9999', DIGITAL_HUMAN_WORKER_CONCURRENCY: '2', HZAGENT_SUBMIT_PATH: '/submit', HZAGENT_TASK_PATH: '/task/:id', HZAGENT_AUTH_HEADER: 'x-api-key', HZAGENT_AUTH_SCHEME: '' });
   assert.equal(configured.digitalHumanSpeechProvider, 'fake-speech'); assert.equal(configured.indexttsBaseUrl, 'http://127.0.0.1:9999'); assert.equal(configured.digitalHumanWorkerConcurrency, 2);
   assert.equal(configured.avatarSubmitPath, '/submit'); assert.equal(configured.avatarTaskPath, '/task/:id'); assert.equal(configured.avatarAuthHeader, 'x-api-key'); assert.equal(configured.avatarAuthScheme, '');
