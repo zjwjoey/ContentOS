@@ -56,7 +56,8 @@ async function runAvatarPreflight(projectId: string, input: { avatarProfileId: s
     try {
       const capabilities = await deps.providers.avatar.getCapabilities();
       if (!capabilities.videoToVideo && !capabilities.imageToVideo) block('AVATAR_PROVIDER_UNAVAILABLE', 'Avatar provider does not support video generation');
-      else ready('AVATAR_PROVIDER_HEALTHY', 'Avatar provider is reachable');
+      else if (!capabilities.videoToVideo) block('AVATAR_VIDEO_TO_VIDEO_UNSUPPORTED', 'Avatar provider does not support video-to-video generation for this video clip');
+      else ready('AVATAR_PROVIDER_HEALTHY', 'Avatar provider is reachable for video-to-video generation');
       if (capabilities.requiresPublicUrl && !deps.providers.mediaStagingConfigured) block('MEDIA_STAGING_NOT_CONFIGURED', 'Public media staging is required for this avatar provider');
       else if (capabilities.requiresPublicUrl) ready('MEDIA_STAGING_READY', 'Public media staging is configured');
       const videoFormat = String(video?.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || '';
