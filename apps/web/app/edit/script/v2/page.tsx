@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { defaultPresentationSettings, PresentationSettingsPanel, type PresentationSettingsValue } from '../../_components/presentation-settings';
+import { mergeScriptSegmentsV1, splitScriptSegmentV1, type ScriptSegment } from '../segmentation';
+import { segmentationChanged } from '../segmentation-policy';
 
 type Clip = { id: string; durationMs: number; selectedAssetId?: string; selectedSource?: string; asset?: { id: string; path: string; source: string; originalName?: string; author?: string; thumbnailUrl?: string }; locked?: boolean };
 type Scene = { id: string; sceneIndex: number; text: string; role: string; startMs: number; endMs: number; clipSlots: Clip[] };
@@ -10,16 +12,6 @@ const roleLabels: Record<string, string> = { HOOK: '开头', BODY: '正文', EXP
 const sourceLabels: Record<string, string> = { LOCAL: '本地', PEXELS: 'Pexels', FAKE_PEXELS: '网络模拟' };
 function seconds(value: number): string { return `${(value / 1000).toFixed(1)}s`; }
 function warningLabel(value: string): string { return value === 'EDIT_BGM_UNAVAILABLE' ? '未找到匹配的本地背景音乐，成片将不带音乐' : '部分可选素材暂不可用'; }
-type ScriptSegment = { index: number; text: string; normalizedText: string };
-function mergeScriptSegmentsV1(items: ScriptSegment[], index: number): ScriptSegment[] { if (index < 0 || index >= items.length - 1) return items; const merged = `${items[index]!.text}${items[index + 1]!.text}`; return items.filter((_, itemIndex) => itemIndex !== index + 1).map((item, itemIndex) => itemIndex === index ? { ...item, text: merged, normalizedText: merged.normalize('NFKC').toLowerCase() } : { ...item, index: itemIndex }); }
-function splitScriptSegmentV1(items: ScriptSegment[], index: number, at: number): ScriptSegment[] { const item = items[index]; if (!item || at <= 0 || at >= item.text.length) return items; const left = item.text.slice(0, at).trim(); const right = item.text.slice(at).trim(); if (!left || !right) return items; return [...items.slice(0, index), { index, text: left, normalizedText: left.normalize('NFKC').toLowerCase() }, { index: index + 1, text: right, normalizedText: right.normalize('NFKC').toLowerCase() }, ...items.slice(index + 1).map((entry, offset) => ({ ...entry, index: index + offset + 2 }))]; }
-function segmentationChanged(previous: PresentationSettingsValue['segmentation'], next: PresentationSettingsValue['segmentation']): boolean {
-  if (previous.mode !== next.mode) return true;
-  const previousDelimiters = [...(previous.delimiters || [])].sort();
-  const nextDelimiters = [...(next.delimiters || [])].sort();
-  return previousDelimiters.length !== nextDelimiters.length || previousDelimiters.some((delimiter, index) => delimiter !== nextDelimiters[index]);
-}
-
 export default function ScriptEditingV2Page() {
   const [script, setScript] = useState(''); const [voicePath, setVoicePath] = useState(''); const [sourceRoots, setSourceRoots] = useState<string[]>([]); const [manualSourceRoot, setManualSourceRoot] = useState(''); const [sourceCounts, setSourceCounts] = useState<Record<string, number>>({}); const [usePexels, setUsePexels] = useState(false); const [priorityAssets, setPriorityAssets] = useState<Array<{ assetId: string; path: string; mode: 'PREFER' | 'MUST_USE' }>>([]); const [priorityPath, setPriorityPath] = useState(''); const [template, setTemplate] = useState('COMMERCIAL_OPINION'); const [pace, setPace] = useState('NORMAL'); const [density, setDensity] = useState('MEDIUM'); const [subtitleStyle, setSubtitleStyle] = useState('commercial'); const [heroText, setHeroText] = useState(true); const [musicMode, setMusicMode] = useState('NONE'); const [musicPath, setMusicPath] = useState(''); const [ducking, setDucking] = useState(true); const [intro, setIntro] = useState(false); const [outro, setOutro] = useState(false); const [outputRoot, setOutputRoot] = useState(''); const [segments, setSegments] = useState<Array<{ index: number; text: string; normalizedText: string }>>([]); const [cleanedScript, setCleanedScript] = useState(''); const [segmentationConfirmed, setSegmentationConfirmed] = useState(false); const [presentationSettings, setPresentationSettings] = useState<PresentationSettingsValue>(defaultPresentationSettings); const [plan, setPlan] = useState<Plan | null>(null); const [status, setStatus] = useState(''); const [busy, setBusy] = useState(false);
   const workspaceId = useMemo(() => 'workspace-local', []);

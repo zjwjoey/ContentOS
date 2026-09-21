@@ -50,8 +50,16 @@ export function registerAssetRoutes(app: FastifyInstance, dependencies: AssetRou
   app.get('/api/v1/projects/:projectId/assets', async (request, reply) => {
     const projectId = (request.params as { projectId: string }).projectId;
     if (!(await dependencies.projects.get(projectId))) return error(reply, 404, 'PROJECT_NOT_FOUND', 'Project not found');
-    const query = request.query as { kind?: string; tag?: string; q?: string };
-    return { items: await dependencies.assets.listProjectAssets(projectId, { ...(query.kind ? { kind: query.kind } : {}), ...(query.tag ? { tag: query.tag } : {}), ...(query.q ? { query: query.q } : {}) }) };
+    const query = request.query as { kind?: string; tag?: string; q?: string; limit?: string; offset?: string };
+    const page = await dependencies.assets.listAssetLibrary({ projectId, ...(query.kind ? { kind: query.kind } : {}), ...(query.tag ? { tag: query.tag } : {}), ...(query.q ? { query: query.q } : {}), limit: Number(query.limit || 50), offset: Number(query.offset || 0) });
+    return page;
+  });
+
+  app.get('/api/v1/assets/library', async (request, reply) => {
+    const query = request.query as { projectId?: string; workspaceId?: string; kind?: string; tag?: string; q?: string; limit?: string; offset?: string; includeArchived?: string };
+    if (!query.projectId && !query.workspaceId) return error(reply, 422, 'ASSET_LIBRARY_SCOPE_REQUIRED', 'projectId 或 workspaceId 至少需要一个');
+    try { return await dependencies.assets.listAssetLibrary({ ...(query.projectId ? { projectId: query.projectId } : {}), ...(query.workspaceId ? { workspaceId: query.workspaceId } : {}), ...(query.kind ? { kind: query.kind } : {}), ...(query.tag ? { tag: query.tag } : {}), ...(query.q ? { query: query.q } : {}), limit: Number(query.limit || 50), offset: Number(query.offset || 0), includeArchived: query.includeArchived === 'true' }); }
+    catch (cause) { return error(reply, 422, cause instanceof Error ? cause.message : 'ASSET_LIBRARY_FAILED', '素材库查询失败'); }
   });
 
   app.patch('/api/v1/projects/:projectId/assets/:assetId/tags', async (request, reply) => {

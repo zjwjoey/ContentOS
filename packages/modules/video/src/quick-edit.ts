@@ -1,13 +1,21 @@
 import { createHash } from 'node:crypto';
-import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
+import { validateEditManifest, type EditManifestV0, type EditOperationV3 } from '../../../contracts/src/index.js';
+
+export type { EditOperationV3 } from '../../../contracts/src/index.js';
 
 export type QuickEditOperation =
   | { type: 'TRIM'; clipIndex: number; sourceInMs: number; durationMs: number }
+  | { type: 'TRIM_SOURCE'; clipIndex: number; sourceInMs: number; sourceOutMs: number }
   | { type: 'REMOVE'; clipIndex: number }
   | { type: 'REORDER'; clipIndexes: number[] }
   | { type: 'REPLACE'; clipIndex: number; assetId: string; sourceInMs?: number }
+  | { type: 'REPLACE_CLIP'; clipIndex: number; assetId: string; sourceInMs?: number }
+  | { type: 'LOCK_CLIP'; clipIndex: number }
+  | { type: 'UNLOCK_CLIP'; clipIndex: number }
+  | { type: 'MANUAL_SELECT_CLIP'; clipIndex: number; assetId: string; sourceInMs?: number }
   | { type: 'REROLL'; clipIndex: number; seed?: number }
-  | { type: 'REMATCH'; clipIndex: number; seed?: number };
+  | { type: 'REMATCH'; clipIndex: number; seed?: number }
+  | EditOperationV3;
 
 export interface AdjustmentAsset { id: string; durationMs: number; sourcePath?: string; originalName?: string; tags?: string[]; usageCount?: number; recentUsageCount?: number; lastUsedAt?: string; metadata?: Record<string, unknown>; }
 
@@ -32,8 +40,27 @@ function requireInteger(value: unknown, field: string, minimum = 0): number {
   return value;
 }
 
+function parseSentenceOperation(value: Record<string, unknown>): EditOperationV3 {
+  if (typeof value.sentenceId !== 'string' || !value.sentenceId.trim()) throw new Error('Quick Edit sentenceId is required');
+  if (value.type === 'LOCK_CLIP' || value.type === 'UNLOCK_CLIP') return { type: value.type, sentenceId: value.sentenceId.trim() };
+  if (value.type === 'REMOVE_CLIP') return { type: 'REMOVE_CLIP', sentenceId: value.sentenceId.trim() };
+  if (value.type === 'TRIM_SOURCE') {
+    const sourceInMs = requireInteger(value.sourceInMs, 'sourceInMs');
+    const sourceOutMs = requireInteger(value.sourceOutMs, 'sourceOutMs', 1);
+    if (sourceOutMs <= sourceInMs) throw new Error('Quick Edit sourceOutMs must be after sourceInMs');
+    return { type: 'TRIM_SOURCE', sentenceId: value.sentenceId.trim(), sourceInMs, sourceOutMs };
+  }
+  if (value.type === 'REPLACE_CLIP' || value.type === 'MANUAL_SELECT_CLIP') {
+    if (typeof value.assetId !== 'string' || !value.assetId.trim()) throw new Error(`Quick Edit ${value.type} assetId is required`);
+    const sourceInMs = value.sourceInMs === undefined ? undefined : requireInteger(value.sourceInMs, 'sourceInMs');
+    return { type: value.type, sentenceId: value.sentenceId.trim(), assetId: value.assetId.trim(), ...(sourceInMs === undefined ? {} : { sourceInMs }) };
+  }
+  throw new Error(`Unknown Quick Edit sentence operation: ${String(value.type)}`);
+}
+
 function parseOperation(value: unknown): QuickEditOperation {
   if (!isRecord(value) || typeof value.type !== 'string') throw new Error('Quick Edit operation must have a type');
+  if (typeof value.sentenceId === 'string') return parseSentenceOperation(value);
   if (value.type === 'TRIM') {
     return {
       type: 'TRIM',
@@ -41,6 +68,12 @@ function parseOperation(value: unknown): QuickEditOperation {
       sourceInMs: requireInteger(value.sourceInMs, 'sourceInMs'),
       durationMs: requireInteger(value.durationMs, 'durationMs', 1),
     };
+  }
+  if (value.type === 'TRIM_SOURCE') {
+    const sourceInMs = requireInteger(value.sourceInMs, 'sourceInMs');
+    const sourceOutMs = requireInteger(value.sourceOutMs, 'sourceOutMs', 1);
+    if (sourceOutMs <= sourceInMs) throw new Error('Quick Edit sourceOutMs must be after sourceInMs');
+    return { type: 'TRIM_SOURCE', clipIndex: requireInteger(value.clipIndex, 'clipIndex'), sourceInMs, sourceOutMs };
   }
   if (value.type === 'REMOVE') {
     return { type: 'REMOVE', clipIndex: requireInteger(value.clipIndex, 'clipIndex') };
@@ -56,6 +89,18 @@ function parseOperation(value: unknown): QuickEditOperation {
     const sourceInMs = value.sourceInMs === undefined ? undefined : requireInteger(value.sourceInMs, 'sourceInMs');
     return { type: 'REPLACE', clipIndex: requireInteger(value.clipIndex, 'clipIndex'), assetId: value.assetId.trim(), ...(sourceInMs === undefined ? {} : { sourceInMs }) };
   }
+  if (value.type === 'REPLACE_CLIP') {
+    if (typeof value.assetId !== 'string' || !value.assetId.trim()) throw new Error(`Quick Edit ${value.type} assetId is required`);
+    const sourceInMs = value.sourceInMs === undefined ? undefined : requireInteger(value.sourceInMs, 'sourceInMs');
+    return { type: 'REPLACE_CLIP', clipIndex: requireInteger(value.clipIndex, 'clipIndex'), assetId: value.assetId.trim(), ...(sourceInMs === undefined ? {} : { sourceInMs }) };
+  }
+  if (value.type === 'MANUAL_SELECT_CLIP') {
+    if (typeof value.assetId !== 'string' || !value.assetId.trim()) throw new Error(`Quick Edit ${value.type} assetId is required`);
+    const sourceInMs = value.sourceInMs === undefined ? undefined : requireInteger(value.sourceInMs, 'sourceInMs');
+    return { type: 'MANUAL_SELECT_CLIP', clipIndex: requireInteger(value.clipIndex, 'clipIndex'), assetId: value.assetId.trim(), ...(sourceInMs === undefined ? {} : { sourceInMs }) };
+  }
+  if (value.type === 'LOCK_CLIP') return { type: 'LOCK_CLIP', clipIndex: requireInteger(value.clipIndex, 'clipIndex') };
+  if (value.type === 'UNLOCK_CLIP') return { type: 'UNLOCK_CLIP', clipIndex: requireInteger(value.clipIndex, 'clipIndex') };
   if (value.type === 'REROLL') {
     const seed = value.seed === undefined ? undefined : requireInteger(value.seed, 'seed');
     return { type: 'REROLL', clipIndex: requireInteger(value.clipIndex, 'clipIndex'), ...(seed === undefined ? {} : { seed }) };
@@ -105,6 +150,20 @@ function assertPermutation(indexes: number[], length: number): void {
   }
 }
 
+type ClipIndexedQuickEditOperation = Exclude<QuickEditOperation, EditOperationV3>;
+
+function normalizeOperation(operation: QuickEditOperation, manifest: EditManifestV0): ClipIndexedQuickEditOperation {
+  if (!('sentenceId' in operation)) return operation as ClipIndexedQuickEditOperation;
+  const clipIndex = manifest.timeline.findIndex((clip) => clip.sentenceId === operation.sentenceId);
+  if (clipIndex < 0) throw new Error(`Quick Edit sentenceId ${operation.sentenceId} was not found`);
+  if (operation.type === 'TRIM_SOURCE') return { type: 'TRIM_SOURCE', clipIndex, sourceInMs: operation.sourceInMs, sourceOutMs: operation.sourceOutMs };
+  if (operation.type === 'LOCK_CLIP') return { type: 'LOCK_CLIP', clipIndex };
+  if (operation.type === 'UNLOCK_CLIP') return { type: 'UNLOCK_CLIP', clipIndex };
+  if (operation.type === 'REMOVE_CLIP') return { type: 'REMOVE', clipIndex };
+  if (operation.type === 'REPLACE_CLIP') return { type: 'REPLACE_CLIP', clipIndex, assetId: operation.assetId, ...(operation.sourceInMs === undefined ? {} : { sourceInMs: operation.sourceInMs }) };
+  return { type: 'MANUAL_SELECT_CLIP', clipIndex, assetId: operation.assetId, ...(operation.sourceInMs === undefined ? {} : { sourceInMs: operation.sourceInMs }) };
+}
+
 function seededRandom(seed: number): () => number {
   let state = (seed >>> 0) || 1;
   return () => { state = (Math.imul(1664525, state) + 1013904223) >>> 0; return state / 0x1_0000_0000; };
@@ -115,13 +174,23 @@ function sameSourceFamily(currentId: string, candidateId: string): boolean { ret
 export function applyQuickEditOperations(parent: EditManifestV0, operations: QuickEditOperation[], assets: AdjustmentAsset[] = [], candidateAssets: AdjustmentAsset[] = assets): EditManifestV0 {
   const next = structuredClone(parent);
   const assetById = new Map(assets.map((asset) => [asset.id, asset]));
-  for (const operation of operations) {
+  for (const rawOperation of operations) {
+    const operation = normalizeOperation(rawOperation, next);
     if (operation.type === 'TRIM') {
       assertClipIndex(operation.clipIndex, next.timeline.length);
       const clip = next.timeline[operation.clipIndex]!;
       if (clip.voiceStartMs !== undefined && clip.voiceEndMs !== undefined && operation.durationMs !== clip.voiceEndMs - clip.voiceStartMs) throw new Error('Voice-synced clip duration is read-only');
       clip.sourceInMs = operation.sourceInMs;
       clip.durationMs = operation.durationMs;
+      clip.reviewStatus = 'MANUAL';
+      clip.sourceOutMs = clip.sourceInMs + clip.durationMs;
+    } else if (operation.type === 'TRIM_SOURCE') {
+      assertClipIndex(operation.clipIndex, next.timeline.length);
+      const clip = next.timeline[operation.clipIndex]!;
+      if (clip.voiceStartMs !== undefined && clip.voiceEndMs !== undefined && operation.sourceOutMs - operation.sourceInMs !== clip.voiceEndMs - clip.voiceStartMs) throw new Error('Voice-synced clip duration is read-only');
+      clip.sourceInMs = operation.sourceInMs;
+      clip.sourceOutMs = operation.sourceOutMs;
+      clip.durationMs = operation.sourceOutMs - operation.sourceInMs;
       clip.reviewStatus = 'MANUAL';
     } else if (operation.type === 'REMOVE') {
       assertClipIndex(operation.clipIndex, next.timeline.length);
@@ -130,14 +199,18 @@ export function applyQuickEditOperations(parent: EditManifestV0, operations: Qui
     } else if (operation.type === 'REORDER') {
       assertPermutation(operation.clipIndexes, next.timeline.length);
       next.timeline = operation.clipIndexes.map((index) => next.timeline[index]!);
-    } else if (operation.type === 'REPLACE') {
+    } else if (operation.type === 'LOCK_CLIP' || operation.type === 'UNLOCK_CLIP') {
+      assertClipIndex(operation.clipIndex, next.timeline.length);
+      next.timeline[operation.clipIndex]!.locked = operation.type === 'LOCK_CLIP';
+      next.timeline[operation.clipIndex]!.reviewStatus = 'MANUAL';
+    } else if (operation.type === 'REPLACE' || operation.type === 'REPLACE_CLIP' || operation.type === 'MANUAL_SELECT_CLIP') {
       assertClipIndex(operation.clipIndex, next.timeline.length);
       const clip = next.timeline[operation.clipIndex]!;
       const replacement = assetById.get(operation.assetId);
       if (assets.length > 0 && !replacement) throw new Error(`Quick Edit REPLACE asset ${operation.assetId} is unavailable`);
       const sourceInMs = operation.sourceInMs ?? clip.sourceInMs;
       if (replacement && (sourceInMs < 0 || sourceInMs + clip.durationMs > replacement.durationMs)) throw new Error(`Quick Edit REPLACE asset ${operation.assetId} is too short`);
-      next.timeline[operation.clipIndex] = { ...clip, assetId: operation.assetId, sourceInMs, reviewStatus: 'MANUAL', ...(replacement?.sourcePath ? { sourcePath: replacement.sourcePath } : {}) };
+      next.timeline[operation.clipIndex] = { ...clip, assetId: operation.assetId, sourceInMs, sourceOutMs: sourceInMs + clip.durationMs, ...(operation.type === 'MANUAL_SELECT_CLIP' || clip.selectionSource ? { selectionSource: operation.type === 'MANUAL_SELECT_CLIP' ? 'MANUAL' : clip.selectionSource } : {}), reviewStatus: 'MANUAL', ...(replacement?.sourcePath ? { sourcePath: replacement.sourcePath } : {}) };
     } else if (operation.type === 'REROLL') {
       assertClipIndex(operation.clipIndex, next.timeline.length);
       if (next.timeline[operation.clipIndex]!.role && next.timeline[operation.clipIndex]!.role !== 'CONTENT') throw new Error('Branding clips cannot be rerolled');

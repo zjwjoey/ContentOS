@@ -166,6 +166,32 @@ export class AssetCatalogService {
     });
   }
 
+  async listAssetLibrary(filters: { projectId?: string; workspaceId?: string; kind?: string; tag?: string; query?: string; includeArchived?: boolean; limit?: number; offset?: number }): Promise<{ items: Array<AssetSummaryV0 & { sourcePath: string; fingerprint: string; usage: { candidateCount: number; selectedCount: number; manualSelectCount: number; finalUseCount: number; jianyingUseCount: number; replaceCount: number; recentUseCount: number; lastUsedAt: string | null } }>; total: number; limit: number; offset: number }> {
+    if (!filters.projectId && !filters.workspaceId) throw new Error('ASSET_LIBRARY_SCOPE_REQUIRED');
+    const limit = Math.min(200, Math.max(1, Math.trunc(filters.limit || 50)));
+    const offset = Math.max(0, Math.trunc(filters.offset || 0));
+    const values: unknown[] = [];
+    const clauses: string[] = [];
+    if (filters.projectId) { values.push(filters.projectId); clauses.push(`pa.project_id = $${values.length}`); }
+    if (filters.workspaceId) { values.push(filters.workspaceId); clauses.push(`wa.workspace_id = $${values.length}`); }
+    if (filters.kind) { values.push(filters.kind); clauses.push(`a.kind = $${values.length}`); }
+    if (!filters.includeArchived) clauses.push("a.lifecycle = 'READY'");
+    if (filters.tag) { values.push(filters.tag); clauses.push(`coalesce(a.metadata->'tags','[]'::jsonb) ? $${values.length}`); }
+    if (filters.query) { values.push(`%${filters.query}%`); clauses.push(`coalesce(a.metadata->>'originalName','') ilike $${values.length}`); }
+    const join = filters.projectId ? 'join project_assets pa on pa.asset_id=a.id' : 'join video_workspace_assets wa on wa.asset_id=a.id';
+    const where = clauses.length ? `where ${clauses.join(' and ')}` : '';
+    const count = await this.db.query<{ total: number }>(`select count(distinct a.id)::int as total from assets a ${join} ${where}`, values);
+    const pageValues = [...values, limit, offset];
+    const usageJoin = filters.workspaceId ? `left join script_editing_v3_asset_usage_stats u on u.asset_id=a.id and u.workspace_id=$${values.length + 1}` : '';
+    const usageValues = filters.workspaceId ? [...pageValues.slice(0, -2), filters.workspaceId, ...pageValues.slice(-2)] : pageValues;
+    const result = await this.db.query(`select distinct a.*,${filters.workspaceId ? 'u.candidate_count,u.selected_count,u.manual_select_count,u.final_use_count,u.jianying_use_count,u.replace_count,u.recent_use_count,u.last_used_at,' : ''} a.storage_key as source_path from assets a ${join} ${usageJoin} ${where} order by a.created_at desc,a.id desc limit $${usageValues.length - 1} offset $${usageValues.length}`, usageValues);
+    return { items: result.rows.map((row) => {
+      const record = row as Record<string, unknown>;
+      const metadata = record.metadata && typeof record.metadata === 'object' && !Array.isArray(record.metadata) ? record.metadata as Record<string, unknown> : {};
+      return { id: String(record.id), kind: String(record.kind) as AssetSummaryV0['kind'], lifecycle: String(record.lifecycle) as AssetSummaryV0['lifecycle'], byteSize: Number(record.byte_size), checksum: String(record.checksum), originalName: typeof metadata.originalName === 'string' ? metadata.originalName : String(record.storage_key).split('/').pop() || 'asset', metadata: safeMetadata(record), sourcePath: String(record.source_path || record.storage_key), fingerprint: String(record.checksum), usage: { candidateCount: Number(record.candidate_count || 0), selectedCount: Number(record.selected_count || 0), manualSelectCount: Number(record.manual_select_count || 0), finalUseCount: Number(record.final_use_count || 0), jianyingUseCount: Number(record.jianying_use_count || 0), replaceCount: Number(record.replace_count || 0), recentUseCount: Number(record.recent_use_count || 0), lastUsedAt: record.last_used_at ? new Date(String(record.last_used_at)).toISOString() : null } };
+    }), total: Number(count.rows[0]?.total || 0), limit, offset };
+  }
+
   async updateTags(projectId: string, assetId: string, input: { tags?: string[]; category?: string; notes?: string }): Promise<AssetSummaryV0 | null> {
     const current = await this.db.query('select a.* from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 where a.id = $2', [projectId, assetId]);
     const row = current.rows[0] as Record<string, unknown> | undefined; if (!row) return null;

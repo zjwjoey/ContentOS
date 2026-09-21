@@ -29,5 +29,17 @@ export { VideoAdjustmentService, VideoQuickEditService } from './quick-edit-serv
 export type { CreateQuickEditVersionInput, QuickEditManifestRecord } from './quick-edit-service.js';
 export { StandaloneQuickEditService } from './standalone-quick-edit-service.js';
 export type { CreateStandaloneQuickEditInput, StandaloneQuickEditSession } from './standalone-quick-edit-service.js';
+export { buildVisualQueriesV3, ensureStandaloneWorkspace, JianyingDraftImporter, JianyingEncryptedDraftAdapter, JianyingRuntimeLocator, JianyingVideoEditorDllAdapter, CompositeReadableDraftAdapter, PlainJsonDraftAdapter, materialSourceFingerprint, rankMaterialCandidateV3, ScriptEditingV3Service } from './script-editing-v3-service.js';
+export type { JianyingEncryptedDraftSupport, JianyingRuntimeStatus, ReadableDraftAdapter } from './script-editing-v3-service.js';
+export { DEFAULT_SHOT_DETECTION_MIN_DURATION_MS, DEFAULT_SHOT_DETECTION_THRESHOLD, detectShotsV1, mergeShortDetectedShots } from './shot-detection.js';
+export type { DetectedShot } from './shot-detection.js';
+export { ScriptEditingV3EvaluationService } from './script-editing-v3-evaluation-service.js';
+export type { EvaluationItemInput, EvaluationJudgmentInput, EvaluationJudgmentLabel, EvaluationQueryInput } from './script-editing-v3-evaluation-service.js';
+export { QwenVisualAnalysisProvider } from './visual-analysis.js';
+export type { VisualAnalysisProvider } from './visual-analysis.js';
+export { QwenVisualQueryProvider, RuleVisualQueryProvider, createVisualQueryProvider } from './visual-query.js';
+export type { VisualQueryProvider } from './visual-query.js';
+export { InMemoryMaterialSemanticIndex, QwenEmbeddingProvider } from './semantic-index.js';
+export type { EmbeddingProvider, MaterialSemanticIndex, MaterialSemanticSearchResult } from './semantic-index.js';
 export { VideoEditPresetService } from './preset-service.js';
 export type { VideoEditPreset, VideoEditPresetInput, PresetMode } from './preset-service.js';

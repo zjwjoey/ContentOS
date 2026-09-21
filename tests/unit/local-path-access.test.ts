@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { LocalPathAccessService } from '../../packages/modules/local-path/src/index.js';
@@ -51,4 +51,24 @@ test('environment roots remain a deployment fallback for manual paths', async ()
   const previous = process.env.CONTENTOS_LOCAL_MEDIA_ROOTS; process.env.CONTENTOS_LOCAL_MEDIA_ROOTS = root;
   try { const service = new LocalPathAccessService({ db: fakeDb() }); assert.equal((await service.authorize(file, 'PRIORITY_ASSET')).toLocaleLowerCase(), (await service.canonicalize(file)).toLocaleLowerCase()); }
   finally { if (previous === undefined) delete process.env.CONTENTOS_LOCAL_MEDIA_ROOTS; else process.env.CONTENTOS_LOCAL_MEDIA_ROOTS = previous; }
+});
+
+test('JIANYING_DRAFT authorize accepts both files and directories without weakening other purposes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-jianying-path-policy-'));
+  const file = join(root, 'draft_content.json'); const draftDirectory = join(root, 'draft'); await mkdir(draftDirectory); await writeFile(file, '{}');
+  const previous = process.env.CONTENTOS_LOCAL_MEDIA_ROOTS; process.env.CONTENTOS_LOCAL_MEDIA_ROOTS = root;
+  try {
+    const service = new LocalPathAccessService({ db: fakeDb() });
+    await service.grantPath({ path: file, purpose: 'JIANYING_DRAFT' });
+    await service.authorize(file, 'JIANYING_DRAFT');
+    await service.grantPath({ path: draftDirectory, purpose: 'JIANYING_DRAFT' });
+    await service.authorize(draftDirectory, 'JIANYING_DRAFT');
+    await service.grantPath({ path: file, purpose: 'PRIORITY_ASSET' });
+    await service.authorize(file, 'PRIORITY_ASSET');
+    await assert.rejects(() => service.authorize(draftDirectory, 'PRIORITY_ASSET'), /LOCAL_PATH_FILE_REQUIRED/);
+    await assert.rejects(() => service.authorize(file, 'MEDIA_ROOT'), /LOCAL_PATH_DIRECTORY_REQUIRED/);
+  } finally {
+    if (previous === undefined) delete process.env.CONTENTOS_LOCAL_MEDIA_ROOTS; else process.env.CONTENTOS_LOCAL_MEDIA_ROOTS = previous;
+    await rm(root, { recursive: true, force: true });
+  }
 });

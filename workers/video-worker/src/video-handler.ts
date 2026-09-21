@@ -1,15 +1,154 @@
 import { dirname, extname, join, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
+import { access as accessFile, copyFile, mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
 import type { Pool } from 'pg';
 import { AssetCatalogService, type AssetService, type LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { JobLeaseCancellationHandler, JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
-import { planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, rerollEditorialClip, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoJobPayload, type VideoService } from '../../../packages/modules/video/src/index.js';
+import { ensureStandaloneWorkspace, JianyingDraftImporter, materialSourceFingerprint, planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, rerollEditorialClip, ScriptEditingV3Service, QwenEmbeddingProvider, QwenVisualAnalysisProvider, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoJobPayload, type VideoService } from '../../../packages/modules/video/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import type { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
-import { renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
+import { concatDraftPreviewFragments, generateRepresentativeFrames, muxDraftPreviewAudio, renderDraftPreviewFragment, renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
+import type { EditManifestV0 } from '../../../packages/contracts/src/index.js';
+import { detectShotsV1 } from '../../../packages/modules/video/src/index.js';
 
 export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; localMedia?: LocalMediaSourceService; localPathAccess?: LocalPathAccessService; mediaProvider?: ExternalVideoProvider; }
+
+export function createDraftPreviewJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
+  return async (job, _attemptId, signal) => {
+    if (job.type !== 'EDIT_V3_DRAFT_PREVIEW') throw new Error('DRAFT_PREVIEW_JOB_TYPE_INVALID');
+    const payload = job.payload as { sessionId?: string; manifestId?: string; snapshotId?: string; workspaceId?: string; mode?: 'DRAFT' | 'FAST' };
+    if (!payload.sessionId || !payload.manifestId || !payload.snapshotId || !payload.workspaceId || !payload.mode) throw new Error('DRAFT_PREVIEW_PAYLOAD_INVALID');
+    const row = (await deps.db.query('select manifest from edit_manifests where id=$1 and workspace_id=$2', [payload.manifestId, payload.workspaceId])).rows[0] as { manifest?: EditManifestV0 } | undefined;
+    if (!row?.manifest) throw new Error('DRAFT_PREVIEW_MANIFEST_NOT_FOUND');
+    const manifest = row.manifest;
+    const clips = manifest.timeline.filter((clip) => clip.role !== 'INTRO' && clip.role !== 'OUTRO');
+    if (!clips.length) throw new Error('DRAFT_PREVIEW_NO_FRAGMENTS');
+    const assetIds = [...new Set(clips.map((clip) => clip.assetId))];
+    const assetRows = await deps.db.query<{ asset_id: string; source_fingerprint: string | null; source_path: string }>('select asset_id,source_fingerprint,source_path from material_pool_items where snapshot_id=$1 and asset_id=any($2::text[])', [payload.snapshotId, assetIds]);
+    const assetFingerprints = new Map(assetRows.rows.map((item) => [item.asset_id, item.source_fingerprint]));
+    const previewRoot = `${deps.storage.root}/script-editing-v3/previews/${payload.sessionId}/${payload.mode.toLowerCase()}`;
+    const fragmentRoot = `${previewRoot}/fragments`;
+    const fragmentPaths: string[] = [];
+    let renderedFragmentCount = 0;
+    let reusedFragmentCount = 0;
+    let changedClipCount = 0;
+    let cursor = 0;
+    const startedAt = Date.now();
+    for (const [index, clip] of clips.entries()) {
+      signal.throwIfAborted();
+      const visualStart = clip.timelineStartMs ?? cursor;
+      const visualDurationMs = Math.max(clip.durationMs, (clip.timelineEndMs ?? visualStart + clip.durationMs) - visualStart);
+      cursor = visualStart + visualDurationMs;
+      const sourceOutMs = clip.sourceOutMs ?? clip.sourceInMs + clip.durationMs;
+      const fingerprint = assetFingerprints.get(clip.assetId) || `${clip.sourcePath}:${clip.sourceInMs}:${sourceOutMs}`;
+      const fragmentKey = `${payload.mode.toLowerCase()}-${index}-${clip.sentenceId || clip.assetId}`;
+      const cached = (await deps.db.query<{ output_path: string }>('select output_path from script_editing_v3_preview_fragments where workspace_id=$1 and fragment_key=$2 and source_fingerprint=$3 and source_in_ms=$4 and source_out_ms=$5 and status=\'READY\' and output_path is not null order by updated_at desc limit 1', [payload.workspaceId, fragmentKey, fingerprint, clip.sourceInMs, sourceOutMs])).rows[0];
+      let fragmentPath = cached?.output_path || `${fragmentRoot}/${index}-${Buffer.from(`${fingerprint}:${clip.sourceInMs}:${sourceOutMs}`).toString('base64url').slice(0, 32)}.mp4`;
+      if (cached?.output_path && await accessFile(cached.output_path).then(() => true).catch(() => false)) reusedFragmentCount += 1;
+      else {
+        changedClipCount += 1;
+        const localSubtitles = deps.fontFile ? (manifest.subtitles || []).filter((item) => item.endMs > visualStart && item.startMs < visualStart + visualDurationMs).map((item) => ({ ...item, startMs: Math.max(0, item.startMs - visualStart), endMs: Math.min(visualDurationMs, item.endMs - visualStart) })) : undefined;
+        const localOverlays = deps.fontFile ? (manifest.textOverlays || []).filter((item) => item.endMs > visualStart && item.startMs < visualStart + visualDurationMs).map((item) => ({ ...item, startMs: Math.max(0, item.startMs - visualStart), endMs: Math.min(visualDurationMs, item.endMs - visualStart) })) : undefined;
+        await renderDraftPreviewFragment({ inputPath: clip.sourcePath, outputPath: fragmentPath, sourceInMs: clip.sourceInMs, sourceOutMs, visualDurationMs, canvas: manifest.canvas, ...(localSubtitles?.length ? { subtitles: localSubtitles } : {}), ...(manifest.subtitleStyle ? { subtitleStyle: manifest.subtitleStyle } : {}), ...(localOverlays?.length ? { textOverlays: localOverlays } : {}), ffmpegPath: deps.ffmpegPath, ffprobePath: deps.ffprobePath, ...(deps.fontFile ? { fontFile: deps.fontFile } : {}), signal });
+        renderedFragmentCount += 1;
+      }
+      await deps.db.query("insert into script_editing_v3_preview_fragments (id,workspace_id,manifest_id,fragment_key,source_fingerprint,source_in_ms,source_out_ms,output_path,status,metadata) values ($1,$2,$3,$4,$5,$6,$7,$8,'READY',$9) on conflict (manifest_id,fragment_key,source_fingerprint,source_in_ms,source_out_ms) do update set output_path=excluded.output_path,status='READY',metadata=excluded.metadata,updated_at=now()", [`preview-fragment-${randomUUID()}`, payload.workspaceId, payload.manifestId, fragmentKey, fingerprint, clip.sourceInMs, sourceOutMs, fragmentPath, { mode: payload.mode, sentenceId: clip.sentenceId || null }]);
+      fragmentPaths.push(fragmentPath);
+    }
+    const concatStartedAt = Date.now();
+    const concatPath = `${previewRoot}/concat.mp4`;
+    await concatDraftPreviewFragments({ fragmentPaths, outputPath: concatPath, ffmpegPath: deps.ffmpegPath, ffprobePath: deps.ffprobePath, signal });
+    let outputPath = concatPath;
+    if (manifest.audio.voicePath && await accessFile(manifest.audio.voicePath).then(() => true).catch(() => false)) {
+      outputPath = `${previewRoot}/draft-preview.mp4`;
+      await muxDraftPreviewAudio({ videoPath: concatPath, audioPath: manifest.audio.voicePath, outputPath, durationMs: fragmentPaths.length ? cursor : 0, ffmpegPath: deps.ffmpegPath, ffprobePath: deps.ffprobePath, signal });
+    }
+    const metrics = { draftPreviewTotalMs: Date.now() - startedAt, changedClipCount, reusedFragmentCount, renderedFragmentCount, concatMs: Date.now() - concatStartedAt };
+    await deps.db.query("insert into script_editing_v3_preview_fragments (id,workspace_id,manifest_id,fragment_key,source_fingerprint,source_in_ms,source_out_ms,output_path,status,metadata) values ($1,$2,$3,$4,$5,0,1,$6,'READY',$7) on conflict (manifest_id,fragment_key,source_fingerprint,source_in_ms,source_out_ms) do update set output_path=excluded.output_path,status='READY',metadata=excluded.metadata,updated_at=now()", [`preview-output-${randomUUID()}`, payload.workspaceId, payload.manifestId, `__concat__-${payload.mode.toLowerCase()}`, `${payload.manifestId}:${payload.mode}`, outputPath, metrics]);
+    console.log(JSON.stringify({ level: 'info', event: 'script_editing_v3.draft_preview', sessionId: payload.sessionId, manifestId: payload.manifestId, mode: payload.mode, ...metrics }));
+    return { mode: payload.mode, manifestId: payload.manifestId, outputPath, ...metrics };
+  };
+}
+
+export function createVisualAnalysisJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
+  return async (job, _attemptId, signal) => {
+    if (job.type !== 'ANALYZE_ASSET_VISUAL' && job.type !== 'GENERATE_REPRESENTATIVE_FRAMES') throw new Error('ANALYZE_ASSET_VISUAL_JOB_TYPE_INVALID');
+    if (signal.aborted) throw new Error('ANALYZE_ASSET_VISUAL_CANCELLED');
+    const payload = job.payload as { snapshotId?: string; assetId?: string; analysisConfig?: string };
+    if (!payload.snapshotId || !payload.assetId) throw new Error('ANALYZE_ASSET_VISUAL_PAYLOAD_INVALID');
+    const row = (await deps.db.query('select source_path,duration_ms,file_size,modified_at from material_pool_items where snapshot_id=$1 and asset_id=$2', [payload.snapshotId, payload.assetId])).rows[0] as { source_path?: string; duration_ms?: number; file_size?: number | null; modified_at?: string | null } | undefined;
+    if (!row?.source_path || !row.duration_ms) throw new Error('MATERIAL_POOL_ITEM_NOT_FOUND');
+    const modelName = process.env.QWEN_VL_MODEL || process.env.QWEN_MODEL || 'qwen-vl-max';
+    const modelVersion = process.env.QWEN_MODEL_VERSION || 'unknown';
+    const existingProfile = (await deps.db.query<{ status: string; model_name: string; model_version: string; prompt_version: string; analysis_version: string; source_fingerprint?: string | null; profile: Record<string, unknown> }>('select status,model_name,model_version,prompt_version,analysis_version,source_fingerprint,profile from asset_visual_profiles where asset_id=$1', [payload.assetId])).rows[0];
+    const fingerprint = materialSourceFingerprint({ fileSize: row.file_size, modifiedAt: row.modified_at, durationMs: Number(row.duration_ms) });
+    const profileCacheValid = existingProfile?.status === 'READY' && existingProfile.source_fingerprint === fingerprint && existingProfile.model_name === modelName && existingProfile.model_version === modelVersion && existingProfile.prompt_version === 'qwen-visual-v2' && existingProfile.analysis_version === 'asset-profile-v2';
+    const frameGenerationVersion = 'representative-frames-v1';
+    const existing = await deps.db.query<{ frame_index: number; timestamp_ms: number; frame_key: string }>('select frame_index,timestamp_ms,frame_key from asset_representative_frames where asset_id=$1 and source_fingerprint=$2 and frame_generation_version=$3 order by frame_index', [payload.assetId, fingerprint, frameGenerationVersion]);
+    const safeAssetId = payload.assetId.replace(/[^a-zA-Z0-9._-]/gu, '_');
+    const safeFingerprint = Buffer.from(fingerprint).toString('base64url');
+    const frameDirectory = `${deps.storage.root}/representative-frames/${frameGenerationVersion}/${safeAssetId}/${safeFingerprint}`;
+    const cachedFrames = existing.rows.length === 5 && existing.rows.every((frame) => frame.frame_key) ? existing.rows.map((frame) => ({ index: Number(frame.frame_index), timestampMs: Number(frame.timestamp_ms), path: `${deps.storage.root}/representative-frames/${frame.frame_key}` })) : [];
+    const generatedFrames = cachedFrames.length === 5 && (await Promise.all(cachedFrames.map((frame) => accessFile(frame.path).then(() => true).catch(() => false))).then((available) => available.every(Boolean))) ? cachedFrames : await generateRepresentativeFrames(row.source_path, frameDirectory, Number(row.duration_ms), deps.ffmpegPath, signal);
+    if (cachedFrames.length !== 5 || generatedFrames.some((frame) => !cachedFrames.some((cached) => cached.path === frame.path))) {
+      const client = await deps.db.connect();
+      try {
+        await client.query('begin');
+        for (const frame of generatedFrames) {
+          const frameKey = `${frameGenerationVersion}/${safeAssetId}/${safeFingerprint}/${frame.index}.jpg`;
+          await client.query('insert into asset_representative_frames (asset_id,source_fingerprint,frame_generation_version,frame_index,timestamp_ms,frame_key) values ($1,$2,$3,$4,$5,$6) on conflict (asset_id,source_fingerprint,frame_index) do update set frame_generation_version=excluded.frame_generation_version,timestamp_ms=excluded.timestamp_ms,frame_key=excluded.frame_key', [payload.assetId, fingerprint, frameGenerationVersion, frame.index, frame.timestampMs, frameKey]);
+        }
+        await client.query('commit');
+      } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
+    }
+    if (job.type === 'GENERATE_REPRESENTATIVE_FRAMES') return { assetId: payload.assetId, status: 'READY', frameCount: generatedFrames.length };
+    try {
+      if (profileCacheValid) {
+        const embeddingModel = process.env.QWEN_EMBEDDING_MODEL || 'text-embedding-v3';
+        const embedding = (await deps.db.query<{ asset_id: string; source_fingerprint: string; model_name: string }>('select asset_id,source_fingerprint,model_name from asset_semantic_embeddings where asset_id=$1', [payload.assetId])).rows[0];
+        const embeddingReady = embedding?.source_fingerprint === fingerprint && embedding.model_name === embeddingModel;
+        if (!embeddingReady && (process.env.QWEN_BASE_URL || process.env.QWEN_API_URL) && process.env.QWEN_API_KEY) {
+          const cachedProfile = existingProfile!.profile;
+          const embeddingResult = await new QwenEmbeddingProvider().embed({ texts: [`${String(cachedProfile.summary || '')} ${Array.isArray(cachedProfile.tags) ? cachedProfile.tags.map((tag) => tag && typeof tag === 'object' ? String((tag as Record<string, unknown>).tag || '') : '').join(' ') : ''}`], signal });
+          const v3Service = new ScriptEditingV3Service(deps.db);
+          await v3Service.persistSemanticEmbedding({ assetId: payload.assetId, sourceFingerprint: fingerprint, provider: embeddingResult.provider, model: embeddingResult.model, vector: embeddingResult.vectors[0]! });
+        }
+        return { assetId: payload.assetId, status: 'READY', cached: true, profile: existingProfile!.profile };
+      }
+      await deps.db.query('insert into asset_visual_profiles (asset_id,summary,profile,provider,model_name,model_version,prompt_version,analysis_version,status,error,source_fingerprint) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,null,$10) on conflict (asset_id) do update set summary=excluded.summary,profile=excluded.profile,provider=excluded.provider,model_name=excluded.model_name,model_version=excluded.model_version,prompt_version=excluded.prompt_version,analysis_version=excluded.analysis_version,status=excluded.status,error=null,source_fingerprint=excluded.source_fingerprint,updated_at=now()', [payload.assetId, '视觉分析排队中', {}, 'QWEN_VL', modelName, modelVersion, 'qwen-visual-v2', 'asset-profile-v2', 'PENDING', fingerprint]);
+      const profile = await new QwenVisualAnalysisProvider().analyzeAssetFrames({ assetId: payload.assetId, framePaths: generatedFrames.map((frame) => frame.path), frameTimestampsMs: generatedFrames.map((frame) => frame.timestampMs), signal });
+      const v3Service = new ScriptEditingV3Service(deps.db);
+      await v3Service.persistVisualProfile(profile, fingerprint);
+      if ((process.env.QWEN_BASE_URL || process.env.QWEN_API_URL) && process.env.QWEN_API_KEY) {
+        try {
+          const embedding = await new QwenEmbeddingProvider().embed({ texts: [`${profile.summary} ${profile.tags.map((tag) => tag.tag).join(' ')}`], signal });
+          await v3Service.persistSemanticEmbedding({ assetId: payload.assetId, sourceFingerprint: fingerprint, provider: embedding.provider, model: embedding.model, vector: embedding.vectors[0]! });
+        } catch { /* Embeddings are an optimization; lexical retrieval remains available. */ }
+      }
+      return { assetId: payload.assetId, status: 'READY', profile };
+    } catch (error) {
+      if (job.attemptCount >= job.maxAttempts) await deps.db.query('update asset_visual_profiles set status=\'FAILED\',error=$2,updated_at=now() where asset_id=$1 and source_fingerprint=$3', [payload.assetId, { code: error instanceof Error ? error.message : 'ANALYZE_ASSET_VISUAL_FAILED' }, fingerprint]).catch(() => undefined);
+      throw error;
+    }
+  };
+}
+
+export function createJianyingImportJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
+  return async (job, _attemptId, signal) => {
+    if (job.type !== 'IMPORT_JIANYING_DRAFT') throw new Error('IMPORT_JIANYING_DRAFT_JOB_TYPE_INVALID');
+    if (signal.aborted) throw new Error('IMPORT_JIANYING_DRAFT_CANCELLED');
+    const payload = job.payload as { workspaceId?: string; draftPaths?: string[] };
+    if (!payload.workspaceId || !Array.isArray(payload.draftPaths) || !payload.draftPaths.length) throw new Error('IMPORT_JIANYING_DRAFT_PAYLOAD_INVALID');
+    await ensureStandaloneWorkspace(deps.db, payload.workspaceId);
+    const importer = new JianyingDraftImporter(deps.db);
+    const imports = [];
+    for (const draftPath of [...new Set(payload.draftPaths)]) {
+      if (signal.aborted) throw new Error('IMPORT_JIANYING_DRAFT_CANCELLED');
+      imports.push(await importer.importReadOnly(payload.workspaceId, draftPath));
+    }
+    return { imports, usageCount: imports.reduce((total, item) => total + item.usageCount, 0) };
+  };
+}
 
 async function chooseLocalMusic(category: string | undefined, seed: number): Promise<string | undefined> {
   const roots = (process.env.CONTENTOS_MUSIC_ROOTS || '').split(';').map((value) => value.trim()).filter(Boolean); const files: string[] = []; const wanted = category?.toLocaleLowerCase();
@@ -263,6 +402,8 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
         const outputAsset = await deps.assets.commitPrepared(outputInput, preparedOutput, scope);
         const completed = await deps.video.completeRender(planned.renderId, scope, outputAsset.id, { durationMs: rendered.durationMs, width: rendered.width, height: rendered.height, format: rendered.format, outputAssetId: outputAsset.id });
         if (!completed) throw Object.assign(new Error('Current Job attempt could not complete its Render'), { code: 'RENDER_FENCE_REJECTED', retryable: true });
+        const v3SessionId = planned.manifest.metadata?.v3SessionId;
+        if (v3SessionId) await scope.query("update script_editing_v3_sessions set status='RENDERED',updated_at=now() where id=$1 and current_manifest_id=$2", [v3SessionId, planned.manifestId]);
         const editorialPlanId = planned.manifest.metadata?.editorialPlanId;
         if (editorialPlanId) await scope.query("update edit_script_plans set status='RENDERED',settings=settings || $2::jsonb,updated_at=now() where id=$1", [editorialPlanId, JSON.stringify(copiedOutputPath ? { outputPath: copiedOutputPath } : {})]);
         const item = await scope.query<{ id: string; batch_id: string }>("update edit_batch_items set state='SUCCEEDED',output_asset_id=$2,error=null,updated_at=now() where job_id=$1 returning id,batch_id", [job.id, outputAsset.id]);
@@ -285,6 +426,13 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
             .map((clip) => clip.assetId);
           if (mediaIds.length > 0) await deps.localMedia.recordUsage({ projectId: job.projectId, manifestId: planned.manifestId, renderId: planned.renderId, mediaIds });
         }
+        const v3SessionId = planned.manifest.metadata?.v3SessionId;
+        if (v3SessionId && planned.manifest.workspaceId) {
+          for (const assetId of [...new Set(planned.manifest.timeline.map((clip) => clip.assetId))]) {
+            const event = await deps.db.query('insert into script_editing_v3_usage_events (id,workspace_id,session_id,manifest_id,render_id,asset_id) values ($1,$2,$3,$4,$5,$6) on conflict (render_id,asset_id) do nothing returning id', [`v3-usage-${randomUUID()}`, planned.manifest.workspaceId, v3SessionId, planned.manifestId, planned.renderId, assetId]);
+            if (event.rows[0]) await deps.db.query(`insert into script_editing_v3_asset_usage_stats (workspace_id,asset_id,final_use_count,content_os_final_use_count,recent_use_count,last_used_at) values ($1,$2,1,1,1,now()) on conflict (workspace_id,asset_id) do update set final_use_count=script_editing_v3_asset_usage_stats.final_use_count+1,content_os_final_use_count=script_editing_v3_asset_usage_stats.content_os_final_use_count+1,recent_use_count=script_editing_v3_asset_usage_stats.recent_use_count+1,last_used_at=now(),updated_at=now()`, [planned.manifest.workspaceId, assetId]);
+          }
+        }
         return finalized.value;
       }
       await deps.jobs.cancelAttempt(job.id, attemptId, async (scope) => { await deps.video.cancelRender(planned.renderId, scope, { code: 'RENDER_CANCELLED', message: 'Cancellation won before final commit' }); });
@@ -298,7 +446,9 @@ export function createVideoJobHandler(deps: VideoHandlerDeps): (job: JobRecord, 
       const failedJob = await deps.jobs.fail(job.id, attemptId, diagnostics, true, async (scope) => {
         await deps.video.failRender(planned.renderId, scope, diagnostics);
         const editorialPlanId = planned.manifest.metadata?.editorialPlanId;
+        const v3SessionId = planned.manifest.metadata?.v3SessionId;
         if (editorialPlanId && job.attemptCount >= job.maxAttempts) await scope.query("update edit_script_plans set status='FAILED',updated_at=now() where id=$1", [editorialPlanId]);
+        if (v3SessionId && job.attemptCount >= job.maxAttempts) await scope.query("update script_editing_v3_sessions set status='FAILED',updated_at=now() where id=$1 and current_manifest_id=$2", [v3SessionId, planned.manifestId]);
         if (job.attemptCount >= job.maxAttempts) {
           const item = await scope.query<{ id: string; batch_id: string }>("update edit_batch_items set state='FAILED',error=$2,updated_at=now() where job_id=$1 returning id,batch_id", [job.id, diagnostics]);
           if (item.rows[0]) {
@@ -331,6 +481,34 @@ export function createLocalMediaScanJobHandler(deps: VideoHandlerDeps): (job: Jo
     } catch (error) {
       const cancelled = signal.aborted || (error instanceof Error && error.message === 'LOCAL_MEDIA_SCAN_CANCELLED');
       await deps.localMedia.failScan(payload.scanId, { code: cancelled ? 'LOCAL_MEDIA_SCAN_CANCELLED' : 'LOCAL_MEDIA_SCAN_FAILED', message: error instanceof Error ? error.message : 'scan failed' }, cancelled ? 'CANCELLED' : 'FAILED');
+      throw error;
+    }
+  };
+}
+
+export function createShotDetectionJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
+  return async (job, _attemptId, signal) => {
+    if (job.type !== 'SHOT_DETECTION_V1') throw new Error('SHOT_DETECTION_JOB_TYPE_INVALID');
+    const payload = job.payload as { runId?: string; snapshotId?: string; assetId?: string; sourcePath?: string; durationMs?: number; sourceFingerprint?: string; threshold?: number };
+    if (!payload.runId || !payload.snapshotId || !payload.assetId || !payload.sourcePath || !payload.durationMs || !payload.sourceFingerprint) throw new Error('SHOT_DETECTION_PAYLOAD_INVALID');
+    await deps.db.query("update script_editing_v3_shot_detection_runs set status='RUNNING',updated_at=now() where id=$1", [payload.runId]);
+    try {
+      const shots = await detectShotsV1({ sourcePath: payload.sourcePath, durationMs: Number(payload.durationMs), ...(payload.threshold === undefined ? {} : { threshold: payload.threshold }), ffmpegPath: deps.ffmpegPath, signal });
+      const client = await deps.db.connect();
+      try {
+        await client.query('begin');
+        await client.query('delete from script_editing_v3_shots where run_id=$1', [payload.runId]);
+        for (const [index, shot] of shots.entries()) {
+          const shotId = `shot-${randomUUID()}`;
+          await client.query('insert into script_editing_v3_shots (id,run_id,shot_index,source_in_ms,source_out_ms,confidence,evidence) values ($1,$2,$3,$4,$5,$6,$7)', [shotId, payload.runId, index, shot.sourceInMs, shot.sourceOutMs, shot.confidence, shot.evidence]);
+          await client.query('insert into source_segments (id,snapshot_id,asset_id,source_in_ms,source_out_ms,duration_ms,origin,evidence,kind,detection_method,detection_threshold,detector_version) values ($1,$2,$3,$4,$5,$6,\'SHOT_DETECTION\',$7,\'SHOT\',\'FFMPEG_SCENE\',$8,$9) on conflict (snapshot_id,asset_id,source_in_ms,source_out_ms) do update set evidence=excluded.evidence,origin=excluded.origin,kind=excluded.kind,detection_method=excluded.detection_method,detection_threshold=excluded.detection_threshold,detector_version=excluded.detector_version', [shotId, payload.snapshotId, payload.assetId, shot.sourceInMs, shot.sourceOutMs, shot.sourceOutMs - shot.sourceInMs, { runId: payload.runId, confidence: shot.confidence, detectorVersion: 'shot-detection-v1' }, payload.threshold ?? 0.35, 'shot-detection-v1']);
+        }
+        await client.query("update script_editing_v3_shot_detection_runs set status='SUCCEEDED',error=null,updated_at=now() where id=$1", [payload.runId]);
+        await client.query('commit');
+      } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
+      return { runId: payload.runId, shotCount: shots.length, detectorVersion: 'shot-detection-v1' };
+    } catch (error) {
+      await deps.db.query("update script_editing_v3_shot_detection_runs set status='FAILED',error=$2,updated_at=now() where id=$1", [payload.runId, { code: error instanceof Error ? error.message : 'SHOT_DETECTION_FAILED' }]);
       throw error;
     }
   };

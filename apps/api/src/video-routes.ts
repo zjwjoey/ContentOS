@@ -15,6 +15,7 @@ import type { ProjectService } from '../../../packages/modules/project/src/index
 import type { AssetImportKind, AssetSummaryV0 } from '../../../packages/contracts/src/index.js';
 import type { AssetImportService } from '../../../packages/modules/asset/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
+import type { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
 
 const videoJobInput = z.object({
   targetDurationMs: z.number().int().positive().optional(),
@@ -32,9 +33,11 @@ const standaloneVoiceInput = z.object({ assetId: z.string().trim().min(1) });
 const standaloneSettingsInput = z.object({ seed: z.number().int().optional(), targetDurationMs: z.number().int().positive().nullable().optional(), minClipDurationMs: z.number().int().positive().optional(), maxClipDurationMs: z.number().int().positive().optional() });
 const sentencePreviewInput = z.object({ script: z.string().max(100_000), splitSemicolon: z.boolean().optional() });
 const localMediaScanInput = z.object({ projectId: z.string().trim().min(1).optional(), sourceRoot: z.string().trim().min(1), recursive: z.boolean().default(true), idempotencyKey: z.string().trim().min(1).max(200).optional() });
-const localMediaContentInput = z.object({ projectId: z.string().trim().min(1).optional(), sourceRootId: z.string().trim().min(1), fileId: z.string().trim().min(1) });
-const localMediaIndexQuery = z.object({ projectId: z.string().trim().min(1), query: z.string().max(200).optional(), orientation: z.enum(['ALL', 'VERTICAL', 'HORIZONTAL', 'SQUARE', 'UNKNOWN']).optional(), category: z.string().max(100).optional(), usage: z.enum(['ALL', 'UNUSED', 'RECENT', 'FREQUENT']).optional(), sort: z.enum(['NAME', 'UPDATED', 'DURATION', 'USAGE', 'RECENT', 'RECOMMENDED', 'NEWEST', 'LEAST_USED', 'MOST_RECENT']).optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) });
-const localMediaMetaInput = z.object({ category: z.string().max(100).nullable().optional(), tags: z.array(z.string().max(80)).max(64).optional() });
+const localMediaContentInput = z.object({ projectId: z.string().trim().min(1).optional(), workspaceId: z.string().trim().min(1).optional(), sourceRootId: z.string().trim().min(1), fileId: z.string().trim().min(1) }).refine((value) => Boolean(value.projectId || value.workspaceId));
+const localMediaIndexQuery = z.object({ projectId: z.string().trim().min(1).optional(), workspaceId: z.string().trim().min(1).optional(), query: z.string().max(200).optional(), orientation: z.enum(['ALL', 'VERTICAL', 'HORIZONTAL', 'SQUARE', 'UNKNOWN']).optional(), category: z.string().max(100).optional(), usage: z.enum(['ALL', 'UNUSED', 'RECENT', 'FREQUENT']).optional(), sort: z.enum(['NAME', 'UPDATED', 'DURATION', 'USAGE', 'RECENT', 'RECOMMENDED', 'NEWEST', 'LEAST_USED', 'MOST_RECENT']).optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }).refine((value) => Boolean(value.projectId || value.workspaceId));
+const localMediaMetaInput = z.object({ category: z.string().max(100).nullable().optional(), tags: z.array(z.string().max(80)).max(64).optional(), gold: z.boolean().optional(), disabled: z.boolean().optional() });
+const localMediaBatchTagsInput = z.object({ fileIds: z.array(z.string().trim().min(1)).min(1).max(100), tags: z.array(z.string().trim().max(80)).max(64) });
+const localMediaRelinkInput = z.object({ sourcePath: z.string().trim().min(1), actor: z.string().trim().min(1).max(100).optional(), force: z.boolean().default(false) });
 const presetFields = z.object({ name: z.string().trim().min(1).max(120), description: z.string().max(500).optional(), editModeDefault: z.enum(['SCRIPT', 'RANDOM']).optional(), minClipDurationMs: z.number().int().positive().optional(), maxClipDurationMs: z.number().int().positive().optional(), preferUnusedMedia: z.boolean().optional(), introAssetId: z.string().trim().nullable().optional(), outroAssetId: z.string().trim().nullable().optional(), canvas: z.object({ width: z.literal(1080), height: z.literal(1920), aspectRatio: z.literal('9:16') }).optional(), fps: z.number().int().positive().max(120).optional() });
 const presetDurationValidation = (value: { minClipDurationMs?: number | undefined; maxClipDurationMs?: number | undefined }, context: z.RefinementCtx) => { if (value.minClipDurationMs !== undefined && value.maxClipDurationMs !== undefined && value.maxClipDurationMs < value.minClipDurationMs) context.addIssue({ code: z.ZodIssueCode.custom, path: ['maxClipDurationMs'], message: '最长镜头不能短于最短镜头' }); };
 const presetInput = presetFields.superRefine(presetDurationValidation);
@@ -57,6 +60,7 @@ export interface VideoRouteDependencies {
   storage: LocalStorageProvider;
   maxUploadBytes: number;
   localMedia?: LocalMediaSourceService;
+  localPathAccess?: LocalPathAccessService;
   presets?: VideoEditPresetService;
 }
 
@@ -146,19 +150,38 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
     const parsed = localMediaIndexQuery.safeParse(request.query || {});
     if (!parsed.success || !dependencies.localMedia) return reply.code(422).send({ error: { code: 'LOCAL_MEDIA_INDEX_INVALID', message: '素材索引参数不完整。', details: parsed.success ? [] : parsed.error.issues } });
     const filters = { page: parsed.data.page, pageSize: parsed.data.pageSize, ...(parsed.data.query !== undefined ? { query: parsed.data.query } : {}), ...(parsed.data.orientation !== undefined ? { orientation: parsed.data.orientation } : {}), ...(parsed.data.category !== undefined ? { category: parsed.data.category } : {}), ...(parsed.data.usage !== undefined ? { usage: parsed.data.usage } : {}), ...(parsed.data.sort !== undefined ? { sort: parsed.data.sort } : {}) };
-    const result = await dependencies.localMedia.listIndexPage(parsed.data.projectId, filters);
-    return { items: result.items.map(LocalMediaSourceService.toPublicFile), total: result.total, page: result.page, pageSize: result.pageSize, hasNext: result.page * result.pageSize < result.total };
+    const result = parsed.data.workspaceId ? await dependencies.localMedia.listWorkspaceIndexPage(parsed.data.workspaceId, filters) : await dependencies.localMedia.listIndexPage(parsed.data.projectId!, filters);
+    const items = parsed.data.workspaceId ? result.items : result.items.map(LocalMediaSourceService.toPublicFile);
+    return { items, total: result.total, page: result.page, pageSize: result.pageSize, hasNext: result.page * result.pageSize < result.total };
+  });
+  app.post('/api/v1/video/local-media/index/batch/tags', async (request, reply) => {
+    const parsed = localMediaBatchTagsInput.safeParse(request.body || {}); const workspaceId = String((request.query as { workspaceId?: string } | undefined)?.workspaceId || '');
+    if (!parsed.success || !workspaceId || !dependencies.localMedia) return reply.code(422).send({ error: { code: 'LOCAL_MEDIA_BATCH_TAGS_INVALID', details: parsed.success ? [] : parsed.error.issues } });
+    const updated = await dependencies.localMedia.updateWorkspaceTags(parsed.data.fileIds, workspaceId, parsed.data.tags);
+    return { ok: true, updated };
   });
   app.patch('/api/v1/video/local-media/index/:fileId', async (request, reply) => {
     const parsed = localMediaMetaInput.safeParse(request.body || {});
     if (!parsed.success || !dependencies.localMedia) return reply.code(422).send({ error: { code: 'LOCAL_MEDIA_INDEX_INVALID', message: '素材标签参数不正确。', details: parsed.success ? [] : parsed.error.issues } });
     const fileId = (request.params as { fileId: string }).fileId;
-    const projectId = String((request.query as { projectId?: string } | undefined)?.projectId || '');
+    const owner = request.query as { projectId?: string; workspaceId?: string };
+    const projectId = String(owner?.projectId || ''); const workspaceId = String(owner?.workspaceId || '');
     const sourceRootId = fileId.split(':', 1)[0] || '';
-    if (!projectId || !sourceRootId || !(await dependencies.localMedia.getFile(sourceRootId, fileId, projectId))) return reply.code(404).send({ error: { code: 'LOCAL_MEDIA_FILE_NOT_FOUND', message: '当前素材不属于此项目。', details: [] } });
+    if ((!projectId && !workspaceId) || !sourceRootId || !(await dependencies.localMedia.getFile(sourceRootId, fileId, projectId || undefined, workspaceId || undefined))) return reply.code(404).send({ error: { code: 'LOCAL_MEDIA_FILE_NOT_FOUND', message: '当前素材不属于此工作区或项目。', details: [] } });
     if (parsed.data.category !== undefined) await dependencies.localMedia.updateCategory(fileId, parsed.data.category);
     if (parsed.data.tags !== undefined) await dependencies.localMedia.updateTags(fileId, parsed.data.tags);
+    if (parsed.data.gold !== undefined && workspaceId) await dependencies.localMedia.updateGold(fileId, workspaceId, parsed.data.gold);
+    if (parsed.data.disabled !== undefined) await dependencies.localMedia.updateDisabled(fileId, parsed.data.disabled);
     return { ok: true };
+  });
+  app.post('/api/v1/video/local-media/index/:fileId/relink', async (request, reply) => {
+    if (!dependencies.localMedia) return reply.code(403).send({ error: { code: 'LOCAL_MEDIA_ROOT_UNAUTHORIZED' } });
+    const parsed = localMediaRelinkInput.safeParse(request.body || {}); const workspaceId = String((request.query as { workspaceId?: string } | undefined)?.workspaceId || '');
+    if (!parsed.success || !workspaceId) return reply.code(422).send({ error: { code: 'LOCAL_MEDIA_RELINK_INVALID', details: parsed.success ? [] : parsed.error.issues } });
+    try {
+      const sourcePath = dependencies.localPathAccess ? await dependencies.localPathAccess.authorize(parsed.data.sourcePath, 'PRIORITY_ASSET') : parsed.data.sourcePath;
+      return await dependencies.localMedia.relinkWorkspaceFile({ workspaceId, fileId: String((request.params as { fileId: string }).fileId), newPath: sourcePath, ...(parsed.data.actor ? { actor: parsed.data.actor } : {}), force: parsed.data.force });
+    } catch (error) { return reply.code(422).send({ error: { code: error instanceof Error ? error.message : 'LOCAL_MEDIA_RELINK_FAILED' } }); }
   });
   app.get('/api/v1/video/presets', async (_request, reply) => {
     if (!dependencies.presets) return reply.code(503).send({ error: { code: 'PRESET_UNAVAILABLE', message: '模板服务暂不可用。', details: [] } });
@@ -232,7 +255,7 @@ export function registerVideoRoutes(app: FastifyInstance, dependencies: VideoRou
   app.get('/api/v1/video/local-media/content', async (request, reply) => {
     const parsed = localMediaContentInput.safeParse(request.query || {});
     if (!parsed.success || !dependencies.localMedia) return reply.code(404).send({ error: { code: 'LOCAL_MEDIA_FILE_NOT_FOUND', message: '本地视频不存在。', details: [] } });
-    const file = await dependencies.localMedia.getFile(parsed.data.sourceRootId, parsed.data.fileId, parsed.data.projectId);
+    const file = await dependencies.localMedia.getFile(parsed.data.sourceRootId, parsed.data.fileId, parsed.data.projectId, parsed.data.workspaceId);
     if (!file || !file.available) return reply.code(404).send({ error: { code: 'LOCAL_MEDIA_FILE_NOT_FOUND', message: '当前视频素材已不存在，请重新扫描素材文件夹。', details: [] } });
     const info = await stat(file.sourcePath).catch(() => null); if (!info?.isFile()) return reply.code(404).send({ error: { code: 'LOCAL_MEDIA_FILE_NOT_FOUND', message: '当前视频素材已不存在，请重新扫描素材文件夹。', details: [] } });
     const range = request.headers.range; const mime = ({ mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', avi: 'video/x-msvideo' } as Record<string, string>)[extname(file.fileName).slice(1).toLowerCase()] || 'video/mp4';

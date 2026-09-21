@@ -1,2 +1,2 @@
-export { blurBackgroundBranches, generateFixtureAudio, generateFixtureVideo, generateVideoThumbnail, probeMedia, renderEditManifest, subtitlePositionExpressions } from './renderer.js';
-export type { ProbeResult, RenderOptions, RenderResult } from './renderer.js';
+export { blurBackgroundBranches, concatDraftPreviewFragments, generateFixtureAudio, generateFixtureVideo, generateRepresentativeFrames, generateVideoThumbnail, muxDraftPreviewAudio, probeMedia, renderDraftPreviewFragment, representativeFrameTimestamps, renderEditManifest, subtitlePositionExpressions } from './renderer.js';
+export type { ProbeResult, RenderOptions, RenderResult, RepresentativeFrame } from './renderer.js';

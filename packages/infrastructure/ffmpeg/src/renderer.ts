@@ -7,6 +7,7 @@ import type { EditManifestV0 } from '../../../contracts/src/index.js';
 export interface RenderOptions { manifest: EditManifestV0; outputPath: string; ffmpegPath: string; ffprobePath: string; fontFile?: string; signal?: AbortSignal; }
 export interface RenderResult { outputPath: string; durationMs: number; width: number; height: number; format: string; audio: boolean; checksum?: string; }
 export interface ProbeResult { format: string; durationMs: number; width: number; height: number; audio: boolean; videoCodec?: string; audioCodec?: string; pixelFormat?: string; fps?: number; }
+export interface RepresentativeFrame { index: number; timestampMs: number; path: string; }
 export function subtitlePositionExpressions(positionX: number, positionY: number): { x: string; y: string } {
   const x = Math.min(1, Math.max(0, positionX));
   const y = Math.min(1, Math.max(0, positionY));
@@ -22,6 +23,34 @@ export async function generateVideoThumbnail(inputPath: string, outputPath: stri
   const seekMs = Math.min(1_000, Math.max(0, Math.round(durationMs * 0.25)));
   const tempOutput = `${outputPath}.${randomUUID()}.part.jpg`;
   try { await run(ffmpegPath, ['-y', '-ss', String(seekMs / 1000), '-i', inputPath, '-frames:v', '1', '-vf', 'scale=320:-2:force_original_aspect_ratio=decrease', '-q:v', '4', tempOutput], signal); await rename(tempOutput, outputPath); } catch (error) { await rm(tempOutput, { force: true }); throw error; }
+}
+
+export function representativeFrameTimestamps(durationMs: number): number[] {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return [];
+  const lastSafeMs = Math.max(0, Math.round(durationMs) - 1);
+  return [0.1, 0.3, 0.5, 0.7, 0.9].map((ratio) => Math.min(lastSafeMs, Math.max(0, Math.round(durationMs * ratio))));
+}
+
+export async function generateRepresentativeFrames(inputPath: string, outputDirectory: string, durationMs: number, ffmpegPath: string, signal?: AbortSignal): Promise<RepresentativeFrame[]> {
+  const timestamps = representativeFrameTimestamps(durationMs);
+  await mkdir(outputDirectory, { recursive: true });
+  const frames: RepresentativeFrame[] = [];
+  for (const [index, timestampMs] of timestamps.entries()) {
+    signal?.throwIfAborted();
+    const outputPath = join(outputDirectory, `${index}.jpg`);
+    if (!await access(outputPath, constants.F_OK).then(() => true).catch(() => false)) {
+      const tempOutput = `${outputPath}.${randomUUID()}.part.jpg`;
+      try {
+        await run(ffmpegPath, ['-y', '-ss', String(timestampMs / 1000), '-i', inputPath, '-frames:v', '1', '-vf', 'scale=640:-2:force_original_aspect_ratio=decrease', '-q:v', '4', tempOutput], signal);
+        await rename(tempOutput, outputPath);
+      } catch (error) {
+        await rm(tempOutput, { force: true });
+        throw error;
+      }
+    }
+    frames.push({ index, timestampMs, path: outputPath });
+  }
+  return frames;
 }
 
 function run(binary: string, args: string[], signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
@@ -82,7 +111,11 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
   const overlayDir = renderFontFile && (manifest.subtitles?.length || manifest.textOverlays?.length) ? join(dirname(outputPath), `.text-${randomUUID()}`) : undefined;
   if (overlayDir) { await mkdir(overlayDir, { recursive: true }); const textItems = [...(manifest.subtitles ?? []), ...(manifest.textOverlays ?? [])]; await Promise.all(textItems.map((item, index) => writeFile(join(overlayDir, `${index}.txt`), item.text.replaceAll('\r\n', '\n'), 'utf8'))); }
   const args: string[] = ['-y'];
-  for (const clip of manifest.timeline) args.push('-ss', String(clip.sourceInMs / 1000), '-t', String(clip.durationMs / 1000), '-i', clip.sourcePath);
+  for (const clip of manifest.timeline) {
+    const sourceDurationMs = clip.sourceOutMs === undefined ? clip.durationMs : clip.sourceOutMs - clip.sourceInMs;
+    if (sourceDurationMs <= 0 || sourceDurationMs !== clip.durationMs) throw new Error('RENDER_SOURCE_RANGE_DURATION_MISMATCH');
+    args.push('-ss', String(clip.sourceInMs / 1000), '-t', String(sourceDurationMs / 1000), '-i', clip.sourcePath);
+  }
   const voiceIndex = manifest.audio.voicePath ? manifest.timeline.length : -1;
   if (manifest.audio.voicePath) args.push('-i', manifest.audio.voicePath);
   const musicIndex = manifest.audio.backgroundMusic?.path ? manifest.timeline.length + (voiceIndex >= 0 ? 1 : 0) : -1;
@@ -187,4 +220,67 @@ export async function renderEditManifest(options: RenderOptions, fixture?: { gen
     if (overlayDir) await rm(overlayDir, { recursive: true, force: true });
     return { outputPath, ...probe };
   } catch (error) { await rm(tempOutput, { force: true }); if (overlayDir) await rm(overlayDir, { recursive: true, force: true }); throw error; }
+}
+
+export async function renderDraftPreviewFragment(input: {
+  inputPath: string;
+  outputPath: string;
+  sourceInMs: number;
+  sourceOutMs: number;
+  visualDurationMs?: number;
+  canvas: EditManifestV0['canvas'];
+  subtitles?: EditManifestV0['subtitles'];
+  subtitleStyle?: EditManifestV0['subtitleStyle'];
+  textOverlays?: EditManifestV0['textOverlays'];
+  ffmpegPath: string;
+  ffprobePath: string;
+  fontFile?: string;
+  signal?: AbortSignal;
+}): Promise<RenderResult> {
+  const durationMs = input.sourceOutMs - input.sourceInMs;
+  if (durationMs <= 0) throw new Error('DRAFT_PREVIEW_FRAGMENT_RANGE_INVALID');
+  const manifest: EditManifestV0 = {
+    schemaVersion: 'EDIT_MANIFEST_V0',
+    workspaceId: 'draft-preview',
+    seed: 1,
+    canvas: input.canvas,
+    timeline: [{ assetId: 'draft-preview-source', sourcePath: input.inputPath, sourceInMs: input.sourceInMs, sourceOutMs: input.sourceOutMs, durationMs, transition: 'cut', timelineStartMs: 0, timelineEndMs: Math.max(durationMs, input.visualDurationMs || durationMs), role: 'CONTENT' }],
+    audio: { volume: 1 },
+    ...(input.subtitles?.length ? { subtitles: input.subtitles } : {}),
+    ...(input.subtitleStyle ? { subtitleStyle: input.subtitleStyle } : {}),
+    ...(input.textOverlays?.length ? { textOverlays: input.textOverlays } : {}),
+    output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' },
+  };
+  return renderEditManifest({ manifest, outputPath: input.outputPath, ffmpegPath: input.ffmpegPath, ffprobePath: input.ffprobePath, ...(input.fontFile ? { fontFile: input.fontFile } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+}
+
+export async function concatDraftPreviewFragments(input: { fragmentPaths: string[]; outputPath: string; ffmpegPath: string; ffprobePath: string; signal?: AbortSignal }): Promise<RenderResult> {
+  if (!input.fragmentPaths.length) throw new Error('DRAFT_PREVIEW_NO_FRAGMENTS');
+  await mkdir(dirname(input.outputPath), { recursive: true });
+  const listPath = `${input.outputPath}.${randomUUID()}.txt`;
+  const tempOutput = `${input.outputPath}.${randomUUID()}.part.mp4`;
+  const list = input.fragmentPaths.map((path) => `file '${path.replaceAll('\\', '/').replaceAll("'", "'\\''")}'`).join('\n');
+  await writeFile(listPath, `${list}\n`, 'utf8');
+  try {
+    await run(input.ffmpegPath, ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', '-movflags', '+faststart', tempOutput], input.signal);
+    const probe = await probeMedia(tempOutput, input.ffprobePath, input.signal);
+    if (probe.format !== 'mp4' || probe.durationMs <= 0 || probe.videoCodec !== 'h264') throw new Error(`DRAFT_PREVIEW_CONCAT_INVALID:${JSON.stringify(probe)}`);
+    await rename(tempOutput, input.outputPath);
+    return { outputPath: input.outputPath, ...probe };
+  } finally {
+    await rm(listPath, { force: true });
+    await rm(tempOutput, { force: true });
+  }
+}
+
+export async function muxDraftPreviewAudio(input: { videoPath: string; audioPath: string; outputPath: string; durationMs: number; ffmpegPath: string; ffprobePath: string; signal?: AbortSignal }): Promise<RenderResult> {
+  await mkdir(dirname(input.outputPath), { recursive: true });
+  const tempOutput = `${input.outputPath}.${randomUUID()}.part.mp4`;
+  try {
+    await run(input.ffmpegPath, ['-y', '-i', input.videoPath, '-i', input.audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-t', String(input.durationMs / 1000), '-movflags', '+faststart', tempOutput], input.signal);
+    const probe = await probeMedia(tempOutput, input.ffprobePath, input.signal);
+    if (probe.format !== 'mp4' || probe.durationMs <= 0 || !probe.audio) throw new Error(`DRAFT_PREVIEW_AUDIO_INVALID:${JSON.stringify(probe)}`);
+    await rename(tempOutput, input.outputPath);
+    return { outputPath: input.outputPath, ...probe };
+  } finally { await rm(tempOutput, { force: true }); }
 }

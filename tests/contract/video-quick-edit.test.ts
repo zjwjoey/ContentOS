@@ -32,6 +32,28 @@ test('parses and applies trim, remove and reorder operations sequentially', () =
   assert.equal(next.timeline[1]?.durationMs, 500);
 });
 
+test('routes sentence-based V3 operations through the existing Quick Edit executor', () => {
+  const parent = fixture();
+  parent.timeline = parent.timeline.map((clip, index) => ({ ...clip, sentenceId: `sentence-${index}` }));
+  const operations = parseQuickEditOperations([
+    { type: 'REPLACE_CLIP', sentenceId: 'sentence-1', assetId: 'asset-d', sourceInMs: 100 },
+    { type: 'TRIM_SOURCE', sentenceId: 'sentence-1', sourceInMs: 200, sourceOutMs: 1_200 },
+    { type: 'LOCK_CLIP', sentenceId: 'sentence-1' },
+  ]);
+  const next = applyQuickEditOperations(parent, operations, [
+    { id: 'asset-a', durationMs: 1_000 },
+    { id: 'asset-b', durationMs: 1_000 },
+    { id: 'asset-c', durationMs: 1_000 },
+    { id: 'asset-d', durationMs: 2_000 },
+  ]);
+
+  assert.equal(next.timeline[0]?.assetId, 'asset-a');
+  assert.equal(next.timeline[1]?.assetId, 'asset-d');
+  assert.equal(next.timeline[1]?.sourceInMs, 200);
+  assert.equal(next.timeline[1]?.sourceOutMs, 1_200);
+  assert.equal(next.timeline[1]?.locked, true);
+});
+
 test('rejects unknown operation types and malformed operation fields', () => {
   assert.throws(() => parseQuickEditOperations([{ type: 'SPLIT', clipIndex: 0 }]), /Unknown Quick Edit operation/);
   assert.throws(() => parseQuickEditOperations([{ type: 'TRIM', clipIndex: -1, sourceInMs: 0, durationMs: 100 }]), /clipIndex/);

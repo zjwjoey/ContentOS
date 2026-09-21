@@ -13,6 +13,7 @@ import { generateFixtureAudio, generateFixtureVideo } from '../packages/infrastr
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const adminUrl = process.env.CONTENTOS_TEST_ADMIN_DATABASE_URL ?? process.env.DATABASE_URL ?? 'postgresql://contentos_dev:change-me@127.0.0.1:5432/contentos_test';
+const directOperator = process.env.CONTENTOS_OPERATOR_DIRECT !== '0';
 
 function pnpmInvocation(args: string[]): { command: string; args: string[] } {
   if (process.platform !== 'win32') return { command: 'pnpm', args };
@@ -163,18 +164,23 @@ async function main(): Promise<void> {
       CONTENTOS_FAKE_SPEECH_OUTPUT_PATH: fixtureAudio,
       CONTENTOS_FAKE_AVATAR_OUTPUT_URL: 'http://fake-avatar.test/avatar.mp4',
       CONTENTOS_FAKE_AVATAR_PROXY_URL: `http://127.0.0.1:${fakeAvatarPort}`,
+      CONTENTOS_OPERATOR_DIRECT: directOperator ? '1' : '0',
     };
     if (process.env.CONTENTOS_WEB_PRODUCTION === '1') {
       const buildInvocation = pnpmInvocation(['--filter', '@contentos/web', 'exec', 'next', 'build']);
       await run(buildInvocation.command, buildInvocation.args, { ...environment, NODE_ENV: 'production' });
     }
-    operator = spawnTsx(['scripts/dev-operator.ts'], environment);
+    operator = directOperator
+      ? spawn(process.execPath, [resolve(root, 'node_modules/tsx/dist/cli.mjs'), 'scripts/dev-operator.ts'], { cwd: root, env: environment, stdio: 'inherit', windowsHide: true })
+      : spawnPnpm(['dev:operator'], environment);
     await waitForHealth(apiUrl);
     const testArgs = ['--test', '--test-concurrency=1'];
     if (process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN) testArgs.push('--test-name-pattern', process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN);
-    const browserTests = (process.env.CONTENTOS_BROWSER_TEST_FILES || 'tests/e2e/auto-edit-v1-browser.test.ts;tests/e2e/editing-workbench-browser.test.ts;tests/e2e/hybrid-script-edit-browser.test.ts;tests/e2e/script-editing-v2-browser.test.ts;tests/e2e/digital-human-browser.test.ts').split(';').map((file) => file.trim()).filter(Boolean);
+    const browserTests = (process.env.CONTENTOS_BROWSER_TEST_FILES || 'tests/e2e/auto-edit-v1-browser.test.ts;tests/e2e/editing-workbench-browser.test.ts;tests/e2e/hybrid-script-edit-browser.test.ts;tests/e2e/script-editing-v2-browser.test.ts;tests/e2e/script-editing-v3-browser.test.ts;tests/e2e/digital-human-browser.test.ts').split(';').map((file) => file.trim()).filter(Boolean);
     testArgs.push(...browserTests);
-    const invocation = tsxInvocation(testArgs);
+    const invocation = directOperator
+      ? { command: process.execPath, args: [resolve(root, 'node_modules/tsx/dist/cli.mjs'), ...testArgs] }
+      : pnpmInvocation(testArgs);
     const browserExecutable = process.env.CONTENTOS_BROWSER_EXECUTABLE || (process.platform === 'win32' ? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' : undefined);
     await run(invocation.command, invocation.args, {
       ...environment,
@@ -185,6 +191,7 @@ async function main(): Promise<void> {
       CONTENTOS_LOCAL_MEDIA_ROOTS: temporaryRoot,
       CONTENTOS_BROWSER_FIXTURE_DIR: temporaryRoot,
       CONTENTOS_BROWSER_DATABASE_URL: databaseUrl,
+      CONTENTOS_OPERATOR_DIRECT: directOperator ? '1' : '0',
       ...(browserExecutable ? { CONTENTOS_BROWSER_EXECUTABLE: browserExecutable } : {}),
     });
   } finally {

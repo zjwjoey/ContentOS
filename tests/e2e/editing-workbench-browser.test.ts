@@ -69,7 +69,7 @@ test('独立剪辑工作台完成脚本、测试混剪与批量失败重试流�
     const pairingResponse = await page.request.post(`${apiUrl}/api/v1/edit/pair`, { data: { textFiles: [join(pairTextRoot, '001.txt'), join(pairTextRoot, '003.txt')], audioFiles: [join(pairAudioRoot, '001.wav'), join(pairAudioRoot, '004.wav')] } });
     assert.equal(pairingResponse.status(), 200); const pairing = await pairingResponse.json() as { items: Array<{ basename: string; status: string }> };
     assert.deepEqual(pairing.items.map((item) => [item.basename, item.status]), [['001', 'READY'], ['003', 'MISSING_AUDIO'], ['004', 'MISSING_TEXT']]);
-    await page.goto(`${baseUrl}/edit/script`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${baseUrl}/edit/script/legacy`, { waitUntil: 'domcontentloaded' });
     const scriptArea = page.locator('.edit-form textarea').first(); await scriptArea.click(); await scriptArea.pressSequentially('第一段脚本。第二段脚本。第三段脚本。');
     await page.getByLabel('脚本配音文件').setInputFiles(fixtureAudio!);
     const sourceLabels = page.locator('.folder-row input');

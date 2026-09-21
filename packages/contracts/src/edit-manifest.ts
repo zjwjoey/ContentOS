@@ -31,10 +31,13 @@ export interface ManifestClip {
   assetId: string;
   sourcePath: string;
   sourceInMs: number;
+  /** Optional exclusive source end; legacy manifests derive it from durationMs. */
+  sourceOutMs?: number;
   durationMs: number;
   transition: 'cut' | 'fade';
   /** Optional V1 provenance; absent on legacy manifests. */
   sentenceIndex?: number;
+  sentenceId?: string;
   sentenceText?: string;
   sceneId?: string;
   matching?: ClipMatchingV1;
@@ -44,6 +47,10 @@ export interface ManifestClip {
   voiceEndMs?: number;
   timelineStartMs?: number;
   timelineEndMs?: number;
+  locked?: boolean;
+  selectionSource?: 'AUTO' | 'HISTORY' | 'MANUAL';
+  revision?: number;
+  sourceSegmentId?: string;
 }
 
 export interface EditManifestV0 {
@@ -75,6 +82,9 @@ export interface EditManifestV0 {
     editorialRevision?: number;
     templateId?: string;
     plannerVersion?: string;
+    materialPoolSnapshotId?: string;
+    v3SessionId?: string;
+    v3Revision?: number;
     warnings?: string[];
     presentationSettings?: PresentationSettingsV1;
     rawScript?: string;
@@ -94,7 +104,7 @@ export function validateEditManifest(manifest: EditManifestV0): void {
   const actualAspect = manifest.canvas.height > 0 ? manifest.canvas.width / manifest.canvas.height : 0;
   if (!Number.isInteger(manifest.canvas.width) || !Number.isInteger(manifest.canvas.height) || manifest.canvas.width <= 0 || manifest.canvas.height <= 0 || manifest.canvas.width % 2 || manifest.canvas.height % 2 || !['9:16', '16:9', '1:1'].includes(manifest.canvas.aspectRatio) || Math.abs(actualAspect - expectedAspect) > 0.01) throw new Error('Edit manifest canvas dimensions are invalid');
   if (!Number.isInteger(manifest.canvas.fps) || manifest.canvas.fps < 1 || manifest.canvas.fps > 120) throw new Error('Edit manifest canvas fps is invalid');
-  if (manifest.timeline.some((clip) => clip.durationMs <= 0 || clip.sourceInMs < 0)) throw new Error('Edit manifest contains invalid clip timing');
+  if (manifest.timeline.some((clip) => clip.durationMs <= 0 || clip.sourceInMs < 0 || (clip.sourceOutMs !== undefined && (clip.sourceOutMs <= clip.sourceInMs || clip.sourceOutMs - clip.sourceInMs !== clip.durationMs)))) throw new Error('Edit manifest contains invalid clip timing');
   if (manifest.metadata?.editMode !== 'RANDOM' && manifest.timeline.some((clip, index) => index > 0 && clip.assetId === manifest.timeline[index - 1]?.assetId && !clip.matching?.allowAssetReuse && !manifest.timeline[index - 1]?.matching?.allowAssetReuse && manifest.timeline.length > 1)) throw new Error('Adjacent duplicate clips are not allowed');
   if (manifest.output.format !== 'mp4') throw new Error('Only MP4 output is supported in V0');
   if (manifest.timeline.some((clip) => clip.sentenceIndex !== undefined && (!Number.isInteger(clip.sentenceIndex) || clip.sentenceIndex < 0))) throw new Error('Edit manifest sentenceIndex must be a non-negative integer');

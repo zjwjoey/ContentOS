@@ -10,7 +10,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - IndexTTS 2.5 HTTP adapter and fake speech provider.
 - AvatarProvider contract boundary and fake avatar provider; the unverified cloud API remains intentionally unwired.
 - Synthetic sentence timing provider.
-- PostgreSQL migrations `0031`–`0037` are present from the current `origin/main` sequence, followed by Digital Human migrations `0038_digital_human.sql` and `0039_digital_human_billing.sql` with Voice Profile, Avatar Profile/Clip, Speech Generation, Avatar Generation, and nullable remote billing quantity/unit fields.
+- PostgreSQL migrations `0031`–`0040` are present from the current `origin/main` sequence, followed by Digital Human migrations `0041_digital_human.sql` and `0042_digital_human_billing.sql` with Voice Profile, Avatar Profile/Clip, Speech Generation, Avatar Generation, and nullable remote billing quantity/unit fields.
 - Digital Human service with project ownership checks, Asset readiness checks, provenance fields, output Asset references, and request-hash idempotency.
 - API routes under `/api/v1/projects/:projectId/digital-human/*`.
 - Durable speech/avatar worker handlers with retry behavior and external-task recovery.
@@ -81,7 +81,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Format check: passed (351 files).
 - Lint check: passed (158 TypeScript files).
 - `git diff --check`: passed.
-- Root TypeScript typecheck and build pass, and the clean temporary-schema migration matrix passes 9/9. The shared `contentos_test` public database is not clean: its `schema_migrations` history still contains the old pre-renumbering `0031_digital_human.sql`/`0032_digital_human_billing.sql` entries, so the legacy database integration tests fail when the new `0038`/`0039` files attempt to create already-existing Digital Human tables. The database was not reset or its history rewritten.
+- Root TypeScript typecheck and build pass, and the clean temporary-schema migration matrix passes 9/9. The shared `contentos_test` public database is not clean and retains legacy Digital Human migration history, so the database was not reset or its history rewritten; validation must use isolated schemas.
 - Web production build passed with Next.js 14.2.21, and `python -m py_compile tools/indextts-gateway/gateway.py` passed.
 - Remote Avatar result validation unit tests: 17/17 passed.
 - AvatarProvider contract tests: 3/3 passed, including REAL-mode normalized-error completeness.
