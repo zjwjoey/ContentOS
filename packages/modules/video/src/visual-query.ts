@@ -3,6 +3,7 @@ import { qwenEndpoint } from './qwen-endpoint.js';
 
 export interface VisualQueryProvider {
   generateQueries(input: { sentenceId: string; text: string; model?: string; signal?: AbortSignal }): Promise<{ queries: string[]; provider: string; model: string; promptVersion: string }>;
+  generateQueriesBatch?(input: { sentences: Array<{ sentenceId: string; text: string }>; model?: string; signal?: AbortSignal }): Promise<Array<{ sentenceId: string; queries: string[]; provider: string; model: string; promptVersion: string }>>;
 }
 
 const responseSchema = z.object({ queries: z.array(z.string().trim().min(1)).min(3).max(6) });
@@ -15,7 +16,10 @@ function ruleQueries(text: string): string[] {
 
 export class RuleVisualQueryProvider implements VisualQueryProvider {
   async generateQueries(input: { sentenceId: string; text: string }): Promise<{ queries: string[]; provider: string; model: string; promptVersion: string }> {
-    return { queries: ruleQueries(input.text), provider: 'RULES', model: 'rules-v3', promptVersion: 'visual-query-v1' };
+    return { queries: ruleQueries(input.text), provider: 'RULES', model: 'rules-v3', promptVersion: 'visual-query-v2' };
+  }
+  async generateQueriesBatch(input: { sentences: Array<{ sentenceId: string; text: string }> }): Promise<Array<{ sentenceId: string; queries: string[]; provider: string; model: string; promptVersion: string }>> {
+    return input.sentences.map((sentence) => ({ sentenceId: sentence.sentenceId, queries: ruleQueries(sentence.text), provider: 'RULES', model: 'rules-v3', promptVersion: 'visual-query-v1' }));
   }
 }
 
@@ -42,11 +46,33 @@ export class QwenVisualQueryProvider implements VisualQueryProvider {
       const value = responseSchema.parse(parsed);
       const queries = [...new Set(value.queries)].slice(0, 6);
       if (queries.length < 3) throw new Error('QWEN_INVALID_QUERY_COUNT');
-      return { queries, provider: 'QWEN_TEXT', model, promptVersion: this.options.promptVersion || 'qwen-visual-query-v1' };
+      return { queries, provider: 'QWEN_TEXT', model, promptVersion: this.options.promptVersion || 'qwen-visual-query-v2' };
     } catch (error) {
       if (signal.aborted) throw new Error(input.signal?.aborted ? 'QWEN_CANCELLED' : 'QWEN_TIMEOUT');
       throw error;
     } finally { clearTimeout(timeout); }
+  }
+
+  async generateQueriesBatch(input: { sentences: Array<{ sentenceId: string; text: string }>; model?: string; signal?: AbortSignal }): Promise<Array<{ sentenceId: string; queries: string[]; provider: string; model: string; promptVersion: string }>> {
+    const configuredEndpoint = this.options.endpoint || process.env.QWEN_BASE_URL || process.env.QWEN_API_URL;
+    const apiKey = this.options.apiKey || process.env.QWEN_API_KEY;
+    const model = input.model || this.options.model || process.env.QWEN_TEXT_MODEL || process.env.QWEN_MODEL || 'qwen-plus';
+    if (!configuredEndpoint || !apiKey) throw new Error('QWEN_PROVIDER_NOT_CONFIGURED');
+    const endpoint = qwenEndpoint(configuredEndpoint, '/chat/completions');
+    const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 20_000);
+    const signal = input.signal ? AbortSignal.any([input.signal, controller.signal]) : controller.signal;
+    try {
+      const response = await (this.options.fetch || fetch)(endpoint, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, temperature: 0, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: `请只返回 JSON，格式为 {"items":[{"sentenceId":"原句ID","queries":["3到6个中文视觉检索短语"]}]}。每个输入句子必须返回一项；不要猜测真实品牌、人物、客户或门店实体。输入：${JSON.stringify(input.sentences)}` }] }), signal });
+      if (!response.ok) throw new Error(`QWEN_HTTP_${response.status}`);
+      const body = await response.json() as { choices?: Array<{ message?: { content?: string } }> }; const content = body.choices?.[0]?.message?.content; if (!content) throw new Error('QWEN_EMPTY_RESPONSE');
+      let parsed: unknown; try { parsed = JSON.parse(content.replace(/^```json\s*/u, '').replace(/\s*```$/u, '')); } catch { throw new Error('QWEN_INVALID_JSON'); }
+      const itemSchema = z.object({ sentenceId: z.string().trim().min(1), queries: z.array(z.string().trim().min(1)).min(3).max(6) });
+      const value = z.object({ items: z.array(itemSchema) }).parse(parsed);
+      const expected = new Map(input.sentences.map((sentence) => [sentence.sentenceId, sentence.text]));
+      const results = value.items.filter((item) => expected.has(item.sentenceId)).map((item) => ({ sentenceId: item.sentenceId, queries: [...new Set(item.queries)].slice(0, 6), provider: 'QWEN_TEXT', model, promptVersion: this.options.promptVersion || 'qwen-visual-query-v2' }));
+      if (results.some((item) => item.queries.length < 3)) throw new Error('QWEN_INVALID_QUERY_COUNT');
+      return results;
+    } catch (error) { if (signal.aborted) throw new Error(input.signal?.aborted ? 'QWEN_CANCELLED' : 'QWEN_TIMEOUT'); throw error; } finally { clearTimeout(timeout); }
   }
 }
 

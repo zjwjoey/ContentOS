@@ -106,7 +106,7 @@ async function main(): Promise<void> {
         uiCandidateLoading: null,
       },
       qwen: { status: qwenStatus, note: '需在真实 Qwen 配置和 Gold Set 下单独记录 AI 延迟与效果；此脚本不在无授权时调用远端模型。' },
-      aiRetrievalGoldSet: { status: 'NOT_RUN', reason: '仓库未提供人工标注 Gold Set，避免用合成标签冒充真实效果。' },
+      aiRetrievalGoldSet: { status: 'BLOCKED_BY_DATA', reason: '仓库未提供人工标注 Gold Set 或真实 Qwen Profile，避免用合成标签冒充真实效果。' },
     };
     console.log(JSON.stringify(result, null, 2));
   } finally {

@@ -109,6 +109,8 @@ jobs:
         run: pnpm test:auto-edit-v15 2>&1 | tee auto-edit-v15-output.log
       - name: Script Editing V2 and FFmpeg
         run: pnpm test:script-edit-v2 2>&1 | tee script-edit-v2-output.log
+      - name: Script Editing V3 Unified
+        run: pnpm test:script-edit-v3 2>&1 | tee script-edit-v3-output.log
       - name: Upload test diagnostics
         if: failure()
         uses: actions/upload-artifact@v4

@@ -2,9 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { LocalPathAccessService, type LocalPathPurpose, type NativePathPicker } from '../../../packages/modules/local-path/src/index.js';
 
-const purposeSchema = z.enum(['MEDIA_ROOT', 'OUTPUT_ROOT', 'MUSIC_ROOT', 'VOICE_FILE', 'MUSIC_FILE', 'PRIORITY_ASSET']);
-const folderPurpose = z.enum(['MEDIA_ROOT', 'OUTPUT_ROOT', 'MUSIC_ROOT']);
-const filePurpose = z.enum(['VOICE_FILE', 'MUSIC_FILE', 'PRIORITY_ASSET']);
+const purposeSchema = z.enum(['MEDIA_ROOT', 'OUTPUT_ROOT', 'MUSIC_ROOT', 'VOICE_FILE', 'MUSIC_FILE', 'PRIORITY_ASSET', 'JIANYING_DRAFT']);
+const folderPurpose = z.enum(['MEDIA_ROOT', 'OUTPUT_ROOT', 'MUSIC_ROOT', 'JIANYING_DRAFT']);
+const filePurpose = z.enum(['VOICE_FILE', 'MUSIC_FILE', 'PRIORITY_ASSET', 'JIANYING_DRAFT']);
 
 function desktopOnly(service: LocalPathAccessService): boolean { return service.desktopMode && (process.env.CONTENTOS_LOCAL_DESKTOP_MODE !== '0'); }
 function pickerError(error: unknown): { code: string; message: string } {
@@ -38,7 +38,7 @@ export function registerLocalPathRoutes(app: FastifyInstance, dependencies: Loca
     const parsed = z.object({ purpose: filePurpose }).safeParse(request.body || {});
     if (!parsed.success) return reply.code(422).send({ error: { code: 'LOCAL_PATH_PURPOSE_INVALID', message: '文件用途不正确。', details: parsed.error.issues } });
     if (!desktopOnly(dependencies.access)) return reply.code(403).send({ error: { code: 'LOCAL_DESKTOP_MODE_REQUIRED', message: '本地路径选择仅在桌面模式可用。' } });
-    const filters = parsed.data.purpose === 'VOICE_FILE' ? [{ name: '配音文件', extensions: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg'] }] : parsed.data.purpose === 'MUSIC_FILE' ? [{ name: '音乐文件', extensions: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg'] }] : [{ name: '视频文件', extensions: ['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi'] }];
+    const filters = parsed.data.purpose === 'VOICE_FILE' ? [{ name: '配音文件', extensions: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg'] }] : parsed.data.purpose === 'MUSIC_FILE' ? [{ name: '音乐文件', extensions: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg'] }] : parsed.data.purpose === 'JIANYING_DRAFT' ? [{ name: '剪映草稿或配置', extensions: ['json', 'draft', 'mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi'] }] : [{ name: '视频文件', extensions: ['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi'] }];
     const selected = await dependencies.picker.pickFile({ purpose: parsed.data.purpose, filters });
     if (selected.cancelled) return { cancelled: true };
     try {
@@ -50,4 +50,3 @@ export function registerLocalPathRoutes(app: FastifyInstance, dependencies: Loca
     }
   });
 }
-

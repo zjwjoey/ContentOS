@@ -2,8 +2,8 @@ import { access, constants, realpath, stat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import type { Pool } from 'pg';
 
-export type LocalPathPurpose = 'MEDIA_ROOT' | 'OUTPUT_ROOT' | 'MUSIC_ROOT' | 'VOICE_FILE' | 'MUSIC_FILE' | 'PRIORITY_ASSET';
-export type LocalPathGrantKind = 'MEDIA_ROOT' | 'OUTPUT_ROOT' | 'VOICE_FILE' | 'MUSIC_ROOT' | 'PRIORITY_ASSET';
+export type LocalPathPurpose = 'MEDIA_ROOT' | 'OUTPUT_ROOT' | 'MUSIC_ROOT' | 'VOICE_FILE' | 'MUSIC_FILE' | 'PRIORITY_ASSET' | 'JIANYING_DRAFT';
+export type LocalPathGrantKind = 'MEDIA_ROOT' | 'OUTPUT_ROOT' | 'VOICE_FILE' | 'MUSIC_ROOT' | 'PRIORITY_ASSET' | 'JIANYING_DRAFT';
 export type LocalPathGrantMode = 'READ' | 'WRITE' | 'READ_WRITE';
 
 export interface LocalPathGrant {
@@ -42,12 +42,13 @@ function envKey(kind: LocalPathGrantKind): string {
   return 'CONTENTOS_LOCAL_MEDIA_ROOTS';
 }
 
-function purposeKind(purpose: LocalPathPurpose): { kind: LocalPathGrantKind; mode: LocalPathGrantMode; file: boolean } {
+function purposeKind(purpose: LocalPathPurpose): { kind: LocalPathGrantKind; mode: LocalPathGrantMode; file: boolean; either?: boolean } {
   if (purpose === 'OUTPUT_ROOT') return { kind: 'OUTPUT_ROOT', mode: 'WRITE', file: false };
   if (purpose === 'MUSIC_ROOT') return { kind: 'MUSIC_ROOT', mode: 'READ', file: false };
   if (purpose === 'VOICE_FILE') return { kind: 'VOICE_FILE', mode: 'READ', file: true };
   if (purpose === 'MUSIC_FILE') return { kind: 'VOICE_FILE', mode: 'READ', file: true };
   if (purpose === 'PRIORITY_ASSET') return { kind: 'PRIORITY_ASSET', mode: 'READ', file: true };
+  if (purpose === 'JIANYING_DRAFT') return { kind: 'JIANYING_DRAFT', mode: 'READ', file: false, either: true };
   return { kind: 'MEDIA_ROOT', mode: 'READ', file: false };
 }
 
@@ -85,7 +86,7 @@ export class LocalPathAccessService {
   async grantPath(input: { path: string; purpose: LocalPathPurpose; source?: 'NATIVE_PICKER' | 'ENV' }): Promise<LocalPathGrant> {
     const policy = purposeKind(input.purpose);
     const inspected = await this.inspect(input.path);
-    if (policy.file ? !inspected.isFile : !inspected.isDirectory) throw new Error(policy.file ? 'LOCAL_PATH_FILE_REQUIRED' : 'LOCAL_PATH_DIRECTORY_REQUIRED');
+    if (!policy.either && (policy.file ? !inspected.isFile : !inspected.isDirectory)) throw new Error(policy.file ? 'LOCAL_PATH_FILE_REQUIRED' : 'LOCAL_PATH_DIRECTORY_REQUIRED');
     if (policy.mode !== 'WRITE' && !inspected.readable) throw new Error('LOCAL_PATH_NOT_READABLE');
     if (policy.mode === 'WRITE' && !inspected.writable) throw new Error('LOCAL_PATH_NOT_WRITABLE');
     const source = input.source || 'NATIVE_PICKER';
@@ -105,14 +106,15 @@ export class LocalPathAccessService {
     if (policy.file ? !inspected.isFile : !inspected.isDirectory) throw new Error(policy.file ? 'LOCAL_PATH_FILE_REQUIRED' : 'LOCAL_PATH_DIRECTORY_REQUIRED');
     const grants = await this.options.db.query<{ id: string; canonical_path: string; kind: LocalPathGrantKind; mode: LocalPathGrantMode }>(
       'select id::text, canonical_path, kind, mode from local_path_grants where kind=$1 or ($2=true and kind in (\'MEDIA_ROOT\',\'MUSIC_ROOT\',\'OUTPUT_ROOT\'))',
-      [policy.kind, policy.kind === 'VOICE_FILE' || policy.kind === 'PRIORITY_ASSET'],
+      [policy.kind, policy.kind === 'VOICE_FILE' || policy.kind === 'PRIORITY_ASSET' || policy.kind === 'JIANYING_DRAFT'],
     );
-    const granted = grants.rows.some((grant) => {
-      const exactFile = policy.file && grant.kind === policy.kind && grant.canonical_path.toLocaleLowerCase() === inspected.canonicalPath.toLocaleLowerCase();
-      const folderKind = grant.kind === policy.kind || (policy.file && (grant.kind === 'MEDIA_ROOT' || (purpose === 'MUSIC_FILE' && grant.kind === 'MUSIC_ROOT'))) || (!policy.file && grant.kind === 'MEDIA_ROOT' && policy.kind === 'MEDIA_ROOT');
+    const granted = (await Promise.all(grants.rows.map(async (grant) => {
+      const exactFile = (policy.file || policy.either) && grant.kind === policy.kind && grant.canonical_path.toLocaleLowerCase() === inspected.canonicalPath.toLocaleLowerCase();
+      const grantStat = await stat(grant.canonical_path).catch(() => null);
+      const folderKind = grantStat?.isDirectory() && (grant.kind === policy.kind || (policy.file && (grant.kind === 'MEDIA_ROOT' || (purpose === 'MUSIC_FILE' && grant.kind === 'MUSIC_ROOT'))) || (!policy.file && grant.kind === 'MEDIA_ROOT' && (policy.kind === 'MEDIA_ROOT' || policy.kind === 'JIANYING_DRAFT')));
       const modeAllowed = policy.mode === 'WRITE' ? (grant.mode === 'WRITE' || grant.mode === 'READ_WRITE') : grant.mode === 'READ' || grant.mode === 'READ_WRITE';
       return modeAllowed && (exactFile || (folderKind && contains(grant.canonical_path, inspected.canonicalPath)));
-    });
+    }))).some(Boolean);
     const envAllowed = await this.authorizedByEnvironment(inspected.canonicalPath, policy, purpose);
     if (!granted && !envAllowed) {
       if (!inspected.readable) throw new Error('LOCAL_PATH_NOT_READABLE');
@@ -128,9 +130,9 @@ export class LocalPathAccessService {
     return result.rows.map((row) => this.toGrant(row));
   }
 
-  private async authorizedByEnvironment(candidate: string, policy: { kind: LocalPathGrantKind; mode: LocalPathGrantMode; file: boolean }, purpose: LocalPathPurpose): Promise<boolean> {
+  private async authorizedByEnvironment(candidate: string, policy: { kind: LocalPathGrantKind; mode: LocalPathGrantMode; file: boolean; either?: boolean }, purpose: LocalPathPurpose): Promise<boolean> {
     const roots = await Promise.all(envRoots(purpose === 'MUSIC_FILE' ? 'CONTENTOS_MUSIC_ROOTS' : envKey(policy.kind)).map((root) => realpath(root).catch(() => null)));
-    if (!roots.some((root) => root && (policy.file ? root.toLocaleLowerCase() === candidate.toLocaleLowerCase() || contains(root, candidate) : contains(root, candidate)))) return false;
+    if (!roots.some((root) => root && (policy.either || policy.file ? root.toLocaleLowerCase() === candidate.toLocaleLowerCase() || contains(root, candidate) : contains(root, candidate)))) return false;
     if (policy.mode === 'WRITE') return (await access(candidate, constants.W_OK).then(() => true).catch(() => false));
     return (await access(candidate, constants.R_OK).then(() => true).catch(() => false));
   }

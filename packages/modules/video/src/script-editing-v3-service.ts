@@ -18,6 +18,11 @@ type SentenceV3 = { id: string; index: number; text: string; startMs: number; en
 type PoolRow = Record<string, unknown>;
 type SessionSettingsV3 = Record<string, unknown>;
 
+export async function ensureStandaloneWorkspace(db: Pool, workspaceId: string): Promise<void> {
+  if (!workspaceId.trim()) throw new Error('WORKSPACE_REQUIRED');
+  await db.query("insert into video_workspaces (id,type,project_id) values ($1,'STANDALONE',null) on conflict (id) do nothing", [workspaceId]);
+}
+
 export function materialSourceFingerprint(input: { fileSize?: number | null | undefined; modifiedAt?: string | null | undefined; durationMs: number }): string {
   const modifiedAt = input.modifiedAt ? new Date(String(input.modifiedAt)).toISOString() : '';
   return `${Number(input.fileSize || 0)}:${modifiedAt}:${Math.max(0, Math.round(input.durationMs))}`;
@@ -88,8 +93,46 @@ function scoreCandidate(sentence: SentenceV3, item: MaterialPoolItemV3, profile?
 
 export function rankMaterialCandidateV3(input: { text: string; durationMs: number }, item: MaterialPoolItemV3): CandidateV3 { return scoreCandidate({ id: 'sentence', index: 0, text: input.text, startMs: 0, endMs: input.durationMs, durationMs: input.durationMs }, item); }
 
+export interface ReadableDraftAdapter {
+  readonly id: string;
+  read(path: string): Promise<{ rootPath: string; payloads: Record<string, unknown>[] }>;
+}
+
+export class PlainJsonDraftAdapter implements ReadableDraftAdapter {
+  readonly id = 'PLAIN_JSON';
+  async read(path: string): Promise<{ rootPath: string; payloads: Record<string, unknown>[] }> {
+    const absolutePath = resolve(path);
+    const pathStat = await stat(absolutePath).catch(() => null);
+    if (!pathStat) throw new Error('JIANYING_DRAFT_NOT_FOUND');
+    const rootPath = pathStat.isDirectory() ? absolutePath : dirname(absolutePath);
+    const payloads: Record<string, unknown>[] = [];
+    if (pathStat.isDirectory()) {
+      for (const fileName of ['draft_content.json', 'draft_info.json']) {
+        const content = await readFile(join(absolutePath, fileName), 'utf8').catch(() => null);
+        if (content) {
+          try { payloads.push(JSON.parse(content) as Record<string, unknown>); } catch { throw new Error('JIANYING_DRAFT_INVALID_JSON'); }
+        }
+      }
+      if (!payloads.length) throw new Error('JIANYING_DRAFT_CONTENT_NOT_FOUND');
+    } else {
+      try { payloads.push(JSON.parse(await readFile(absolutePath, 'utf8')) as Record<string, unknown>); } catch { throw new Error('JIANYING_DRAFT_INVALID_JSON'); }
+    }
+    return { rootPath, payloads };
+  }
+}
+
+export class JianyingVideoEditorDllAdapter implements ReadableDraftAdapter {
+  readonly id = 'JIANYING_VIDEOEDITOR_DLL';
+  readonly status: 'AVAILABLE' | 'UNAVAILABLE';
+  constructor(private readonly dllPath = process.env.JIANYING_VIDEOEDITOR_DLL) { this.status = dllPath ? 'AVAILABLE' : 'UNAVAILABLE'; }
+  async read(_path: string): Promise<{ rootPath: string; payloads: Record<string, unknown>[] }> {
+    if (this.status !== 'AVAILABLE') throw new Error('JIANYING_VIDEOEDITOR_DLL_UNAVAILABLE');
+    throw new Error('JIANYING_VIDEOEDITOR_DLL_ADAPTER_NOT_IMPLEMENTED');
+  }
+}
+
 export class JianyingDraftImporter {
-  constructor(private readonly db: Pool) {}
+  constructor(private readonly db: Pool, private readonly adapter: ReadableDraftAdapter = new PlainJsonDraftAdapter()) {}
 
   private async ensureLocalAsset(workspaceId: string, sourcePath: string): Promise<string> {
     const canonicalPath = resolve(sourcePath);
@@ -119,21 +162,7 @@ export class JianyingDraftImporter {
 
   async importReadOnly(workspaceId: string, draftPath: string): Promise<{ id: string; draftId: string; draftName: string; usageCount: number }> {
     const absolutePath = resolve(draftPath);
-    const pathStat = await stat(absolutePath).catch(() => null);
-    if (!pathStat) throw new Error('JIANYING_DRAFT_NOT_FOUND');
-    const rootPath = pathStat.isDirectory() ? absolutePath : dirname(absolutePath);
-    const payloads: Record<string, unknown>[] = [];
-    if (pathStat.isDirectory()) {
-      for (const fileName of ['draft_content.json', 'draft_info.json']) {
-        const content = await readFile(join(absolutePath, fileName), 'utf8').catch(() => null);
-        if (content) {
-          try { payloads.push(JSON.parse(content) as Record<string, unknown>); } catch { throw new Error('JIANYING_DRAFT_INVALID_JSON'); }
-        }
-      }
-      if (!payloads.length) throw new Error('JIANYING_DRAFT_CONTENT_NOT_FOUND');
-    } else {
-      try { payloads.push(JSON.parse(await readFile(absolutePath, 'utf8')) as Record<string, unknown>); } catch { throw new Error('JIANYING_DRAFT_INVALID_JSON'); }
-    }
+    const { rootPath, payloads } = await this.adapter.read(absolutePath);
     const parsed: Record<string, unknown> = Object.assign({}, ...payloads);
     const draftId = String(parsed.draft_id || parsed.draftId || basename(absolutePath));
     const draftName = String(parsed.draft_name || parsed.draftName || basename(rootPath));
@@ -195,6 +224,7 @@ export class ScriptEditingV3Service {
   private readonly embeddingProvider: EmbeddingProvider;
   private readonly hybridMedia: HybridMediaService | undefined;
   private readonly storage: LocalStorageProvider | undefined;
+  private readonly queryEmbeddingCache = new Map<string, number[]>();
 
   constructor(private readonly db: Pool, options: { visualQueryProvider?: VisualQueryProvider; semanticIndex?: MaterialSemanticIndex; embeddingProvider?: EmbeddingProvider; hybridMedia?: HybridMediaService; storage?: LocalStorageProvider } = {}) {
     this.visualQueryProvider = options.visualQueryProvider || createVisualQueryProvider();
@@ -247,7 +277,8 @@ export class ScriptEditingV3Service {
     } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
   }
 
-  async createMaterialPoolSnapshot(input: { workspaceId: string; sourceRootIds?: string[]; sourceFiles?: string[]; sourceKind?: 'MANUAL' | 'JIANYING_DRAFT' }): Promise<MaterialPoolSnapshotV3> {
+  async createMaterialPoolSnapshot(input: { workspaceId: string; sourceRootIds?: string[]; sourceFiles?: string[]; sourceKind?: 'MANUAL' | 'JIANYING_DRAFT' | 'MIXED' }): Promise<MaterialPoolSnapshotV3> {
+    await ensureStandaloneWorkspace(this.db, input.workspaceId);
     const roots = input.sourceRootIds?.filter(Boolean) || [];
     const sourceFiles = [...new Set((input.sourceFiles || []).filter(Boolean).map((path) => resolve(path)))];
     const params: unknown[] = [input.workspaceId];
@@ -281,7 +312,7 @@ export class ScriptEditingV3Service {
       const key = `${canonical}:${Number(fileSize || 0)}:${Number(metadata.durationMs)}`;
       if (!deduped.has(key)) deduped.set(key, { canonical_path: canonical, asset_id: existing?.file_id || `local-file-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`, source_path: sourcePath, file_name: basename(sourcePath), duration_ms: metadata.durationMs, width: metadata.width, height: metadata.height, fps: metadata.fps, format: metadata.format, codec: metadata.videoCodec || null, file_size: fileSize, modified_at: modifiedAt, source_fingerprint: materialSourceFingerprint({ fileSize, modifiedAt, durationMs: metadata.durationMs }), tags: [], availability, error_message: errorMessage, source_ref: { sourceFile: true }, gold: false });
     }
-    if (input.sourceKind !== 'JIANYING_DRAFT' && roots.length) {
+    if (roots.length) {
       const missingRows = await this.db.query(`select distinct on (i.file_id) i.file_id,i.file_name,f.source_path,i.duration_ms,i.width,i.height,i.fps,i.codec,i.file_size,i.modified_at,i.tags,i.thumbnail_key,i.usage_count,i.last_used_at,i.source_root_id from local_media_index i join local_media_scan_files f on f.file_id=i.file_id join local_media_scans s on s.id=f.scan_id where s.workspace_id=$1 and i.source_root_id=any($2::text[]) and i.availability='MISSING' order by i.file_id,s.scanned_at desc nulls last`, [input.workspaceId, roots]);
       for (const row of missingRows.rows as PoolRow[]) {
         const canonical = resolve(String(row.source_path)).toLowerCase();
@@ -289,7 +320,7 @@ export class ScriptEditingV3Service {
         if (!deduped.has(key)) deduped.set(key, { ...row, canonical_path: canonical, asset_id: String(row.file_id), source_fingerprint: materialSourceFingerprint({ fileSize: row.file_size == null ? null : Number(row.file_size), modifiedAt: row.modified_at == null ? null : String(row.modified_at), durationMs: Number(row.duration_ms) }), availability: 'MISSING', error_message: '素材在最近一次扫描中不存在', source_ref: { sourceRootId: String(row.source_root_id), usageCount: Number(row.usage_count || 0), ...(row.last_used_at ? { lastUsedAt: new Date(String(row.last_used_at)).toISOString() } : {}) }, gold: false });
       }
     }
-    if (input.sourceKind === 'JIANYING_DRAFT') {
+    if (input.sourceKind === 'JIANYING_DRAFT' || input.sourceKind === 'MIXED') {
       const draftRows = await this.db.query(`select distinct on (f.file_id) f.file_id,f.file_name,f.source_path,f.duration_ms,f.width,f.height,f.fps,f.codec,f.file_size,f.modified_at,f.available,f.error_message,coalesce(i.availability,case when f.available then 'VALID' else 'MISSING' end) as index_availability,coalesce(i.tags,f.tags) as tags,i.thumbnail_key,i.usage_count,i.last_used_at,s.source_root_id,count(*) over (partition by f.file_id)::int as jianying_usage_count,d.draft_id,d.draft_name
         from jianying_asset_usages u join jianying_draft_imports d on d.id=u.draft_import_id join local_media_scan_files f on lower(f.source_path)=lower(u.asset_id) join local_media_scans s on s.id=f.scan_id left join local_media_index i on i.file_id=f.file_id
         where d.workspace_id=$1 and d.status='IMPORTED' and s.status='SUCCEEDED' order by f.file_id,d.imported_at desc nulls last,s.scanned_at desc nulls last`, [input.workspaceId]);
@@ -305,8 +336,9 @@ export class ScriptEditingV3Service {
     await this.db.query('insert into material_pool_snapshots (id,workspace_id,revision,source_spec) values ($1,$2,$3,$4)', [snapshotId, input.workspaceId, nextRevision, { sourceKind: input.sourceKind || 'MANUAL', sourceRootIds: roots, sourceFiles }]);
     for (const row of deduped.values()) {
       const tags = normalizeControlledVisualTagsV3(Array.isArray(row.tags) ? row.tags.filter((tag): tag is string => typeof tag === 'string') : []);
-      await this.db.query('insert into material_pool_items (snapshot_id,asset_id,canonical_path,source_path,file_name,duration_ms,width,height,fps,codec,file_size,modified_at,source_fingerprint,tags,source_kind,source_ref,thumbnail_key,gold,availability,error_message) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)', [snapshotId, String(row.asset_id), String(row.canonical_path), String(row.source_path), String(row.file_name), Math.max(0, Number(row.duration_ms)), Number(row.width || 0), Number(row.height || 0), row.fps == null ? null : Number(row.fps), row.codec || null, row.file_size == null ? null : Number(row.file_size), row.modified_at || null, String(row.source_fingerprint || materialSourceFingerprint({ fileSize: row.file_size == null ? null : Number(row.file_size), modifiedAt: row.modified_at == null ? null : String(row.modified_at), durationMs: Number(row.duration_ms) })), JSON.stringify(tags), input.sourceKind || 'MANUAL', row.source_ref || {}, row.thumbnail_key || null, Boolean(row.gold), row.availability || 'VALID', row.error_message || null]);
-      for (const tag of tags) await this.db.query('insert into asset_tag_evidence (id,asset_id,tag,evidence_kind,confidence,timestamps_ms) values ($1,$2,$3,$4,$5,$6) on conflict (asset_id,tag,evidence_kind) do update set confidence=excluded.confidence', [`tag-evidence-${randomUUID()}`, String(row.asset_id), tag, input.sourceKind === 'JIANYING_DRAFT' ? 'JIANYING_HISTORY' : 'FOLDER', 0.5, '[]']);
+      const rowSourceKind = row.source_ref && typeof row.source_ref === 'object' && (row.source_ref as Record<string, unknown>).draftId ? 'JIANYING_DRAFT' : 'MANUAL';
+      await this.db.query('insert into material_pool_items (snapshot_id,asset_id,canonical_path,source_path,file_name,duration_ms,width,height,fps,codec,file_size,modified_at,source_fingerprint,tags,source_kind,source_ref,thumbnail_key,gold,availability,error_message) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)', [snapshotId, String(row.asset_id), String(row.canonical_path), String(row.source_path), String(row.file_name), Math.max(0, Number(row.duration_ms)), Number(row.width || 0), Number(row.height || 0), row.fps == null ? null : Number(row.fps), row.codec || null, row.file_size == null ? null : Number(row.file_size), row.modified_at || null, String(row.source_fingerprint || materialSourceFingerprint({ fileSize: row.file_size == null ? null : Number(row.file_size), modifiedAt: row.modified_at == null ? null : String(row.modified_at), durationMs: Number(row.duration_ms) })), JSON.stringify(tags), rowSourceKind, row.source_ref || {}, row.thumbnail_key || null, Boolean(row.gold), row.availability || 'VALID', row.error_message || null]);
+      for (const tag of tags) await this.db.query('insert into asset_tag_evidence (id,asset_id,tag,evidence_kind,confidence,timestamps_ms) values ($1,$2,$3,$4,$5,$6) on conflict (asset_id,tag,evidence_kind) do update set confidence=excluded.confidence', [`tag-evidence-${randomUUID()}`, String(row.asset_id), tag, rowSourceKind === 'JIANYING_DRAFT' ? 'JIANYING_HISTORY' : 'FOLDER', 0.5, '[]']);
     }
     return this.getSnapshot(snapshotId);
   }
@@ -359,6 +391,7 @@ export class ScriptEditingV3Service {
   }
 
   async createSession(input: { workspaceId: string; snapshotId: string; script: string; voicePath?: string | undefined; settings?: SessionSettingsV3 | undefined; sentences?: Array<{ text: string; startMs?: number | undefined; endMs?: number | undefined; voiceStartMs?: number | undefined; voiceEndMs?: number | undefined; durationMs?: number | undefined }> | undefined }): Promise<{ id: string; status: string; revision: number }> {
+    await ensureStandaloneWorkspace(this.db, input.workspaceId);
     if (input.sentences?.length && comparableScript(input.script) !== comparableScript(input.sentences.map((row) => row.text).join(''))) throw new Error('SCRIPT_SEGMENTATION_STALE');
     let cursor = 0;
     const sentences = input.sentences?.length ? input.sentences.map((row, index) => {
@@ -375,10 +408,16 @@ export class ScriptEditingV3Service {
     if (snapshot.workspaceId !== input.workspaceId) throw new Error('MATERIAL_POOL_SCOPE_MISMATCH');
     const id = `script-editing-v3-${randomUUID()}`;
     await this.db.query('insert into script_editing_v3_sessions (id,workspace_id,material_pool_snapshot_id,script,voice_path,settings,sentences) values ($1,$2,$3,$4,$5,$6,$7)', [id, input.workspaceId, input.snapshotId, input.script, input.voicePath || null, JSON.stringify(input.settings || {}), JSON.stringify(sentences)]);
+    const generatedBySentence = new Map<string, { queries: string[]; model: string; promptVersion: string }>();
+    const batches = Array.from({ length: Math.ceil(sentences.length / 16) }, (_, index) => sentences.slice(index * 16, index * 16 + 16));
+    for (const batch of batches) {
+      try {
+        const generated = this.visualQueryProvider.generateQueriesBatch ? await this.visualQueryProvider.generateQueriesBatch({ sentences: batch.map((sentence) => ({ sentenceId: sentence.id, text: sentence.text })) }) : await Promise.all(batch.map(async (sentence) => ({ sentenceId: sentence.id, ...(await this.visualQueryProvider.generateQueries({ sentenceId: sentence.id, text: sentence.text })) })));
+        for (const item of generated) generatedBySentence.set(item.sentenceId, item);
+      } catch { /* fall through to deterministic per-sentence rules below */ }
+    }
     for (const sentence of sentences) {
-      let generated: Awaited<ReturnType<VisualQueryProvider['generateQueries']>>;
-      try { generated = await this.visualQueryProvider.generateQueries({ sentenceId: sentence.id, text: sentence.text }); }
-      catch { generated = await new RuleVisualQueryProvider().generateQueries({ sentenceId: sentence.id, text: sentence.text }); }
+      const generated = generatedBySentence.get(sentence.id) || await new RuleVisualQueryProvider().generateQueries({ sentenceId: sentence.id, text: sentence.text });
       for (const query of generated.queries) await this.db.query('insert into visual_queries (id,session_id,sentence_id,query,model,prompt_version) values ($1,$2,$3,$4,$5,$6)', [`visual-query-${randomUUID()}`, id, sentence.id, query, generated.model, generated.promptVersion]);
     }
     await this.rankCandidates(id, snapshot, sentences);
@@ -392,6 +431,7 @@ export class ScriptEditingV3Service {
     const queryRows = await this.db.query<{ sentence_id: string; query: string }>('select sentence_id,query from visual_queries where session_id=$1 order by created_at,id', [sessionId]);
     const queriesBySentence = new Map<string, string[]>();
     for (const row of queryRows.rows) queriesBySentence.set(row.sentence_id, [...(queriesBySentence.get(row.sentence_id) || []), row.query]);
+    await this.semanticScores(snapshot, profiles, [...new Set(queryRows.rows.map((row) => row.query))]);
     for (const sentence of sentences) {
       const queries = queriesBySentence.get(sentence.id) || buildQueries(sentence);
       const semanticHits = new Map((await this.semanticScores(snapshot, profiles, queries)).map((hit) => [hit.assetId, hit.score]));
@@ -414,10 +454,17 @@ export class ScriptEditingV3Service {
     await this.semanticIndex.build({ snapshotId: snapshot.id, items: snapshot.items, profiles, embeddings });
     let queryVectors: number[][] | undefined;
     try {
-      if (embeddings.size) queryVectors = (await this.embeddingProvider.embed({ texts: queries })).vectors;
-    } catch {
-      queryVectors = undefined;
-    }
+      if (embeddings.size) {
+        const uniqueQueries = [...new Set(queries)];
+        const missing = uniqueQueries.filter((query) => !this.queryEmbeddingCache.has(query));
+        if (missing.length) {
+          const generated = await this.embeddingProvider.embed({ texts: missing });
+          generated.vectors.forEach((vector, index) => { if (vector?.length && vector.every((value) => Number.isFinite(value))) this.queryEmbeddingCache.set(missing[index]!, vector); });
+        }
+        const vectors = queries.map((query) => this.queryEmbeddingCache.get(query));
+        if (vectors.every((vector): vector is number[] => Boolean(vector))) queryVectors = vectors;
+      }
+    } catch { queryVectors = undefined; }
     return this.semanticIndex.search({ snapshotId: snapshot.id, queries, ...(queryVectors ? { queryVectors } : {}), limit: snapshot.items.length });
   }
 
@@ -504,6 +551,7 @@ export class ScriptEditingV3Service {
     const queryRows = await this.db.query<{ sentence_id: string; query: string }>('select sentence_id,query from visual_queries where session_id=$1 order by created_at,id', [sessionId]);
     const queriesBySentence = new Map<string, string[]>();
     for (const row of queryRows.rows) queriesBySentence.set(row.sentence_id, [...(queriesBySentence.get(row.sentence_id) || []), row.query]);
+    await this.semanticScores(snapshot, profiles, [...new Set(queryRows.rows.map((row) => row.query))]);
     let cursor = 0;
     const timeline: ManifestClip[] = [];
     for (const sentence of sentences) {

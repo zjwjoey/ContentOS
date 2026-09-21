@@ -4,9 +4,10 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { representativeFrameTimestamps } from '../../packages/infrastructure/ffmpeg/src/index.js';
-import { buildVisualQueriesV3, rankMaterialCandidateV3 } from '../../packages/modules/video/src/index.js';
+import { buildVisualQueriesV3, JianyingVideoEditorDllAdapter, PlainJsonDraftAdapter, rankMaterialCandidateV3 } from '../../packages/modules/video/src/index.js';
 import { InMemoryMaterialSemanticIndex, QwenEmbeddingProvider, QwenVisualQueryProvider, QwenVisualAnalysisProvider } from '../../packages/modules/video/src/index.js';
 import { validateEditManifest, type EditManifestV0 } from '../../packages/contracts/src/index.js';
+import { segmentationChanged } from '../../apps/web/app/edit/script/segmentation-policy.js';
 
 test('V3 visual queries are reproducible and bounded', () => {
   const queries = buildVisualQueriesV3('越来越多消费者走进低价门店');
@@ -65,6 +66,18 @@ test('Qwen visual tags are bounded by the controlled catalog', async () => {
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test('Qwen visual evidence maps frame indexes to server-owned timestamps', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'contentos-v3-qwen-frames-'));
+  const framePaths = await Promise.all([0, 1, 2].map(async (index) => { const path = join(directory, `frame-${index}.jpg`); await writeFile(path, 'fixture'); return path; }));
+  try {
+    const provider = new QwenVisualAnalysisProvider({ endpoint: 'https://qwen.test', apiKey: 'test-key', fetch: async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: '货架', tags: [{ tag: '货架', confidence: 0.9, evidenceFrameIndexes: [2, 2, 99] }], recommendedFrameIndexes: [1, 1, 99] }) } }] }), { status: 200 }) });
+    const profile = await provider.analyzeAssetFrames({ assetId: 'asset-frame-index', framePaths, frameTimestampsMs: [100, 500, 900] });
+    assert.deepEqual(profile.tags[0]?.timestampsMs, [900]);
+    assert.deepEqual(profile.recommendedTimestampsMs, [500]);
+    assert.equal(profile.promptVersion, 'qwen-visual-v2');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('Qwen visual analysis cannot turn an unverified brand guess into profile evidence', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'contentos-v3-qwen-entity-'));
   const framePath = join(directory, 'frame.jpg');
@@ -93,6 +106,28 @@ test('Qwen visual queries are structured, bounded, and use the text model config
   assert.equal(result.provider, 'QWEN_TEXT');
   assert.equal(result.model, 'qwen-test');
   assert.equal(result.queries.length, 3);
+});
+
+test('V3 keeps confirmed segments for presentation-only changes', () => {
+  const base = { mode: 'COMMA_SENTENCE' as const, delimiters: ['。', '！'] };
+  assert.equal(segmentationChanged(base, { ...base }), false);
+  assert.equal(segmentationChanged(base, { ...base, delimiters: ['。', '？'] }), true);
+  assert.equal(segmentationChanged(base, { mode: 'PARAGRAPH' as const, delimiters: base.delimiters }), true);
+});
+
+test('Jianying draft adapters keep JSON parsing separate from unavailable DLL integration', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'contentos-v3-adapter-'));
+  const draftDirectory = join(directory, 'draft');
+  const { mkdir } = await import('node:fs/promises');
+  await mkdir(draftDirectory, { recursive: true });
+  await writeFile(join(draftDirectory, 'draft_info.json'), JSON.stringify({ draft_id: 'draft-1', draft_name: '测试草稿' }));
+  try {
+    const readable = await new PlainJsonDraftAdapter().read(draftDirectory);
+    assert.equal(readable.rootPath, draftDirectory);
+    assert.equal(readable.payloads[0]?.draft_id, 'draft-1');
+    assert.equal(new JianyingVideoEditorDllAdapter().status, 'UNAVAILABLE');
+    await assert.rejects(new JianyingVideoEditorDllAdapter().read(draftDirectory), /JIANYING_VIDEOEDITOR_DLL_UNAVAILABLE/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 test('Qwen embedding provider validates vectors before indexing', async () => {

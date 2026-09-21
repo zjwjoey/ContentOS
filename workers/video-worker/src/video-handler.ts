@@ -4,7 +4,7 @@ import { access as accessFile, copyFile, mkdir, readdir, realpath, rename, rm, s
 import type { Pool } from 'pg';
 import { AssetCatalogService, type AssetService, type LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import type { JobLeaseCancellationHandler, JobRecord, JobService } from '../../../packages/modules/job/src/index.js';
-import { JianyingDraftImporter, materialSourceFingerprint, planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, rerollEditorialClip, ScriptEditingV3Service, QwenEmbeddingProvider, QwenVisualAnalysisProvider, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoJobPayload, type VideoService } from '../../../packages/modules/video/src/index.js';
+import { ensureStandaloneWorkspace, JianyingDraftImporter, materialSourceFingerprint, planEditorialScript, prepareEditingWorkbenchItem, prepareVoiceTiming, resolveEditorialPlan, rerollEditorialClip, ScriptEditingV3Service, QwenEmbeddingProvider, QwenVisualAnalysisProvider, VideoAdjustmentService, VideoEditPresetService, HybridMediaService, type EditorialAssetV1, type ExternalVideoProvider, type PlannerAsset, type VideoJobPayload, type VideoService } from '../../../packages/modules/video/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import type { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
 import { generateRepresentativeFrames, renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
@@ -23,7 +23,7 @@ export function createVisualAnalysisJobHandler(deps: VideoHandlerDeps): (job: Jo
     const modelVersion = process.env.QWEN_MODEL_VERSION || 'unknown';
     const existingProfile = (await deps.db.query<{ status: string; model_name: string; model_version: string; prompt_version: string; analysis_version: string; source_fingerprint?: string | null; profile: Record<string, unknown> }>('select status,model_name,model_version,prompt_version,analysis_version,source_fingerprint,profile from asset_visual_profiles where asset_id=$1', [payload.assetId])).rows[0];
     const fingerprint = materialSourceFingerprint({ fileSize: row.file_size, modifiedAt: row.modified_at, durationMs: Number(row.duration_ms) });
-    if (existingProfile?.status === 'READY' && existingProfile.source_fingerprint === fingerprint && existingProfile.model_name === modelName && existingProfile.model_version === modelVersion && existingProfile.prompt_version === 'qwen-visual-v1' && existingProfile.analysis_version === 'asset-profile-v1') return { assetId: payload.assetId, status: 'READY', cached: true, profile: existingProfile.profile };
+    const profileCacheValid = existingProfile?.status === 'READY' && existingProfile.source_fingerprint === fingerprint && existingProfile.model_name === modelName && existingProfile.model_version === modelVersion && existingProfile.prompt_version === 'qwen-visual-v2' && existingProfile.analysis_version === 'asset-profile-v2';
     const frameGenerationVersion = 'representative-frames-v1';
     const existing = await deps.db.query<{ frame_index: number; timestamp_ms: number; frame_key: string }>('select frame_index,timestamp_ms,frame_key from asset_representative_frames where asset_id=$1 and source_fingerprint=$2 and frame_generation_version=$3 order by frame_index', [payload.assetId, fingerprint, frameGenerationVersion]);
     const safeAssetId = payload.assetId.replace(/[^a-zA-Z0-9._-]/gu, '_');
@@ -44,8 +44,20 @@ export function createVisualAnalysisJobHandler(deps: VideoHandlerDeps): (job: Jo
     }
     if (job.type === 'GENERATE_REPRESENTATIVE_FRAMES') return { assetId: payload.assetId, status: 'READY', frameCount: generatedFrames.length };
     try {
-      await deps.db.query('insert into asset_visual_profiles (asset_id,summary,profile,provider,model_name,model_version,prompt_version,analysis_version,status,error,source_fingerprint) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,null,$10) on conflict (asset_id) do update set summary=excluded.summary,profile=excluded.profile,provider=excluded.provider,model_name=excluded.model_name,model_version=excluded.model_version,prompt_version=excluded.prompt_version,analysis_version=excluded.analysis_version,status=excluded.status,error=null,source_fingerprint=excluded.source_fingerprint,updated_at=now()', [payload.assetId, '视觉分析排队中', {}, 'QWEN_VL', modelName, modelVersion, 'qwen-visual-v1', 'asset-profile-v1', 'PENDING', fingerprint]);
-      const profile = await new QwenVisualAnalysisProvider().analyzeAssetFrames({ assetId: payload.assetId, framePaths: generatedFrames.map((frame) => frame.path), signal });
+      if (profileCacheValid) {
+        const embeddingModel = process.env.QWEN_EMBEDDING_MODEL || 'text-embedding-v3';
+        const embedding = (await deps.db.query<{ asset_id: string; source_fingerprint: string; model_name: string }>('select asset_id,source_fingerprint,model_name from asset_semantic_embeddings where asset_id=$1', [payload.assetId])).rows[0];
+        const embeddingReady = embedding?.source_fingerprint === fingerprint && embedding.model_name === embeddingModel;
+        if (!embeddingReady && (process.env.QWEN_BASE_URL || process.env.QWEN_API_URL) && process.env.QWEN_API_KEY) {
+          const cachedProfile = existingProfile!.profile;
+          const embeddingResult = await new QwenEmbeddingProvider().embed({ texts: [`${String(cachedProfile.summary || '')} ${Array.isArray(cachedProfile.tags) ? cachedProfile.tags.map((tag) => tag && typeof tag === 'object' ? String((tag as Record<string, unknown>).tag || '') : '').join(' ') : ''}`], signal });
+          const v3Service = new ScriptEditingV3Service(deps.db);
+          await v3Service.persistSemanticEmbedding({ assetId: payload.assetId, sourceFingerprint: fingerprint, provider: embeddingResult.provider, model: embeddingResult.model, vector: embeddingResult.vectors[0]! });
+        }
+        return { assetId: payload.assetId, status: 'READY', cached: true, profile: existingProfile!.profile };
+      }
+      await deps.db.query('insert into asset_visual_profiles (asset_id,summary,profile,provider,model_name,model_version,prompt_version,analysis_version,status,error,source_fingerprint) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,null,$10) on conflict (asset_id) do update set summary=excluded.summary,profile=excluded.profile,provider=excluded.provider,model_name=excluded.model_name,model_version=excluded.model_version,prompt_version=excluded.prompt_version,analysis_version=excluded.analysis_version,status=excluded.status,error=null,source_fingerprint=excluded.source_fingerprint,updated_at=now()', [payload.assetId, '视觉分析排队中', {}, 'QWEN_VL', modelName, modelVersion, 'qwen-visual-v2', 'asset-profile-v2', 'PENDING', fingerprint]);
+      const profile = await new QwenVisualAnalysisProvider().analyzeAssetFrames({ assetId: payload.assetId, framePaths: generatedFrames.map((frame) => frame.path), frameTimestampsMs: generatedFrames.map((frame) => frame.timestampMs), signal });
       const v3Service = new ScriptEditingV3Service(deps.db);
       await v3Service.persistVisualProfile(profile, fingerprint);
       if ((process.env.QWEN_BASE_URL || process.env.QWEN_API_URL) && process.env.QWEN_API_KEY) {
@@ -68,6 +80,7 @@ export function createJianyingImportJobHandler(deps: VideoHandlerDeps): (job: Jo
     if (signal.aborted) throw new Error('IMPORT_JIANYING_DRAFT_CANCELLED');
     const payload = job.payload as { workspaceId?: string; draftPaths?: string[] };
     if (!payload.workspaceId || !Array.isArray(payload.draftPaths) || !payload.draftPaths.length) throw new Error('IMPORT_JIANYING_DRAFT_PAYLOAD_INVALID');
+    await ensureStandaloneWorkspace(deps.db, payload.workspaceId);
     const importer = new JianyingDraftImporter(deps.db);
     const imports = [];
     for (const draftPath of [...new Set(payload.draftPaths)]) {
