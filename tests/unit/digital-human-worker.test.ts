@@ -93,6 +93,25 @@ test('Digital Human worker records Speech preflight failures on the Generation',
   assert.deepEqual(failures, [{ id: 'generation-speech-preflight', code: 'SPEECH_GENERATION_FAILED' }]);
 });
 
+test('Digital Human worker prefers probed Speech Asset duration for completion', async () => {
+  let completedDuration = 0; let providerDuration = 0;
+  const deps = {
+    digitalHuman: {
+      getSpeechGeneration: async () => ({ id: 'generation-speech-duration', status: 'PENDING', voiceProfileId: 'voice-1', text: '测试', textHash: 'text-hash', parameters: { language: 'zh', speed: 1, emotion: 'natural' }, outputAssetId: null }),
+      markSpeechRunning: async () => undefined,
+      getVoiceProfile: async () => ({ id: 'voice-1', referenceAssetId: null, language: 'zh', defaultSpeed: 1, defaultEmotion: 'natural' }),
+      completeSpeech: async (_id: string, input: { durationMs: number; provenance: { providerDurationMs: number } }) => { completedDuration = input.durationMs; providerDuration = input.provenance.providerDurationMs; return true; },
+    },
+    assets: { getProjectAsset: async () => ({ id: 'audio-output', projectId: 'project-1', kind: 'AUDIO', lifecycle: 'READY', storageKey: 'audio.wav', checksum: 'checksum', metadata: { durationMs: 1_234, format: 'wav' } }) },
+    assetService: { importFile: async () => ({ id: 'audio-output' }) },
+    storage: { objectPath: (value: string) => value },
+    speechProvider: { generateSpeech: async () => ({ providerId: 'indextts25', model: 'indextts-2.5', modelVersion: '2.5', outputPath: 'audio.wav', durationMs: 2_000, latencyMs: 10, provenance: {} }) },
+  } as never;
+  const job = { id: 'job-speech-duration', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'SPEECH', generationId: 'generation-speech-duration', projectId: 'project-1', correlationId: 'corr-duration' } } as never;
+  const result = await createDigitalHumanJobHandler(deps)(job, 'attempt-speech-duration', new AbortController().signal);
+  assert.deepEqual(result, { generationId: 'generation-speech-duration', outputAssetId: 'audio-output', state: 'SUCCEEDED' }); assert.equal(completedDuration, 1_234); assert.equal(providerDuration, 2_000);
+});
+
 test('Digital Human worker records Avatar preflight failures on the Generation', async () => {
   const failures: Array<{ id: string; code: string }> = [];
   const deps = {
