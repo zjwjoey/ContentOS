@@ -8,6 +8,7 @@ import { ensureStandaloneWorkspace, JianyingDraftImporter, materialSourceFingerp
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import type { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
 import { generateRepresentativeFrames, renderEditManifest } from '../../../packages/infrastructure/ffmpeg/src/index.js';
+import { detectShotsV1 } from '../../../packages/modules/video/src/index.js';
 
 export interface VideoHandlerDeps { db: Pool; storage: LocalStorageProvider; assets: AssetService; jobs: JobService; video: VideoService; ffmpegPath: string; ffprobePath: string; fontFile?: string; localMedia?: LocalMediaSourceService; localPathAccess?: LocalPathAccessService; mediaProvider?: ExternalVideoProvider; }
 
@@ -422,6 +423,34 @@ export function createLocalMediaScanJobHandler(deps: VideoHandlerDeps): (job: Jo
     } catch (error) {
       const cancelled = signal.aborted || (error instanceof Error && error.message === 'LOCAL_MEDIA_SCAN_CANCELLED');
       await deps.localMedia.failScan(payload.scanId, { code: cancelled ? 'LOCAL_MEDIA_SCAN_CANCELLED' : 'LOCAL_MEDIA_SCAN_FAILED', message: error instanceof Error ? error.message : 'scan failed' }, cancelled ? 'CANCELLED' : 'FAILED');
+      throw error;
+    }
+  };
+}
+
+export function createShotDetectionJobHandler(deps: VideoHandlerDeps): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
+  return async (job, _attemptId, signal) => {
+    if (job.type !== 'SHOT_DETECTION_V1') throw new Error('SHOT_DETECTION_JOB_TYPE_INVALID');
+    const payload = job.payload as { runId?: string; snapshotId?: string; assetId?: string; sourcePath?: string; durationMs?: number; sourceFingerprint?: string; threshold?: number };
+    if (!payload.runId || !payload.snapshotId || !payload.assetId || !payload.sourcePath || !payload.durationMs || !payload.sourceFingerprint) throw new Error('SHOT_DETECTION_PAYLOAD_INVALID');
+    await deps.db.query("update script_editing_v3_shot_detection_runs set status='RUNNING',updated_at=now() where id=$1", [payload.runId]);
+    try {
+      const shots = await detectShotsV1({ sourcePath: payload.sourcePath, durationMs: Number(payload.durationMs), ...(payload.threshold === undefined ? {} : { threshold: payload.threshold }), ffmpegPath: deps.ffmpegPath, signal });
+      const client = await deps.db.connect();
+      try {
+        await client.query('begin');
+        await client.query('delete from script_editing_v3_shots where run_id=$1', [payload.runId]);
+        for (const [index, shot] of shots.entries()) {
+          const shotId = `shot-${randomUUID()}`;
+          await client.query('insert into script_editing_v3_shots (id,run_id,shot_index,source_in_ms,source_out_ms,confidence,evidence) values ($1,$2,$3,$4,$5,$6,$7)', [shotId, payload.runId, index, shot.sourceInMs, shot.sourceOutMs, shot.confidence, shot.evidence]);
+          await client.query('insert into source_segments (id,snapshot_id,asset_id,source_in_ms,source_out_ms,duration_ms,origin,evidence,kind,detection_method,detection_threshold,detector_version) values ($1,$2,$3,$4,$5,$6,\'SHOT_DETECTION\',$7,\'SHOT\',\'FFMPEG_SCENE\',$8,$9) on conflict (snapshot_id,asset_id,source_in_ms,source_out_ms) do update set evidence=excluded.evidence,origin=excluded.origin,kind=excluded.kind,detection_method=excluded.detection_method,detection_threshold=excluded.detection_threshold,detector_version=excluded.detector_version', [shotId, payload.snapshotId, payload.assetId, shot.sourceInMs, shot.sourceOutMs, shot.sourceOutMs - shot.sourceInMs, { runId: payload.runId, confidence: shot.confidence, detectorVersion: 'shot-detection-v1' }, payload.threshold ?? 0.35, 'shot-detection-v1']);
+        }
+        await client.query("update script_editing_v3_shot_detection_runs set status='SUCCEEDED',error=null,updated_at=now() where id=$1", [payload.runId]);
+        await client.query('commit');
+      } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
+      return { runId: payload.runId, shotCount: shots.length, detectorVersion: 'shot-detection-v1' };
+    } catch (error) {
+      await deps.db.query("update script_editing_v3_shot_detection_runs set status='FAILED',error=$2,updated_at=now() where id=$1", [payload.runId, { code: error instanceof Error ? error.message : 'SHOT_DETECTION_FAILED' }]);
       throw error;
     }
   };

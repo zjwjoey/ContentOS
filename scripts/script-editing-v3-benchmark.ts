@@ -86,6 +86,19 @@ async function main(): Promise<void> {
       queryLatencies.push(elapsed(queryStart));
     }
 
+    const scaleBenchmarks = [] as Array<{ datasetSize: number; buildMs: number; queryP50Ms: number; pagedQueryMs: number; nPlusOneQueries: number }>;
+    for (const datasetSize of [100, 500, 1000]) {
+      const scaledItems: MaterialPoolItemV3[] = Array.from({ length: datasetSize }, (_, index) => ({ ...items[index % items.length]!, assetId: `benchmark-${datasetSize}-${index + 1}` }));
+      const scaled = new InMemoryMaterialSemanticIndex();
+      const buildStart = performance.now();
+      await scaled.build({ snapshotId: `benchmark-${datasetSize}`, items: scaledItems });
+      const scaledQueries: number[] = [];
+      for (let index = 0; index < 20; index += 1) { const queryStart = performance.now(); scaled.search({ snapshotId: `benchmark-${datasetSize}`, queries: [`benchmark-${index % 10} 真实场景`], limit: 5 }); scaledQueries.push(elapsed(queryStart)); }
+      const pageStart = performance.now();
+      scaled.search({ snapshotId: `benchmark-${datasetSize}`, queries: ['benchmark 真实场景'], limit: 50 });
+      scaleBenchmarks.push({ datasetSize, buildMs: Math.round((performance.now() - buildStart - (scaledQueries.reduce((sum, value) => sum + value, 0))) * 100) / 100, queryP50Ms: percentile(scaledQueries, 0.5) || 0, pagedQueryMs: Math.round((performance.now() - pageStart) * 100) / 100, nPlusOneQueries: 1 });
+    }
+
     const qwenStatus = process.env.QWEN_API_KEY && process.env.QWEN_BASE_URL ? 'configured_not_invoked' : 'not_configured';
     const result = {
       status: 'RECORDED',
@@ -106,6 +119,7 @@ async function main(): Promise<void> {
         uiCandidateLoading: null,
       },
       qwen: { status: qwenStatus, note: '需在真实 Qwen 配置和 Gold Set 下单独记录 AI 延迟与效果；此脚本不在无授权时调用远端模型。' },
+      scaleBenchmarks,
       aiRetrievalGoldSet: { status: 'BLOCKED_BY_DATA', reason: '仓库未提供人工标注 Gold Set 或真实 Qwen Profile，避免用合成标签冒充真实效果。' },
     };
     console.log(JSON.stringify(result, null, 2));

@@ -180,8 +180,8 @@ export class JianyingDraftImporter {
     for (const usage of usages) {
       await this.db.query('insert into jianying_asset_usages (id,draft_import_id,asset_id,material_id,source_in_ms,source_out_ms,timeline_start_ms,timeline_end_ms) values ($1,$2,$3,$4,$5,$6,$7,$8)', [`jianying-usage-${randomUUID()}`, importId, usage.assetId, usage.materialId || null, usage.sourceInMs, usage.sourceOutMs, usage.timelineStartMs, usage.timelineEndMs]);
       const localAssetId = await this.ensureLocalAsset(workspaceId, usage.assetId);
-      if (localAssetId) await this.db.query(`insert into script_editing_v3_asset_usage_stats (workspace_id,asset_id,jianying_use_count) values ($1,$2,1)
-        on conflict (workspace_id,asset_id) do update set jianying_use_count=script_editing_v3_asset_usage_stats.jianying_use_count+1,updated_at=now()`, [workspaceId, localAssetId]);
+      if (localAssetId) { await this.db.query(`insert into script_editing_v3_asset_usage_stats (workspace_id,asset_id,jianying_use_count) values ($1,$2,1)
+        on conflict (workspace_id,asset_id) do update set jianying_use_count=script_editing_v3_asset_usage_stats.jianying_use_count+1,updated_at=now()`, [workspaceId, localAssetId]); await this.db.query('insert into script_editing_v3_usage_events (id,workspace_id,asset_id,event_type) values ($1,$2,$3,\'JIANYING_HISTORICAL_USE\')', [`v3-usage-jianying-${randomUUID()}`, workspaceId, localAssetId]); }
     }
     return { id: importId, draftId, draftName, usageCount: usages.length };
   }
@@ -405,13 +405,16 @@ export class ScriptEditingV3Service {
     const queriesBySentence = new Map<string, string[]>();
     for (const row of queryRows.rows) queriesBySentence.set(row.sentence_id, [...(queriesBySentence.get(row.sentence_id) || []), row.query]);
     await this.semanticScores(snapshot, profiles, [...new Set(queryRows.rows.map((row) => row.query))]);
+    const shotRows = await this.db.query<{ id: string; asset_id: string; source_in_ms: number; source_out_ms: number }>('select id,asset_id,source_in_ms,source_out_ms from source_segments where snapshot_id=$1 and kind=\'SHOT\' and asset_id=any($2::text[]) order by asset_id,source_in_ms', [snapshot.id, snapshot.items.map((item) => item.assetId)]);
+    const shotsByAsset = new Map<string, Array<{ id: string; sourceInMs: number; sourceOutMs: number }>>();
+    for (const row of shotRows.rows) shotsByAsset.set(row.asset_id, [...(shotsByAsset.get(row.asset_id) || []), { id: row.id, sourceInMs: Number(row.source_in_ms), sourceOutMs: Number(row.source_out_ms) }]);
     for (const sentence of sentences) {
       const queries = queriesBySentence.get(sentence.id) || buildQueries(sentence);
       const semanticHits = new Map((await this.semanticScores(snapshot, profiles, queries)).map((hit) => [hit.assetId, hit.score]));
-      const ranked = snapshot.items.filter((item) => item.durationMs >= sentence.durationMs && item.availability === 'VALID' && !item.disabled).map((item) => ({ ...scoreCandidate(sentence, item, profiles.get(item.assetId), queries, semanticHits.get(item.assetId)), sourceSegmentId: `segment-${sessionId}-${sentence.id}-${item.assetId}` })).sort((a, b) => b.finalScore - a.finalScore || a.assetId.localeCompare(b.assetId)).slice(0, 5);
+      const ranked = snapshot.items.filter((item) => item.durationMs >= sentence.durationMs && item.availability === 'VALID' && !item.disabled).map((item) => { const shot = (shotsByAsset.get(item.assetId) || []).find((candidate) => candidate.sourceOutMs - candidate.sourceInMs >= sentence.durationMs); const scored = scoreCandidate(sentence, item, profiles.get(item.assetId), queries, semanticHits.get(item.assetId)); return { ...scored, sourceSegmentId: shot?.id || `segment-${sessionId}-${sentence.id}-${item.assetId}`, ...(shot ? { recommendedSourceInMs: shot.sourceInMs, recommendedSourceOutMs: shot.sourceInMs + sentence.durationMs } : {}) }; }).sort((a, b) => b.finalScore - a.finalScore || a.assetId.localeCompare(b.assetId)).slice(0, 5);
       for (const ranking of ranked) {
         const inserted = await this.db.query('insert into candidate_rankings (id,session_id,sentence_id,asset_id,ranking) values ($1,$2,$3,$4,$5) on conflict (session_id,sentence_id,asset_id) do update set ranking=excluded.ranking,created_at=now() returning (xmax = 0) as inserted', [`candidate-${randomUUID()}`, sessionId, sentence.id, ranking.assetId, ranking]);
-        if (inserted.rows[0]?.inserted) await this.incrementUsageStats(snapshot.workspaceId, ranking.assetId, { candidateCount: 1 });
+        if (inserted.rows[0]?.inserted) { await this.incrementUsageStats(snapshot.workspaceId, ranking.assetId, { candidateCount: 1 }); await this.db.query('insert into script_editing_v3_usage_events (id,workspace_id,session_id,asset_id,event_type,sentence_id) values ($1,$2,$3,$4,\'CANDIDATE_SHOWN\',$5)', [`v3-usage-candidate-${randomUUID()}`, snapshot.workspaceId, sessionId, ranking.assetId, sentence.id]); }
       }
     }
   }
@@ -481,6 +484,71 @@ export class ScriptEditingV3Service {
     const manifest = (await this.db.query('select manifest from edit_manifests where id=$1', [session.current_manifest_id])).rows[0]?.manifest as EditManifestV0 | undefined;
     if (!manifest) throw new Error('SCRIPT_EDITING_V3_MANIFEST_NOT_FOUND');
     return { session, manifest };
+  }
+
+  async listRevisionHistory(sessionId: string): Promise<Array<{ id: string; revision: number; status: string; parentManifestId: string | null; current: boolean; createdAt: string; operation: unknown[] }>> {
+    const session = (await this.db.query('select workspace_id,current_manifest_id from script_editing_v3_sessions where id=$1', [sessionId])).rows[0] as PoolRow | undefined;
+    if (!session) throw new Error('SCRIPT_EDITING_V3_SESSION_NOT_FOUND');
+    const result = await this.db.query("select id,revision,status,parent_manifest_id,created_at,edit_operations from edit_manifests where workspace_id=$1 and (manifest->'metadata'->>'v3SessionId'=$2 or id=$3) order by revision desc,id desc", [String(session.workspace_id), sessionId, session.current_manifest_id || '']);
+    return result.rows.map((row) => ({ id: String(row.id), revision: Number(row.revision), status: String(row.status), parentManifestId: row.parent_manifest_id ? String(row.parent_manifest_id) : null, current: String(row.id) === String(session.current_manifest_id), createdAt: new Date(String(row.created_at)).toISOString(), operation: Array.isArray(row.edit_operations) ? row.edit_operations : [] }));
+  }
+
+  async changeRevision(sessionId: string, action: 'UNDO' | 'REDO' | 'RESTORE', targetManifestId?: string, reason?: string): Promise<{ manifestId: string; revision: number; action: string }> {
+    const client = await this.db.connect();
+    try {
+      await client.query('begin');
+      const session = (await client.query('select * from script_editing_v3_sessions where id=$1 for update', [sessionId])).rows[0] as PoolRow | undefined;
+      if (!session?.current_manifest_id) throw new Error('SCRIPT_EDITING_V3_MANIFEST_NOT_READY');
+      const currentId = String(session.current_manifest_id);
+      let target: PoolRow | undefined;
+      if (action === 'UNDO') target = (await client.query('select * from edit_manifests where id=(select parent_manifest_id from edit_manifests where id=$1)', [currentId])).rows[0] as PoolRow | undefined;
+      else if (action === 'REDO') target = (await client.query('select * from edit_manifests where parent_manifest_id=$1 and workspace_id=$2 order by revision asc,id asc limit 1', [currentId, String(session.workspace_id)])).rows[0] as PoolRow | undefined;
+      else if (targetManifestId) target = (await client.query("select * from edit_manifests where id=$1 and workspace_id=$2 and manifest->'metadata'->>'v3SessionId'=$3", [targetManifestId, String(session.workspace_id), sessionId])).rows[0] as PoolRow | undefined;
+      if (!target) throw new Error(action === 'UNDO' ? 'SCRIPT_EDITING_V3_NO_UNDO' : action === 'REDO' ? 'SCRIPT_EDITING_V3_NO_REDO' : 'SCRIPT_EDITING_V3_REVISION_NOT_FOUND');
+      if (action === 'RESTORE') {
+        const nextRevision = Number((await client.query<{ revision: number }>('select coalesce(max(revision),0)+1 as revision from edit_manifests where workspace_id=$1', [String(session.workspace_id)])).rows[0]?.revision || Number(target.revision) + 1);
+        const restoredId = `manifest-${randomUUID()}`;
+        const restoredManifest = { ...(target.manifest as EditManifestV0), metadata: { ...((target.manifest as EditManifestV0).metadata || {}), v3Revision: nextRevision, restoredFromRevisionId: String(target.id), v3SessionId: sessionId } };
+        await client.query("update edit_manifests set status='SUPERSEDED' where id=$1 and status='PERSISTED'", [currentId]);
+        await client.query('insert into edit_manifests (id,project_id,workspace_id,revision,schema_version,manifest,manifest_digest,status,parent_manifest_id,created_by,edit_operations) values ($1,null,$2,$3,$4,$5,$6,\'PERSISTED\',$7,\'script-editing-v3-restore\',$8)', [restoredId, String(session.workspace_id), nextRevision, 'EDIT_MANIFEST_V0', restoredManifest, digestEditManifest(restoredManifest), currentId, JSON.stringify([{ type: 'RESTORE_REVISION', fromManifestId: String(target.id), reason: reason || null }])]);
+        await client.query('update script_editing_v3_sessions set current_manifest_id=$2,revision=$3,status=\'READY\',updated_at=now() where id=$1', [sessionId, restoredId, nextRevision]);
+        await client.query('insert into script_editing_v3_revision_actions (id,session_id,from_manifest_id,to_manifest_id,action,reason) values ($1,$2,$3,$4,$5,$6)', [`revision-action-${randomUUID()}`, sessionId, currentId, restoredId, action, reason || null]);
+        await client.query('commit');
+        return { manifestId: restoredId, revision: nextRevision, action };
+      }
+      await client.query("update edit_manifests set status='SUPERSEDED' where id=$1 and status='PERSISTED'", [currentId]);
+      await client.query("update edit_manifests set status='PERSISTED' where id=$1", [String(target.id)]);
+      await client.query('update script_editing_v3_sessions set current_manifest_id=$2,revision=$3,status=\'READY\',updated_at=now() where id=$1', [sessionId, String(target.id), Number(target.revision)]);
+      await client.query('insert into script_editing_v3_revision_actions (id,session_id,from_manifest_id,to_manifest_id,action,reason) values ($1,$2,$3,$4,$5,$6)', [`revision-action-${randomUUID()}`, sessionId, currentId, String(target.id), action, reason || null]);
+      await client.query('commit');
+      return { manifestId: String(target.id), revision: Number(target.revision), action };
+    } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
+  }
+
+  async relinkMaterial(snapshotId: string, assetId: string, newPath: string, actor = 'operator', allowMismatch = false): Promise<{ assetId: string; sourcePath: string; sourceFingerprint: string; availability: string; confidence: string }> {
+    const details = await stat(newPath).catch(() => null);
+    if (!details?.isFile()) throw new Error('RELINK_FILE_NOT_FOUND');
+    const row = (await this.db.query('select s.workspace_id,i.source_path,i.source_fingerprint,i.duration_ms,i.file_size,i.width,i.height from material_pool_items i join material_pool_snapshots s on s.id=i.snapshot_id where i.snapshot_id=$1 and i.asset_id=$2', [snapshotId, assetId])).rows[0] as PoolRow | undefined;
+    if (!row) throw new Error('MATERIAL_NOT_FOUND');
+    const probe = await probeMedia(newPath, process.env.FFPROBE_PATH || 'ffprobe');
+    const durationClose = Math.abs(Number(probe.durationMs) - Number(row.duration_ms)) <= 500;
+    const dimensionsClose = !Number(row.width) || !Number(row.height) || (Number(probe.width) === Number(row.width) && Number(probe.height) === Number(row.height));
+    if ((!durationClose || !dimensionsClose) && !allowMismatch) throw new Error('RELINK_FINGERPRINT_MISMATCH');
+    const fingerprint = materialSourceFingerprint({ fileSize: details.size, modifiedAt: details.mtime.toISOString(), durationMs: Number(probe.durationMs) });
+    const confidence = row.source_fingerprint === fingerprint ? 'HIGH' : allowMismatch ? 'FORCED' : 'REVIEW_REQUIRED';
+    const client = await this.db.connect();
+    try {
+      await client.query('begin');
+      await client.query('update material_pool_items set source_path=$3,canonical_path=$3,file_size=$4,modified_at=$5,source_fingerprint=$6,availability=\'VALID\',error_message=null,duration_ms=$7,width=$8,height=$9 where snapshot_id=$1 and asset_id=$2', [snapshotId, assetId, newPath, details.size, details.mtime.toISOString(), fingerprint, Math.round(probe.durationMs), probe.width, probe.height]);
+      await client.query('insert into script_editing_v3_asset_relinks (id,workspace_id,snapshot_id,asset_id,old_fingerprint,new_fingerprint,old_path,new_path,reason,actor) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [`relink-${randomUUID()}`, String(row.workspace_id), snapshotId, assetId, row.source_fingerprint || null, fingerprint, row.source_path || null, newPath, confidence === 'FORCED' ? 'FORCED_MISMATCH' : 'MANUAL_RELINK', actor]);
+      await client.query('commit');
+    } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
+    return { assetId, sourcePath: newPath, sourceFingerprint: fingerprint, availability: 'VALID', confidence };
+  }
+
+  async listRelinks(snapshotId: string, assetId: string): Promise<unknown[]> {
+    const result = await this.db.query('select * from script_editing_v3_asset_relinks where snapshot_id=$1 and asset_id=$2 order by created_at desc,id desc', [snapshotId, assetId]);
+    return result.rows.map((row) => ({ id: String(row.id), assetId: String(row.asset_id), oldFingerprint: row.old_fingerprint, newFingerprint: String(row.new_fingerprint), oldPath: row.old_path, newPath: String(row.new_path), actor: String(row.actor), reason: String(row.reason), createdAt: new Date(String(row.created_at)).toISOString() }));
   }
 
   async generate(sessionId: string): Promise<{ manifestId: string; revision: number }> {
@@ -569,7 +637,9 @@ export class ScriptEditingV3Service {
     const timelineBySentence = new Map(timeline.filter((clip) => clip.sentenceId).map((clip) => [clip.sentenceId!, clip]));
     const manifest: EditManifestV0 = { schemaVersion: 'EDIT_MANIFEST_V0', workspaceId: String(sessionRow.workspace_id), seed: 1, canvas: presentation.canvas, timeline, audio: { ...(sessionRow.voice_path ? { voicePath: String(sessionRow.voice_path) } : {}), ...(music ? { backgroundMusic: music } : {}), volume: 1 }, subtitles: editorialPlan.subtitles, subtitleStyle: presentation.subtitleStyle, presentationSettings: presentation, textOverlays: editorialPlan.textOverlays, metadata: { editMode: 'SCRIPT', sentences: sentences.map((sentence) => { const clip = timelineBySentence.get(sentence.id); const timelineStartMs = clip?.timelineStartMs ?? sentence.startMs; const timelineEndMs = clip?.timelineEndMs ?? timelineStartMs + sentence.durationMs; return { index: sentence.index, text: sentence.text, normalizedText: sentence.text.normalize('NFKC').toLowerCase(), voiceStartMs: sentence.startMs, voiceEndMs: sentence.endMs, timelineStartMs, timelineEndMs, durationMs: sentence.durationMs }; }), materialPoolSnapshotId: snapshot.id, v3SessionId: sessionId, v3Revision: 1, plannerVersion: editorialPlan.plannerVersion }, output: presentation.output };
     validateEditManifest(manifest);
-    return this.persistManifest(sessionId, manifest);
+    const persisted = await this.persistManifest(sessionId, manifest);
+    for (const clip of manifest.timeline.filter((candidate) => candidate.sentenceId)) await this.db.query('insert into script_editing_v3_usage_events (id,workspace_id,session_id,manifest_id,asset_id,event_type,sentence_id) values ($1,$2,$3,$4,$5,\'AUTO_SELECTED\',$6)', [`v3-usage-auto-${randomUUID()}`, String(sessionRow.workspace_id), sessionId, persisted.manifestId, clip.assetId, clip.sentenceId]);
+    return persisted;
   }
 
   async applyOperation(sessionId: string, operation: EditOperationV3): Promise<{ manifestId: string; revision: number }> {
@@ -612,8 +682,9 @@ export class ScriptEditingV3Service {
     if (operation.type === 'REPLACE_CLIP') {
       await this.incrementUsageStats(String(current.session.workspace_id), currentClip.assetId, { replaceCount: 1 });
       await this.incrementUsageStats(String(current.session.workspace_id), operation.assetId, { selectedCount: 1 });
+      await this.db.query('insert into script_editing_v3_usage_events (id,workspace_id,session_id,manifest_id,asset_id,event_type,sentence_id) values ($1,$2,$3,$4,$5,\'REPLACED_OUT\',$6)', [`v3-usage-replaced-${randomUUID()}`, String(current.session.workspace_id), sessionId, result.manifestId, currentClip.assetId, operation.sentenceId]);
     }
-    if (operation.type === 'MANUAL_SELECT_CLIP') await this.incrementUsageStats(String(current.session.workspace_id), operation.assetId, { selectedCount: 1, manualSelectCount: 1 });
+    if (operation.type === 'MANUAL_SELECT_CLIP') { await this.incrementUsageStats(String(current.session.workspace_id), operation.assetId, { selectedCount: 1, manualSelectCount: 1 }); await this.db.query('insert into script_editing_v3_usage_events (id,workspace_id,session_id,manifest_id,asset_id,event_type,sentence_id) values ($1,$2,$3,$4,$5,\'MANUAL_SELECTED\',$6)', [`v3-usage-manual-${randomUUID()}`, String(current.session.workspace_id), sessionId, result.manifestId, operation.assetId, operation.sentenceId]); }
     return result;
   }
 

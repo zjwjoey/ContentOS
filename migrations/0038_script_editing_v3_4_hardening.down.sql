@@ -1,0 +1,14 @@
+drop table if exists script_editing_v3_preview_fragments;
+drop table if exists script_editing_v3_revision_actions;
+drop table if exists script_editing_v3_shots;
+drop table if exists script_editing_v3_shot_detection_runs;
+drop table if exists script_editing_v3_asset_relinks;
+drop table if exists script_editing_v3_evaluation_judgments;
+drop table if exists script_editing_v3_evaluation_queries;
+drop table if exists script_editing_v3_evaluation_items;
+drop table if exists script_editing_v3_evaluation_sets;
+alter table source_segments drop column if exists detector_version, drop column if exists detection_threshold, drop column if exists detection_method, drop column if exists kind;
+drop index if exists script_editing_v3_usage_events_semantics_idx;
+alter table script_editing_v3_usage_events drop column if exists sentence_id, drop column if exists event_type;
+delete from script_editing_v3_usage_events where manifest_id is null or render_id is null;
+alter table script_editing_v3_usage_events alter column manifest_id set not null, alter column render_id set not null;

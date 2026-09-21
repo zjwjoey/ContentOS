@@ -76,12 +76,13 @@ async function main(): Promise<void> {
     return;
   }
   const missingProfiles = goldSet.items.filter((item) => item.visualProfile?.assetId !== item.assetId || item.visualProfile?.modelProvider !== 'QWEN_VL');
-  if (missingProfiles.length) {
+  if (missingProfiles.length && (process.env.QWEN_API_KEY || process.env.QWEN_BASE_URL || process.env.QWEN_API_URL)) {
     console.log(JSON.stringify({ status: 'BLOCKED_BY_DATA', reason: '每条素材必须携带由 Qwen-VL 生成并缓存的 visualProfile；不能用 Gold Set 人工摘要或标签伪造 AI Profile。', missingProfileCount: missingProfiles.length }, null, 2));
     return;
   }
   if (!process.env.QWEN_API_KEY || !(process.env.QWEN_BASE_URL || process.env.QWEN_API_URL)) {
-    console.log(JSON.stringify({ status: 'BLOCKED_BY_DATA', reason: 'AI 检索 benchmark 需要真实 Qwen API 配置；没有配置时不把 Profile 词法回退冒充 semantic 结果。', itemCount: goldSet.items.length, queryCount: goldSet.queries.length }, null, 2));
+    const baseline = metric(goldSet.queries, (query) => keywordRank(query.text, goldSet.items));
+    console.log(JSON.stringify({ status: 'RECORDED', mode: 'BASELINE_RULES_ONLY', schemaVersion: goldSet.schemaVersion, itemCount: goldSet.items.length, queryCount: goldSet.queries.length, baseline, ai: { status: 'NOT_CONFIGURED', interface: 'QWEN_VL_AND_EMBEDDING_RESERVED' }, note: '未配置真实模型时只记录可复现规则基线，不把规则结果标记为 semantic 或 AI 结果。' }, null, 2));
     return;
   }
   const items: MaterialPoolItemV3[] = goldSet.items.map((item) => ({ assetId: item.assetId, sourcePath: item.fileName, fileName: item.fileName, durationMs: item.durationMs || 5_000, width: item.width || 1_920, height: item.height || 1_080, tags: item.tags || [], availability: 'VALID' }));
