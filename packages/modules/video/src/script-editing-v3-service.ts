@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { stat } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import type { Pool } from 'pg';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import { probeMedia } from '../../../infrastructure/ffmpeg/src/index.js';
@@ -13,6 +13,10 @@ import { segmentScriptSentences } from './sentence-segmenter.js';
 import type { AssetVisualProfileV3 } from '../../../contracts/src/index.js';
 import { createVisualQueryProvider, RuleVisualQueryProvider, type VisualQueryProvider } from './visual-query.js';
 import { InMemoryMaterialSemanticIndex, QwenEmbeddingProvider, type EmbeddingProvider, type MaterialSemanticIndex } from './semantic-index.js';
+import { CompositeReadableDraftAdapter, JianyingEncryptedDraftAdapter, PlainJsonDraftAdapter, type ReadableDraftAdapter } from './jianying-draft-adapter.js';
+
+export { CompositeReadableDraftAdapter, JianyingEncryptedDraftAdapter, JianyingRuntimeLocator, JianyingVideoEditorDllAdapter, PlainJsonDraftAdapter } from './jianying-draft-adapter.js';
+export type { ReadableDraftAdapter } from './jianying-draft-adapter.js';
 
 type SentenceV3 = { id: string; index: number; text: string; startMs: number; endMs: number; durationMs: number };
 type PoolRow = Record<string, unknown>;
@@ -93,46 +97,8 @@ function scoreCandidate(sentence: SentenceV3, item: MaterialPoolItemV3, profile?
 
 export function rankMaterialCandidateV3(input: { text: string; durationMs: number }, item: MaterialPoolItemV3): CandidateV3 { return scoreCandidate({ id: 'sentence', index: 0, text: input.text, startMs: 0, endMs: input.durationMs, durationMs: input.durationMs }, item); }
 
-export interface ReadableDraftAdapter {
-  readonly id: string;
-  read(path: string): Promise<{ rootPath: string; payloads: Record<string, unknown>[] }>;
-}
-
-export class PlainJsonDraftAdapter implements ReadableDraftAdapter {
-  readonly id = 'PLAIN_JSON';
-  async read(path: string): Promise<{ rootPath: string; payloads: Record<string, unknown>[] }> {
-    const absolutePath = resolve(path);
-    const pathStat = await stat(absolutePath).catch(() => null);
-    if (!pathStat) throw new Error('JIANYING_DRAFT_NOT_FOUND');
-    const rootPath = pathStat.isDirectory() ? absolutePath : dirname(absolutePath);
-    const payloads: Record<string, unknown>[] = [];
-    if (pathStat.isDirectory()) {
-      for (const fileName of ['draft_content.json', 'draft_info.json']) {
-        const content = await readFile(join(absolutePath, fileName), 'utf8').catch(() => null);
-        if (content) {
-          try { payloads.push(JSON.parse(content) as Record<string, unknown>); } catch { throw new Error('JIANYING_DRAFT_INVALID_JSON'); }
-        }
-      }
-      if (!payloads.length) throw new Error('JIANYING_DRAFT_CONTENT_NOT_FOUND');
-    } else {
-      try { payloads.push(JSON.parse(await readFile(absolutePath, 'utf8')) as Record<string, unknown>); } catch { throw new Error('JIANYING_DRAFT_INVALID_JSON'); }
-    }
-    return { rootPath, payloads };
-  }
-}
-
-export class JianyingVideoEditorDllAdapter implements ReadableDraftAdapter {
-  readonly id = 'JIANYING_VIDEOEDITOR_DLL';
-  readonly status: 'AVAILABLE' | 'UNAVAILABLE';
-  constructor(private readonly dllPath = process.env.JIANYING_VIDEOEDITOR_DLL) { this.status = dllPath ? 'AVAILABLE' : 'UNAVAILABLE'; }
-  async read(_path: string): Promise<{ rootPath: string; payloads: Record<string, unknown>[] }> {
-    if (this.status !== 'AVAILABLE') throw new Error('JIANYING_VIDEOEDITOR_DLL_UNAVAILABLE');
-    throw new Error('JIANYING_VIDEOEDITOR_DLL_ADAPTER_NOT_IMPLEMENTED');
-  }
-}
-
 export class JianyingDraftImporter {
-  constructor(private readonly db: Pool, private readonly adapter: ReadableDraftAdapter = new PlainJsonDraftAdapter()) {}
+  constructor(private readonly db: Pool, private readonly adapter: ReadableDraftAdapter = new CompositeReadableDraftAdapter(new PlainJsonDraftAdapter(), new JianyingEncryptedDraftAdapter())) {}
 
   private async ensureLocalAsset(workspaceId: string, sourcePath: string): Promise<string> {
     const canonicalPath = resolve(sourcePath);

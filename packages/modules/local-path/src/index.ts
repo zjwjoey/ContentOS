@@ -103,7 +103,7 @@ export class LocalPathAccessService {
   async authorize(path: string, purpose: LocalPathPurpose): Promise<string> {
     const policy = purposeKind(purpose);
     const inspected = await this.inspect(path);
-    if (policy.file ? !inspected.isFile : !inspected.isDirectory) throw new Error(policy.file ? 'LOCAL_PATH_FILE_REQUIRED' : 'LOCAL_PATH_DIRECTORY_REQUIRED');
+    if (!policy.either && (policy.file ? !inspected.isFile : !inspected.isDirectory)) throw new Error(policy.file ? 'LOCAL_PATH_FILE_REQUIRED' : 'LOCAL_PATH_DIRECTORY_REQUIRED');
     const grants = await this.options.db.query<{ id: string; canonical_path: string; kind: LocalPathGrantKind; mode: LocalPathGrantMode }>(
       'select id::text, canonical_path, kind, mode from local_path_grants where kind=$1 or ($2=true and kind in (\'MEDIA_ROOT\',\'MUSIC_ROOT\',\'OUTPUT_ROOT\'))',
       [policy.kind, policy.kind === 'VOICE_FILE' || policy.kind === 'PRIORITY_ASSET' || policy.kind === 'JIANYING_DRAFT'],

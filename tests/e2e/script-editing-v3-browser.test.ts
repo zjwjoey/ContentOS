@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
@@ -9,6 +9,33 @@ import { generateFixtureVideo } from '../../packages/infrastructure/ffmpeg/src/i
 const baseUrl = process.env.CONTENTOS_OPERATOR_URL;
 const fixtureDir = process.env.CONTENTOS_BROWSER_FIXTURE_DIR;
 const fixtureVideos = process.env.CONTENTOS_BROWSER_FIXTURE_VIDEOS ? JSON.parse(process.env.CONTENTOS_BROWSER_FIXTURE_VIDEOS) as string[] : [];
+
+test('Script Editing V3 browser flow imports Jianying draft files and directories', async () => {
+  assert.ok(baseUrl && fixtureDir, 'V3 browser harness must provide a fixture directory');
+  const browser = await chromium.launch({ headless: true, ...(process.env.CONTENTOS_BROWSER_EXECUTABLE ? { executablePath: process.env.CONTENTOS_BROWSER_EXECUTABLE } : {}) });
+  const page = await browser.newPage();
+  const filePath = join(fixtureDir!, 'jianying-browser-file.json');
+  const directoryPath = join(fixtureDir!, 'jianying-browser-directory');
+  await mkdir(directoryPath, { recursive: true });
+  await writeFile(filePath, JSON.stringify({ draft_id: 'browser-file-draft', draft_name: '浏览器文件草稿' }));
+  await writeFile(join(directoryPath, 'draft_content.json'), JSON.stringify({ draft_id: 'browser-directory-draft', draft_name: '浏览器目录草稿' }));
+  try {
+    await page.goto(`${baseUrl}/edit/script`, { waitUntil: 'domcontentloaded' });
+    const draftInput = page.locator('input[placeholder="只读导入剪映草稿文件或草稿目录（可选）"]');
+    const importDraft = async (draftPath: string) => {
+      await draftInput.fill('');
+      await draftInput.pressSequentially(draftPath, { delay: 1 });
+      await page.waitForFunction(() => {
+        const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '导入剪映历史');
+        return Boolean(button && !(button as HTMLButtonElement).disabled);
+      }, undefined, { timeout: 10_000 });
+      await page.getByRole('button', { name: '导入剪映历史' }).click();
+      await page.getByText(/已只读导入剪映草稿/).waitFor({ state: 'visible', timeout: 60_000 });
+    };
+    await importDraft(filePath);
+    await importDraft(directoryPath);
+  } finally { await browser.close(); }
+});
 
 test('Script Editing V3 browser flow covers pool, candidates, locking and full preview', async () => {
   assert.ok(baseUrl && fixtureDir && fixtureVideos.length >= 3, 'V3 browser harness must provide fixtures');

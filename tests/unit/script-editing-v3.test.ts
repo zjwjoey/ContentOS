@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { representativeFrameTimestamps } from '../../packages/infrastructure/ffmpeg/src/index.js';
-import { buildVisualQueriesV3, JianyingVideoEditorDllAdapter, PlainJsonDraftAdapter, rankMaterialCandidateV3 } from '../../packages/modules/video/src/index.js';
+import { buildVisualQueriesV3, CompositeReadableDraftAdapter, JianyingEncryptedDraftAdapter, JianyingRuntimeLocator, JianyingVideoEditorDllAdapter, PlainJsonDraftAdapter, rankMaterialCandidateV3, type ReadableDraftAdapter } from '../../packages/modules/video/src/index.js';
 import { InMemoryMaterialSemanticIndex, QwenEmbeddingProvider, QwenVisualQueryProvider, QwenVisualAnalysisProvider } from '../../packages/modules/video/src/index.js';
 import { validateEditManifest, type EditManifestV0 } from '../../packages/contracts/src/index.js';
 import { segmentationChanged } from '../../apps/web/app/edit/script/segmentation-policy.js';
@@ -126,8 +127,70 @@ test('Jianying draft adapters keep JSON parsing separate from unavailable DLL in
     assert.equal(readable.rootPath, draftDirectory);
     assert.equal(readable.payloads[0]?.draft_id, 'draft-1');
     assert.equal(new JianyingVideoEditorDllAdapter().status, 'UNAVAILABLE');
-    await assert.rejects(new JianyingVideoEditorDllAdapter().read(draftDirectory), /JIANYING_VIDEOEDITOR_DLL_UNAVAILABLE/);
+    await assert.rejects(new JianyingVideoEditorDllAdapter(undefined, { platform: 'win32' }).read(draftDirectory), /JIANYING_VIDEOEDITOR_DLL_UNAVAILABLE/);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('Composite draft reader keeps plaintext on the plain adapter', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'contentos-v3-plain-first-')); const file = join(directory, 'draft_content.json'); await writeFile(file, JSON.stringify({ draft_id: 'plain' }));
+  let encryptedCalls = 0;
+  const encrypted: ReadableDraftAdapter = { id: 'FAKE_ENCRYPTED', async read() { encryptedCalls += 1; throw new Error('unexpected fallback'); } };
+  try {
+    const readable = await new CompositeReadableDraftAdapter(new PlainJsonDraftAdapter(), encrypted).read(file);
+    assert.equal(readable.payloads[0]?.draft_id, 'plain'); assert.equal(encryptedCalls, 0);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('Composite draft reader falls back only for encrypted-format errors', async () => {
+  let encryptedCalls = 0;
+  const plain: ReadableDraftAdapter = { id: 'FAKE_PLAIN', async read() { throw new Error('JIANYING_DRAFT_INVALID_JSON'); } };
+  const encrypted: ReadableDraftAdapter = { id: 'FAKE_ENCRYPTED', async read() { encryptedCalls += 1; return { rootPath: 'draft', payloads: [{ draft_id: 'encrypted' }] }; } };
+  const readable = await new CompositeReadableDraftAdapter(plain, encrypted).read('draft');
+  assert.equal(readable.payloads[0]?.draft_id, 'encrypted'); assert.equal(encryptedCalls, 1);
+});
+
+test('Composite draft reader does not send missing or permission errors to the DLL path', async () => {
+  let encryptedCalls = 0;
+  const plain: ReadableDraftAdapter = { id: 'FAKE_PLAIN', async read() { throw new Error('JIANYING_DRAFT_NOT_FOUND'); } };
+  const encrypted: ReadableDraftAdapter = { id: 'FAKE_ENCRYPTED', async read() { encryptedCalls += 1; return { rootPath: 'draft', payloads: [] }; } };
+  await assert.rejects(new CompositeReadableDraftAdapter(plain, encrypted).read('draft'), /JIANYING_DRAFT_NOT_FOUND/);
+  assert.equal(encryptedCalls, 0);
+});
+
+function fakeRuntime(options: { dll?: string; helper?: string }): JianyingRuntimeLocator {
+  return { findVideoEditorDll: async () => options.dll, findDraftHelper: async () => options.helper } as JianyingRuntimeLocator;
+}
+
+test('Encrypted draft adapter copies input, uses the helper contract, and cleans up on success', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'contentos-v3-encrypted-success-')); const source = join(directory, 'draft_content.json'); await writeFile(source, '{encrypted}');
+  const hash = async () => createHash('sha256').update(await readFile(source)).digest('hex'); const originalHash = await hash();
+  let inputPath = ''; let outputDirectory = '';
+  const adapter = new JianyingEncryptedDraftAdapter({ platform: 'win32', temporaryRoot: directory, locator: fakeRuntime({ dll: 'C:\\Jianying\\videoeditor.dll', helper: 'C:\\ContentOS\\jianying-draft-helper.exe' }), executor: async (_helper, args) => { inputPath = args[1]!; outputDirectory = args[3]!; await writeFile(inputPath, 'mutated temp copy'); await writeFile(join(outputDirectory, 'draft_content.json'), JSON.stringify({ draft_id: 'decrypted' })); return { stdout: JSON.stringify({ status: 'ok', files: ['draft_content.json'] }), stderr: '' }; } });
+  try {
+    const readable = await adapter.read(source);
+    assert.equal(readable.payloads[0]?.draft_id, 'decrypted'); assert.equal(await hash(), originalHash);
+    await assert.rejects(() => stat(inputPath)); await assert.rejects(() => stat(outputDirectory));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('Encrypted draft adapter cleans up temporary files when the helper fails', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'contentos-v3-encrypted-failure-')); const source = join(directory, 'draft_content.json'); await writeFile(source, '{encrypted}'); let temporaryDirectory = '';
+  const adapter = new JianyingEncryptedDraftAdapter({ platform: 'win32', temporaryRoot: directory, locator: fakeRuntime({ dll: 'videoeditor.dll', helper: 'helper.exe' }), executor: async (_helper, args) => { temporaryDirectory = args[1]!.split('input')[0]!; throw new Error('helper crashed'); } });
+  try { await assert.rejects(() => adapter.read(source), /JIANYING_HELPER_FAILED/); await assert.rejects(() => stat(temporaryDirectory)); } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('Encrypted draft adapter reports missing runtime components and invalid helper output distinctly', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'contentos-v3-encrypted-errors-')); const source = join(directory, 'draft_content.json'); await writeFile(source, '{encrypted}');
+  try {
+    await assert.rejects(() => new JianyingEncryptedDraftAdapter({ platform: 'win32', locator: fakeRuntime({ helper: 'helper.exe' }) }).read(source), /JIANYING_VIDEOEDITOR_DLL_UNAVAILABLE/);
+    await assert.rejects(() => new JianyingEncryptedDraftAdapter({ platform: 'win32', locator: fakeRuntime({ dll: 'videoeditor.dll' }) }).read(source), /JIANYING_HELPER_UNAVAILABLE/);
+    const invalid = new JianyingEncryptedDraftAdapter({ platform: 'win32', locator: fakeRuntime({ dll: 'videoeditor.dll', helper: 'helper.exe' }), executor: async () => ({ stdout: 'not-json', stderr: '' }) });
+    await assert.rejects(() => invalid.read(source), /JIANYING_DECRYPT_OUTPUT_INVALID/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('Encrypted draft adapter requires the Windows runtime on non-Windows hosts', async () => {
+  await assert.rejects(() => new JianyingEncryptedDraftAdapter({ platform: 'linux' }).read('draft'), /JIANYING_ENCRYPTED_DRAFT_REQUIRES_WINDOWS_RUNTIME/);
 });
 
 test('Qwen embedding provider validates vectors before indexing', async () => {
