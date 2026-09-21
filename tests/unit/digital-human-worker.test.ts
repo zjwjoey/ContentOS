@@ -23,6 +23,12 @@ test('Digital Human dev runner polls and recovers on independent timers', async 
   assert.equal(polls, stoppedPolls); assert.equal(recoveries, stoppedRecoveries);
 });
 
+test('Digital Human dev runner waits for an in-flight poll before shutdown', async () => {
+  let calls = 0; let pollFinished = false;
+  const runner = createDigitalHumanDevRunner(fakeDependencies({ listRunnable: async () => { calls += 1; if (calls > 1) await new Promise((resolve) => setTimeout(resolve, 30)); pollFinished = true; return []; }, reconcileExpiredLeases: async () => 0 }), { pollIntervalMs: 10_000, recoveryIntervalMs: 10_000 });
+  await runner.start(); pollFinished = false; const pending = runner.pollOnce(); await new Promise((resolve) => setTimeout(resolve, 5)); let stopFinished = false; const stopping = runner.stop('SIGTERM').then(() => { stopFinished = true; }); await new Promise((resolve) => setTimeout(resolve, 5)); assert.equal(stopFinished, false); assert.equal(pollFinished, false); await pending; await stopping; assert.equal(stopFinished, true); assert.equal(pollFinished, true);
+});
+
 test('Digital Human worker cancels an external avatar task when its job is aborted', async () => {
   const cancelledTasks: string[] = [];
   const cancelledGenerations: string[] = [];

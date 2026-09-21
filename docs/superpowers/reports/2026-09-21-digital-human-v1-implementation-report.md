@@ -15,6 +15,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - API routes under `/api/v1/projects/:projectId/digital-human/*`.
 - Durable speech/avatar worker handlers with retry behavior and external-task recovery.
 - Runnable local Worker composition with explicit `SPEECH_GENERATE` / `AVATAR_LIPSYNC_GENERATE` polling and expired-lease recovery (`pnpm dev:digital-human`).
+- The Worker package now has a real `start` entrypoint and graceful shutdown waits for in-flight polling/Jobs before closing the runtime and database; the composition-only module remains protected from direct execution.
 - Project workspace entry at `/projects/:id/avatar`.
 - Runtime provider selection through environment/config, with fail-closed unavailable providers when production credentials or gateways are missing.
 - Capability checks now fail closed for unconfigured speech/avatar providers instead of reporting synthetic capability objects as `READY`; media staging readiness is exposed alongside provider capabilities.
@@ -48,13 +49,13 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 
 - Targeted TypeScript compilation: passed.
 - Digital Human/config/worker unit tests and provider contract checks: passed.
-- Digital Human/API/provider suite: 20 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, the Worker-to-Asset vertical slice, probed Speech Asset duration, API cancellation with remote `cancelTask` invocation, lease-recovery cancellation, Worker preflight failure recording, oversized-result protection, concurrent Speech/Avatar idempotency and retry checks, signed staging, subtitle Asset persistence, authenticated capability health-checks, public-staging URL validation, fail-closed capability checks, external-task cancellation, and terminal-task replacement.
+- Digital Human/API/provider suite: 21 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, the Worker-to-Asset vertical slice, probed Speech Asset duration, API cancellation with remote `cancelTask` invocation, lease-recovery cancellation, graceful shutdown waiting, Worker preflight failure recording, oversized-result protection, concurrent Speech/Avatar idempotency and retry checks, signed staging, subtitle Asset persistence, authenticated capability health-checks, public-staging URL validation, fail-closed capability checks, external-task cancellation, and terminal-task replacement.
 - The Digital Human API integration suite also verifies subtitle generation creates a `TEXT` Asset and that the stored subtitle can be downloaded through the project Asset route.
-- Format check: passed (468 files).
-- Lint check: passed (176 TypeScript files).
+- Format check: passed (469 files).
+- Lint check: passed (177 TypeScript files).
 - `git diff --check`: passed.
 - Full TypeScript baseline: passed after restoring the workspace dependency links with the lockfile's `autoInstallPeers=false` setting.
-- Full baseline test run: the previously verified direct run recorded 280 passed / 3 failed when pointed at the configured PostgreSQL test service on port `55433`. All remaining failures are shared test-database migration-history issues: that database still records the pre-existing `0037_script_editing_v3_settings` migration, whose down file is not present in this branch. The clean temporary-schema migration matrix passes 9/9, and the current Digital Human test suite passes 20/20.
+- Full baseline test run: the previously verified direct run recorded 280 passed / 3 failed when pointed at the configured PostgreSQL test service on port `55433`. All remaining failures are shared test-database migration-history issues: that database still records the pre-existing `0037_script_editing_v3_settings` migration, whose down file is not present in this branch. The clean temporary-schema migration matrix passes 9/9, and the current Digital Human test suite passes 21/21.
 - Root TypeScript build, Web production build, format, lint, typecheck, and `git diff --check` pass on the current worktree. The Web build was run directly from `apps/web` because the isolated worktree's root `node_modules` is a junction to the original repository and pnpm 11 refuses that junction for task-state storage.
 
 ## Runtime status
