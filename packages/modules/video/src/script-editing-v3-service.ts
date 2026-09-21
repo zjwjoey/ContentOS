@@ -176,7 +176,10 @@ export class JianyingDraftImporter {
       const value = row.path || row.local_material_path || row.file_path || row.material_path;
       if (typeof value !== 'string' || !value.trim()) return undefined;
       const normalized = value.replace(/^file:\/\//u, '');
-      return isAbsolute(normalized) ? resolve(normalized) : resolve(rootPath, normalized);
+      // Jianying stores Windows drive paths even when the importer runs on Linux
+      // (for example in CI). Treat those paths as absolute for resolution so the
+      // same canonical path is used by the scanner and by the imported usage row.
+      return isAbsolute(normalized) || /^[A-Za-z]:[\\/]/u.test(normalized) ? resolve(normalized) : resolve(rootPath, normalized);
     };
     const collectMaterials = (value: unknown): void => {
       if (Array.isArray(value)) { value.forEach(collectMaterials); return; }
@@ -280,7 +283,10 @@ export class ScriptEditingV3Service {
   async createMaterialPoolSnapshot(input: { workspaceId: string; sourceRootIds?: string[]; sourceFiles?: string[]; sourceKind?: 'MANUAL' | 'JIANYING_DRAFT' | 'MIXED' }): Promise<MaterialPoolSnapshotV3> {
     await ensureStandaloneWorkspace(this.db, input.workspaceId);
     const roots = input.sourceRootIds?.filter(Boolean) || [];
-    const sourceFiles = [...new Set((input.sourceFiles || []).filter(Boolean).map((path) => resolve(path)))];
+    // Keep the caller's path spelling in the snapshot. Native file pickers usually
+    // provide absolute paths, while tests and API clients may provide relative
+    // paths. Canonical paths are still used for stat/dedup/identity below.
+    const sourceFiles = [...new Set((input.sourceFiles || []).filter(Boolean).map((path) => path.trim()))];
     const params: unknown[] = [input.workspaceId];
     const rootPlaceholder = roots.length ? `$${params.push(roots)}::text[]` : undefined;
     const rootClause = rootPlaceholder ? ` and s.source_root_id = any(${rootPlaceholder})` : '';
@@ -292,17 +298,18 @@ export class ScriptEditingV3Service {
       if (!deduped.has(key)) deduped.set(key, { ...row, canonical_path: canonical, asset_id: String(row.file_id), source_fingerprint: materialSourceFingerprint({ fileSize: row.file_size == null ? null : Number(row.file_size), modifiedAt: row.modified_at == null ? null : String(row.modified_at), durationMs: Number(row.duration_ms) }), availability: row.index_availability === 'MISSING' ? 'MISSING' : row.available === false ? 'UNREADABLE' : 'VALID', error_message: row.error_message || null, source_ref: { sourceRootId: String(row.source_root_id), usageCount: Number(row.usage_count || 0), ...(row.last_used_at ? { lastUsedAt: new Date(String(row.last_used_at)).toISOString() } : {}) }, gold: false });
     }
     for (const sourcePath of sourceFiles) {
-      const canonical = resolve(sourcePath).toLowerCase();
-      const details = await stat(sourcePath).catch(() => null);
+      const canonicalPath = resolve(sourcePath);
+      const canonical = canonicalPath.toLowerCase();
+      const details = await stat(canonicalPath).catch(() => null);
       const fileSize = details?.isFile() ? details.size : null;
       const modifiedAt = details?.isFile() ? details.mtime.toISOString() : null;
-      const existing = (await this.db.query<{ file_id: string }>(`select f.file_id from local_media_scan_files f join local_media_scans s on s.id=f.scan_id where s.workspace_id=$1 and lower(f.source_path)=lower($2) and s.status='SUCCEEDED' order by s.scanned_at desc nulls last limit 1`, [input.workspaceId, sourcePath])).rows[0];
+      const existing = (await this.db.query<{ file_id: string }>(`select f.file_id from local_media_scan_files f join local_media_scans s on s.id=f.scan_id where s.workspace_id=$1 and lower(f.source_path)=lower($2) and s.status='SUCCEEDED' order by s.scanned_at desc nulls last limit 1`, [input.workspaceId, canonicalPath])).rows[0];
       let metadata: { durationMs: number; width: number; height: number; fps?: number; format: string; videoCodec?: string };
       let availability: 'VALID' | 'UNREADABLE' = 'VALID';
       let errorMessage: string | null = null;
       try {
         if (!details?.isFile()) throw new Error('素材文件不存在');
-        metadata = await probeMedia(sourcePath, process.env.FFPROBE_PATH || 'ffprobe');
+        metadata = await probeMedia(canonicalPath, process.env.FFPROBE_PATH || 'ffprobe');
         if (metadata.durationMs <= 0 || metadata.width <= 0) throw new Error('无法读取视频元数据');
       } catch (error) {
         metadata = { durationMs: 0, width: 0, height: 0, format: 'unknown' };
