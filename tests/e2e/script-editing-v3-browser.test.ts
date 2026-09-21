@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, rm, unlink, writeFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
@@ -120,6 +120,16 @@ test('Script Editing V3 browser flow covers pool, candidates, locking and full p
     await firstCard.getByRole('button', { name: '保存 Trim' }).click();
     await page.getByText('已保存 Source Monitor 区间').waitFor({ state: 'visible', timeout: 10_000 });
 
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await page.getByText('已撤销到上一版；快速预览已过期。').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByRole('button', { name: '重做', exact: true }).click();
+    await page.getByText('已恢复下一版；快速预览已过期。').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByText(/Revision History/).click();
+    await page.getByText(/变更句子/).first().waitFor({ state: 'visible', timeout: 10_000 });
+    const firstPoolPreview = page.locator('.material-preview-card').first();
+    await firstPoolPreview.getByRole('button', { name: '检测镜头' }).click();
+    await page.getByText(/镜头检测完成：/).waitFor({ state: 'visible', timeout: 120_000 });
+
     const revisionPreview = page.locator('section.card').filter({ hasText: 'V3.4 Revision / Preview' });
     await revisionPreview.getByRole('button', { name: '更新 Draft Preview' }).click();
     await page.getByText(/Draft Preview 已完成：复用/).waitFor({ state: 'visible', timeout: 120_000 });
@@ -191,4 +201,39 @@ test('Script Editing V3 degraded journey stays manual when Qwen is not configure
     await page.locator('video.history-preview').last().waitFor({ state: 'visible', timeout: 120_000 });
     await page.getByText('整片已完成，可以播放并按时间定位句子。').waitFor({ state: 'visible', timeout: 15_000 });
   } finally { await browser.close(); }
+});
+
+test('Script Editing V3.4 browser closure covers Asset Library and Gold Set workflow', async () => {
+  assert.ok(baseUrl && fixtureDir && fixtureVideos.length >= 1, 'V3 browser harness must provide fixtures');
+  const browser = await chromium.launch({ headless: true, ...(process.env.CONTENTOS_BROWSER_EXECUTABLE ? { executablePath: process.env.CONTENTOS_BROWSER_EXECUTABLE } : {}) });
+  const page = await browser.newPage();
+  const workspaceId = 'workspace-v3';
+  const root = join(fixtureDir!, 'asset-library-closure');
+  const source = join(root, 'closure-original.mp4');
+  const movedRoot = join(fixtureDir!, 'asset-library-moved');
+  const moved = join(movedRoot, 'closure-moved.mp4');
+  try {
+    await mkdir(root, { recursive: true }); await mkdir(movedRoot, { recursive: true }); await copyFile(fixtureVideos[0]!, source); await copyFile(source, moved);
+    const scanResponse = await page.request.post(`${baseUrl}/api/v1/edit/v3/scans`, { data: { workspaceId, sourceRoot: root, recursive: false } });
+    assert.ok([201, 202].includes(scanResponse.status()), await scanResponse.text());
+    const scan = await scanResponse.json() as { scanId: string; jobId: string; sourceRootId: string };
+    for (let attempt = 0; attempt < 90; attempt += 1) { const job = await page.request.get(`${baseUrl}/api/v1/jobs/${scan.jobId}`); if (job.ok() && (await job.json() as { state: string }).state === 'SUCCEEDED') break; await new Promise((resolve) => setTimeout(resolve, 250)); }
+    await unlink(source);
+    await page.goto(`${baseUrl}/assets/library`, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('heading', { name: '长期素材库' }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByText('MISSING').first().waitFor({ state: 'visible', timeout: 15_000 });
+    const fileId = `${scan.sourceRootId}:closure-original.mp4`;
+    const relink = await page.request.post(`${baseUrl}/api/v1/video/local-media/index/${encodeURIComponent(fileId)}/relink?workspaceId=${encodeURIComponent(workspaceId)}`, { data: { sourcePath: moved } });
+    assert.equal(relink.status(), 200, await relink.text()); assert.equal((await relink.json() as { confidence: string }).confidence, 'HIGH');
+
+    const items = Array.from({ length: 100 }, (_, index) => ({ assetId: `closure-asset-${index + 1}`, fileName: `closure-${index + 1}.mp4`, durationMs: 6_000, tags: index % 2 ? ['货架'] : ['门店外景'] }));
+    const queries = Array.from({ length: 10 }, (_, index) => ({ id: `closure-query-${index + 1}`, visualNeed: index === 0 ? '顾客在货架区域挑选商品' : `Visual Need ${index + 1}`, usableAssetIds: [items[index]!.assetId], forbiddenAssetIds: [items[index + 50]!.assetId] }));
+    const imported = await page.request.post(`${baseUrl}/api/v1/edit/v3/evaluation-sets/import`, { data: { workspaceId, name: 'Browser Closure Gold Set', idempotencyKey: 'browser-closure-gold-set', items, queries } });
+    assert.equal(imported.status(), 201, await imported.text()); const set = await imported.json() as { id: string };
+    await page.goto(`${baseUrl}/edit/script/v3/evaluation/${encodeURIComponent(set.id)}`, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('heading', { name: 'Browser Closure Gold Set' }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByPlaceholder('新增 Visual Need，例如：仓库备货').fill('仓库备货'); await page.getByRole('button', { name: '创建 Visual Need' }).click(); await page.getByText('仓库备货').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByPlaceholder('搜索文件名或标签').fill('closure-1'); await page.getByRole('button', { name: '最佳' }).first().click(); await page.getByText('人工判定已保存').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByRole('button', { name: '运行 Rules Baseline' }).click(); await page.getByText('BASELINE_RULES', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 });
+  } finally { await browser.close(); await rm(root, { recursive: true, force: true }); await rm(movedRoot, { recursive: true, force: true }); }
 });

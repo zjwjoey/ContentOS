@@ -732,7 +732,7 @@ export class ScriptEditingV3Service {
       const previous = session.current_manifest_id ? String(session.current_manifest_id) : null;
       if (previous) await client.query("update edit_manifests set status='SUPERSEDED' where id=$1 and status='PERSISTED'", [previous]);
       const manifestId = `manifest-${randomUUID()}`;
-      await client.query('insert into edit_manifests (id,project_id,workspace_id,revision,schema_version,manifest,manifest_digest,status,created_by,edit_operations) values ($1,null,$2,$3,$4,$5,$6,$7,$8,$9)', [manifestId, String(session.workspace_id), revision, 'EDIT_MANIFEST_V0', manifest, digestEditManifest(manifest), 'PERSISTED', 'script-editing-v3', operation ? JSON.stringify([operation]) : '[]']);
+      await client.query('insert into edit_manifests (id,project_id,workspace_id,revision,schema_version,manifest,manifest_digest,status,parent_manifest_id,created_by,edit_operations) values ($1,null,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [manifestId, String(session.workspace_id), revision, 'EDIT_MANIFEST_V0', manifest, digestEditManifest(manifest), 'PERSISTED', previous, 'script-editing-v3', operation ? JSON.stringify([operation]) : '[]']);
       await client.query("update script_editing_v3_sessions set current_manifest_id=$2,revision=$3,status='READY',updated_at=now() where id=$1", [sessionId, manifestId, revision]);
       await client.query('delete from clip_instances where session_id=$1', [sessionId]);
       for (const clip of manifest.timeline) if (clip.sentenceId) {

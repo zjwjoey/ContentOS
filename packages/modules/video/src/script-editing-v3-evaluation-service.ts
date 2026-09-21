@@ -37,6 +37,36 @@ export class ScriptEditingV3EvaluationService {
     return { queryId: String(row.query_id), assetId: String(row.asset_id), label: String(row.label), reason: row.reason || null, annotator: String(row.annotator) };
   }
 
+  async addQuery(input: { setId: string; visualNeed: string; usableAssetIds?: string[]; forbiddenAssetIds?: string[] }): Promise<{ id: string; visualNeed: string; usableAssetIds: string[]; forbiddenAssetIds: string[] }> {
+    const set = await this.db.query('select id from script_editing_v3_evaluation_sets where id=$1', [input.setId]);
+    if (!set.rowCount) throw new Error('EVALUATION_SET_NOT_FOUND');
+    const usableAssetIds = input.usableAssetIds || []; const forbiddenAssetIds = input.forbiddenAssetIds || [];
+    const assets = [...new Set([...usableAssetIds, ...forbiddenAssetIds])];
+    if (assets.length) {
+      const result = await this.db.query('select asset_id from script_editing_v3_evaluation_items where set_id=$1 and asset_id=any($2::text[])', [input.setId, assets]);
+      if (result.rowCount !== assets.length) throw new Error('EVALUATION_JUDGMENT_REFERENCE_INVALID');
+    }
+    const id = `visual-need-${randomUUID()}`;
+    await this.db.query('insert into script_editing_v3_evaluation_queries (id,set_id,visual_need,usable_asset_ids,forbidden_asset_ids) values ($1,$2,$3,$4,$5)', [id, input.setId, input.visualNeed.trim(), JSON.stringify(usableAssetIds), JSON.stringify(forbiddenAssetIds)]);
+    return { id, visualNeed: input.visualNeed.trim(), usableAssetIds, forbiddenAssetIds };
+  }
+
+  async baseline(setId: string): Promise<{ model: 'BASELINE_RULES'; queryCount: number; top1Usable: number; top3ContainsUsable: number; top5ContainsUsable: number; forbiddenHitRate: number; duplicateRate: number; queryLatencyMs: { p50: number; p95: number; max: number } }> {
+    const started = performance.now();
+    const dataset = await this.get(setId); if (!dataset) throw new Error('EVALUATION_SET_NOT_FOUND');
+    const rows: number[] = []; let top1 = 0; let top3 = 0; let top5 = 0; let forbiddenHits = 0; const allResults: string[][] = [];
+    const itemRows = dataset.items as Array<{ assetId: string; fileName: string; tags: string[] }>;
+    for (const query of dataset.queries as Array<{ id: string; visualNeed: string; usableAssetIds: string[]; forbiddenAssetIds: string[] }>) {
+      const queryStart = performance.now(); const tokens = query.visualNeed.toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+      const ranked = itemRows.map((item) => ({ id: item.assetId, score: tokens.reduce((score, token) => score + (`${item.fileName} ${item.tags.join(' ')}`.toLocaleLowerCase().includes(token) ? 1 : 0), 0) })).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).map((item) => item.id);
+      const usable = new Set(query.usableAssetIds || (dataset.judgments as Array<{ queryId: string; assetId: string; label: string }>).filter((item) => item.queryId === query.id && ['BEST', 'USABLE'].includes(item.label)).map((item) => item.assetId));
+      const forbidden = new Set(query.forbiddenAssetIds || (dataset.judgments as Array<{ queryId: string; assetId: string; label: string }>).filter((item) => item.queryId === query.id && item.label === 'FORBIDDEN').map((item) => item.assetId));
+      if (ranked[0] && usable.has(ranked[0])) top1 += 1; if (ranked.slice(0, 3).some((id) => usable.has(id))) top3 += 1; if (ranked.slice(0, 5).some((id) => usable.has(id))) top5 += 1; if (ranked.slice(0, 5).some((id) => forbidden.has(id))) forbiddenHits += 1; allResults.push(ranked.slice(0, 5)); rows.push(performance.now() - queryStart);
+    }
+    const sorted = rows.sort((a, b) => a - b); const percentile = (value: number) => sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * value))]! : 0; const duplicateCount = allResults.flat().length - new Set(allResults.flat()).size;
+    return { model: 'BASELINE_RULES', queryCount: dataset.queries.length, top1Usable: dataset.queries.length ? top1 / dataset.queries.length : 0, top3ContainsUsable: dataset.queries.length ? top3 / dataset.queries.length : 0, top5ContainsUsable: dataset.queries.length ? top5 / dataset.queries.length : 0, forbiddenHitRate: dataset.queries.length ? forbiddenHits / dataset.queries.length : 0, duplicateRate: allResults.flat().length ? duplicateCount / allResults.flat().length : 0, queryLatencyMs: { p50: percentile(0.5), p95: percentile(0.95), max: sorted.at(-1) || 0 } };
+  }
+
   async importSet(input: { workspaceId: string; name: string; snapshotId?: string; idempotencyKey?: string | undefined; items: EvaluationItemInput[]; queries: EvaluationQueryInput[]; judgments?: EvaluationJudgmentInput[] | undefined }): Promise<NonNullable<Awaited<ReturnType<ScriptEditingV3EvaluationService['get']>>>> {
     if (input.items.length < 100 || input.items.length > 300) throw new Error('EVALUATION_ITEM_COUNT_INVALID');
     if (input.queries.length < 10 || input.queries.length > 20) throw new Error('EVALUATION_QUERY_COUNT_INVALID');
