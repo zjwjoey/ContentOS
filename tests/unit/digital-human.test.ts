@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateAvatarGenerationRequest, validateSpeechGenerationRequest } from '../../packages/contracts/src/index.js';
-import { FakeAvatarProvider, FakeSpeechProvider, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging, SyntheticTimingProvider, createRuntimeDigitalHumanProviders, isPublicHttpUrl, subtitleTimelineToAss, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../packages/modules/digital-human/src/index.js';
+import { DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, HzAgentAvatarProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging, SyntheticTimingProvider, createRuntimeDigitalHumanProviders, isPublicHttpUrl, subtitleTimelineToAss, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../packages/modules/digital-human/src/index.js';
 
 test('digital human contracts reject unsafe generation requests', () => {
   assert.doesNotThrow(() => validateSpeechGenerationRequest({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', text: '你好', language: 'zh', speed: 1, emotion: 'natural' }));
@@ -60,6 +60,14 @@ test('HTTP avatar capabilities are health-checked with provider authentication',
   const avatar = new HzAgentAvatarProvider({ baseUrl: 'https://avatar.test', apiKey: 'test-only', fetchImpl: async (input, init) => { path = new URL(String(input)).pathname; authorization = String((init?.headers as Record<string, string>)?.authorization || ''); return new Response(JSON.stringify({ capabilities: { videoToVideo: true, requiresPublicUrl: true, supportedFormats: ['mp4'], supported_audio_formats: ['wav'], maxDurationSeconds: 60 } }), { status: 200 }); } });
   const capabilities = await avatar.getCapabilities();
   assert.equal(path, '/v1/capabilities'); assert.equal(authorization, 'Bearer test-only'); assert.equal(capabilities.maxDurationSeconds, 60); assert.deepEqual(capabilities.supportedFormats, ['mp4']); assert.deepEqual(capabilities.supportedAudioFormats, ['wav']);
+});
+
+test('provider HTTP failures are bounded and classified as retryable outages', async () => {
+  const hangingFetch: typeof fetch = async (_input, init) => await new Promise<Response>((_resolve, reject) => { init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }); });
+  const speech = new IndexTTS25SpeechProvider({ baseUrl: 'http://speech.test', requestTimeoutMs: 10, fetchImpl: hangingFetch });
+  await assert.rejects(() => speech.generateSpeech({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', text: '你好', language: 'zh', speed: 1, emotion: 'natural' }), (error: unknown) => error instanceof DigitalHumanProviderError && error.code === 'UNAVAILABLE' && error.retryable);
+  const avatar = new HzAgentAvatarProvider({ baseUrl: 'http://avatar.test', apiKey: 'test-only', requestTimeoutMs: 10, fetchImpl: hangingFetch });
+  await assert.rejects(() => avatar.getTask('task-1'), (error: unknown) => error instanceof DigitalHumanProviderError && error.code === 'UNAVAILABLE' && error.retryable);
 });
 
 test('signed provider media staging issues expiring, tamper-resistant URLs', async () => {

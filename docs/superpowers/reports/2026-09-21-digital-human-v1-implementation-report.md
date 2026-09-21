@@ -32,6 +32,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Remote Avatar submissions carry the stable Generation request ID through a configurable idempotency header and request field, allowing a compatible provider to deduplicate the submit-after-uncertain-write recovery path.
 - Remote Avatar result downloads now stream directly to staging with a configurable byte limit (defaulting to the asset upload limit), reject oversized responses before Asset import, and clean partial files on failure.
 - Configured remote Avatar providers now health-check the authenticated, configurable capabilities endpoint with a timeout; authentication or availability failures are surfaced before a paid generation Job is created.
+- Speech, Avatar, and HTTP media-staging adapter requests now have configurable bounded timeouts (`CONTENTOS_PROVIDER_REQUEST_TIMEOUT_MS` / `CONTENTOS_PROVIDER_CAPABILITY_TIMEOUT_MS`) and normalize network/timeout failures as retryable provider outages.
 - Provider Media Staging now rejects loopback, private-network, `.local`, and `.internal` base/result URLs; runtime capability readiness is false when the configured staging address cannot be publicly reached.
 - The named HZAgent adapter is now configuration-driven for submit/task paths and authentication header/scheme, and accepts common camelCase/snake_case task response aliases without leaking vendor details into the service layer.
 - Synthetic subtitle timeline export as Edit Manifest cues, SRT, and ASS through the Speech Generation API.
@@ -49,7 +50,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 
 - Targeted TypeScript compilation: passed.
 - Digital Human/config/worker unit tests and provider contract checks: passed.
-- Digital Human/API/provider suite: 21 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, the Worker-to-Asset vertical slice, probed Speech Asset duration, API cancellation with remote `cancelTask` invocation, lease-recovery cancellation, graceful shutdown waiting, Worker preflight failure recording, oversized-result protection, concurrent Speech/Avatar idempotency and retry checks, signed staging, subtitle Asset persistence, authenticated capability health-checks, public-staging URL validation, fail-closed capability checks, external-task cancellation, and terminal-task replacement.
+- Digital Human/API/provider suite: 22 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, the Worker-to-Asset vertical slice, probed Speech Asset duration, API cancellation with remote `cancelTask` invocation, lease-recovery cancellation, graceful shutdown waiting, Worker preflight failure recording, oversized-result protection, concurrent Speech/Avatar idempotency and retry checks, signed staging, subtitle Asset persistence, authenticated capability health-checks, bounded provider request failures, public-staging URL validation, fail-closed capability checks, external-task cancellation, and terminal-task replacement.
 - The Digital Human API integration suite also verifies subtitle generation creates a `TEXT` Asset and that the stored subtitle can be downloaded through the project Asset route.
 - Format check: passed (469 files).
 - Lint check: passed (177 TypeScript files).

@@ -35,6 +35,8 @@ export interface AppConfig {
   mediaStagingBaseUrl: string;
   mediaStagingApiKey: string;
   mediaStagingSecret: string;
+  digitalHumanProviderRequestTimeoutMs: number;
+  digitalHumanProviderCapabilityTimeoutMs: number;
 }
 
 function required(env: Record<string, string | undefined>, key: string): string {
@@ -98,5 +100,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     mediaStagingBaseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL || '',
     mediaStagingApiKey: env.CONTENTOS_MEDIA_STAGING_API_KEY || '',
     mediaStagingSecret: env.CONTENTOS_MEDIA_STAGING_SECRET || '',
+    digitalHumanProviderRequestTimeoutMs: integer(env, 'CONTENTOS_PROVIDER_REQUEST_TIMEOUT_MS', 30_000),
+    digitalHumanProviderCapabilityTimeoutMs: integer(env, 'CONTENTOS_PROVIDER_CAPABILITY_TIMEOUT_MS', 5_000),
   };
 }
