@@ -82,7 +82,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     digitalHumanSpeechProvider: env.CONTENTOS_SPEECH_PROVIDER || 'indextts25',
     indexttsBaseUrl: env.CONTENTOS_INDEXTTS_BASE_URL || 'http://127.0.0.1:8788',
     digitalHumanAvatarProvider: env.CONTENTOS_AVATAR_PROVIDER || 'hzagent',
-    mediaStagingProvider: env.CONTENTOS_MEDIA_STAGING_PROVIDER || 'http',
+    mediaStagingProvider: env.CONTENTOS_MEDIA_STAGING_PROVIDER || 'signed-url',
     mediaStagingBaseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL || '',
     mediaStagingSecret: env.CONTENTOS_MEDIA_STAGING_SECRET || '',
     digitalHumanProviderRequestTimeoutMs: integer(env, 'CONTENTOS_PROVIDER_REQUEST_TIMEOUT_MS', 30_000),

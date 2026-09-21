@@ -38,7 +38,7 @@ export function createRuntimeDigitalHumanProviders(env: RuntimeDigitalHumanEnvir
   const avatar = avatarId === 'fake-avatar'
     ? new FakeAvatarProvider()
     : new UnavailableAvatarProvider(avatarId, 'AvatarProvider API integration is interface-only until an official vendor contract is supplied');
-  const stagingProvider = env.CONTENTOS_MEDIA_STAGING_PROVIDER || 'http';
+  const stagingProvider = env.CONTENTOS_MEDIA_STAGING_PROVIDER || 'signed-url';
   const stagingBaseUrl = env.CONTENTOS_MEDIA_STAGING_BASE_URL || '';
   const publicStagingBaseUrl = isPublicHttpUrl(stagingBaseUrl);
   const staging = stagingProvider === 'signed-url' && publicStagingBaseUrl && env.CONTENTOS_MEDIA_STAGING_SECRET
