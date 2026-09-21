@@ -188,7 +188,8 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
   app.post('/api/v1/projects/:projectId/digital-human/avatar-generations', async (request, reply) => {
     const parsed = avatarGenerationInput.safeParse(request.body); if (!parsed.success) return invalid(reply, parsed.error.issues);
     const id = projectId(request);
-    const preflight = await runAvatarPreflight(id, parsed.data, deps); if (preflight.status === 'BLOCKED') return preflightFailure(reply, preflight);
+    const existing = await deps.digitalHuman.findAvatarGenerationForRequest({ projectId: id, ...parsed.data });
+    if (!existing || existing.status === 'FAILED' || existing.status === 'CANCELLED') { const preflight = await runAvatarPreflight(id, parsed.data, deps); if (preflight.status === 'BLOCKED') return preflightFailure(reply, preflight); }
     try { const result = await deps.digitalHuman.createAvatarGeneration({ projectId: id, ...parsed.data, correlationId: parsed.data.correlationId || `api-${randomUUID()}` }); return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: !result.created }); } catch (error) { return fail(reply, 409, 'AVATAR_GENERATION_CONFLICT', error instanceof Error ? error.message : 'Unable to create Avatar Generation'); }
   });
   app.get('/api/v1/projects/:projectId/digital-human/avatar-generations', async (request) => ({ items: await deps.digitalHuman.listAvatarGenerations(projectId(request)) }));
