@@ -177,6 +177,17 @@ export class JobService {
 
   async requeue(id: string): Promise<void> { await this.db.query("update jobs set state = 'QUEUED', retry_at = null, updated_at = now() where id = $1 and state = 'RETRY_WAIT'", [id]); }
 
+  async requeueTerminal(id: string): Promise<JobRecord> {
+    const updated = await this.db.query("update jobs set state = 'QUEUED', scheduled_at = now(), retry_at = null, result = null, error = null, progress = '{}'::jsonb, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 and state in ('FAILED','CANCELLED') returning *", [id]);
+    if (updated.rows[0]) {
+      await this.db.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [id, 'job.requeued', { reason: 'explicit_retry' }]);
+      return mapJob(updated.rows[0] as Record<string, unknown>);
+    }
+    const current = await this.get(id);
+    if (!current) throw new Error(`Job ${id} not found`);
+    return current;
+  }
+
   async requestCancel(id: string): Promise<void> {
     await this.db.query("update jobs set state = case when state = 'RUNNING' then 'CANCEL_REQUESTED' else 'CANCELLED' end, retry_at = null, lease_owner = case when state = 'RUNNING' then lease_owner else null end, lease_expires_at = case when state = 'RUNNING' then lease_expires_at else null end, updated_at = now() where id = $1 and state in ('QUEUED','RUNNING','RETRY_WAIT')", [id]);
   }

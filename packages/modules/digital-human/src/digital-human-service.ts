@@ -9,7 +9,7 @@ export interface CreateAvatarProfileInput { projectId: string; name: string; own
 export interface CreateAvatarClipInput { projectId: string; avatarProfileId: string; assetId: string; name: string; durationMs?: number | undefined; width?: number | undefined; height?: number | undefined; fps?: number | undefined; sceneType?: string | undefined; gestureLevel?: string | undefined; tags?: string[] | undefined; }
 export interface CreateSpeechGenerationInput { projectId: string; voiceProfileId: string; text: string; provider?: string | undefined; model?: string | undefined; language?: string | undefined; speed?: number | undefined; emotion?: string | undefined; correlationId: string; }
 export interface CreateAvatarGenerationInput { projectId: string; avatarProfileId: string; avatarClipId: string; speechAssetId: string; provider?: string | undefined; model?: string | undefined; parameters?: Record<string, unknown> | undefined; correlationId: string; }
-export interface DigitalHumanAssetReader { getProjectAsset(projectId: string, assetId: string): Promise<{ id: string; projectId: string; kind: string; lifecycle: string; storageKey: string; checksum: string } | null>; getReadySourceAsset(projectId: string, assetId: string, kind: 'VIDEO' | 'AUDIO'): Promise<{ id: string; projectId: string; kind: 'VIDEO' | 'AUDIO'; storageKey: string; metadata: Record<string, unknown> } | null>; }
+export interface DigitalHumanAssetReader { getProjectAsset(projectId: string, assetId: string): Promise<{ id: string; projectId: string; kind: string; lifecycle: string; storageKey: string; checksum: string; metadata: Record<string, unknown> } | null>; getReadySourceAsset(projectId: string, assetId: string, kind: 'VIDEO' | 'AUDIO'): Promise<{ id: string; projectId: string; kind: 'VIDEO' | 'AUDIO'; storageKey: string; metadata: Record<string, unknown> } | null>; }
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const text = (value: unknown): string => value === null || value === undefined ? '' : String(value);
@@ -17,6 +17,7 @@ const optionalText = (value: unknown): string | null => value === null || value 
 const iso = (value: unknown): string => new Date(text(value)).toISOString();
 const hash = (value: unknown): string => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 const stableId = (prefix: string, projectId: string, requestHash: string): string => `${prefix}-${hash({ projectId, requestHash })}`;
+const positiveDuration = (metadata: Record<string, unknown>): boolean => Number.isFinite(Number(metadata.durationMs)) && Number(metadata.durationMs) > 0;
 
 function mapVoice(row: Record<string, unknown>): VoiceProfileV1 { return { id: text(row.id), projectId: text(row.project_id), name: text(row.name), provider: text(row.provider), referenceAssetId: optionalText(row.reference_asset_id), providerVoiceId: optionalText(row.provider_voice_id), language: text(row.language), defaultSpeed: Number(row.default_speed), defaultEmotion: text(row.default_emotion), status: row.status as ProfileStatus, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) }; }
 function mapAvatar(row: Record<string, unknown>): AvatarProfileV1 { return { id: text(row.id), projectId: text(row.project_id), name: text(row.name), ownerName: text(row.owner_name), status: row.status as ProfileStatus, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) }; }
@@ -28,7 +29,7 @@ export class DigitalHumanService {
   constructor(private readonly db: Pool, private readonly jobs: JobService, private readonly assets: DigitalHumanAssetReader = new AssetCatalogService(db)) {}
 
   async createVoiceProfile(input: CreateVoiceProfileInput): Promise<VoiceProfileV1> {
-    if (input.referenceAssetId) { const asset = await this.assets.getProjectAsset(input.projectId, input.referenceAssetId); if (!asset || asset.kind !== 'AUDIO' || asset.lifecycle !== 'READY') throw new Error('VOICE_REFERENCE_ASSET_NOT_READY'); }
+    if (input.referenceAssetId) { const asset = await this.assets.getProjectAsset(input.projectId, input.referenceAssetId); if (!asset || asset.kind !== 'AUDIO' || asset.lifecycle !== 'READY' || !positiveDuration(asset.metadata)) throw new Error('VOICE_REFERENCE_ASSET_NOT_READY'); }
     const result = await this.db.query('insert into voice_profiles (id, project_id, name, provider, reference_asset_id, provider_voice_id, language, default_speed, default_emotion, status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *', [`voice-profile-${randomUUID()}`, input.projectId, input.name.trim(), input.provider.trim(), input.referenceAssetId || null, input.providerVoiceId || null, input.language || 'zh', input.defaultSpeed ?? 1, input.defaultEmotion || 'natural', input.status || 'DRAFT']);
     return mapVoice(result.rows[0] as Record<string, unknown>);
   }
@@ -54,7 +55,17 @@ export class DigitalHumanService {
     const provider = input.provider || profile.provider; const model = input.model || 'indextts-2.5'; const parameters = { language: input.language || profile.language, speed: input.speed ?? profile.defaultSpeed, emotion: input.emotion || profile.defaultEmotion };
     const textHash = hash({ provider, model, voiceProfileId: profile.id, referenceChecksum: reference?.checksum || null, text: input.text, parameters });
     const existing = await this.db.query('select * from speech_generations where project_id = $1 and text_hash = $2 and voice_profile_id = $3 and provider = $4 and model = $5', [input.projectId, textHash, profile.id, provider, model]);
-    if (existing.rows[0]) { const generation = mapSpeech(existing.rows[0] as Record<string, unknown>); const job = await this.jobs.get(generation.jobId); if (!job) throw new Error('SPEECH_GENERATION_JOB_NOT_FOUND'); return { generation, job, created: false }; }
+    if (existing.rows[0]) {
+      let generation = mapSpeech(existing.rows[0] as Record<string, unknown>); let job = await this.jobs.get(generation.jobId); if (!job) throw new Error('SPEECH_GENERATION_JOB_NOT_FOUND');
+      if (['FAILED', 'CANCELLED'].includes(generation.status) && ['FAILED', 'CANCELLED'].includes(job.state)) {
+        job = await this.jobs.requeueTerminal(job.id);
+        if (job.state === 'QUEUED') {
+          await this.db.query("update speech_generations set status = 'PENDING', error = null, updated_at = now() where id = $1 and status in ('FAILED','CANCELLED')", [generation.id]);
+          generation = (await this.getSpeechGeneration(input.projectId, generation.id)) || generation;
+        }
+      }
+      return { generation, job, created: false };
+    }
     const generationId = stableId('speech-generation', input.projectId, textHash);
     const job = await this.jobs.createIdempotent({ id: stableId('job-speech', input.projectId, textHash), projectId: input.projectId, type: 'SPEECH_GENERATE', idempotencyKey: `digital-human:speech:${input.projectId}:${textHash}`, payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'SPEECH', generationId, projectId: input.projectId, correlationId: input.correlationId }, maxAttempts: 3 });
     const result = await this.db.query('insert into speech_generations (id, project_id, voice_profile_id, provider, model, text, text_hash, parameters, job_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (project_id, text_hash, voice_profile_id, provider, model) do nothing returning *', [generationId, input.projectId, profile.id, provider, model, input.text, textHash, JSON.stringify(parameters), job.id]);
@@ -64,9 +75,9 @@ export class DigitalHumanService {
   }
   async getSpeechGeneration(projectId: string, id: string): Promise<SpeechGenerationV1 | null> { const result = await this.db.query('select * from speech_generations where project_id = $1 and id = $2', [projectId, id]); return result.rows[0] ? mapSpeech(result.rows[0] as Record<string, unknown>) : null; }
   async listSpeechGenerations(projectId: string): Promise<SpeechGenerationV1[]> { const result = await this.db.query('select * from speech_generations where project_id = $1 order by created_at desc', [projectId]); return result.rows.map((row) => mapSpeech(row as Record<string, unknown>)); }
-  async markSpeechRunning(id: string): Promise<void> { await this.db.query("update speech_generations set status = 'RUNNING', updated_at = now() where id = $1 and status in ('PENDING','RUNNING')", [id]); }
-  async completeSpeech(id: string, input: { outputAssetId: string; durationMs: number; latencyMs: number; modelVersion: string; provenance: Record<string, unknown> }): Promise<void> { await this.db.query("update speech_generations set status = 'SUCCEEDED', output_asset_id = $2, duration_ms = $3, latency_ms = $4, model_version = $5, provenance = $6, error = null, updated_at = now() where id = $1", [id, input.outputAssetId, input.durationMs, input.latencyMs, input.modelVersion, JSON.stringify(input.provenance)]); }
-  async failSpeech(id: string, error: { code: string; message: string }): Promise<void> { await this.db.query("update speech_generations set status = 'FAILED', error = $2, updated_at = now() where id = $1 and status <> 'SUCCEEDED'", [id, JSON.stringify(error)]); }
+  async markSpeechRunning(id: string): Promise<void> { await this.db.query("update speech_generations set status = 'RUNNING', updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id]); }
+  async completeSpeech(id: string, input: { outputAssetId: string; durationMs: number; latencyMs: number; modelVersion: string; provenance: Record<string, unknown> }): Promise<boolean> { const result = await this.db.query("update speech_generations set status = 'SUCCEEDED', output_asset_id = $2, duration_ms = $3, latency_ms = $4, model_version = $5, provenance = $6, error = null, updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id, input.outputAssetId, input.durationMs, input.latencyMs, input.modelVersion, JSON.stringify(input.provenance)]); return Boolean(result.rowCount); }
+  async failSpeech(id: string, error: { code: string; message: string }): Promise<void> { await this.db.query("update speech_generations set status = 'FAILED', error = $2, updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id, JSON.stringify(error)]); }
   async cancelSpeech(id: string): Promise<void> { await this.db.query("update speech_generations set status = 'CANCELLED', updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL')", [id]); }
 
   async createAvatarGeneration(input: CreateAvatarGenerationInput): Promise<{ generation: AvatarGenerationV1; job: JobRecord; created: boolean }> {
@@ -75,9 +86,21 @@ export class DigitalHumanService {
     const sourceVideo = await this.assets.getProjectAsset(input.projectId, clip.assetId); const speech = await this.assets.getProjectAsset(input.projectId, input.speechAssetId);
     if (!sourceVideo || sourceVideo.kind !== 'VIDEO' || sourceVideo.lifecycle !== 'READY') throw new Error('AVATAR_CLIP_ASSET_NOT_READY');
     if (!speech || speech.kind !== 'AUDIO' || speech.lifecycle !== 'READY') throw new Error('SPEECH_ASSET_NOT_READY');
+    if (!positiveDuration(sourceVideo.metadata)) throw new Error('AVATAR_CLIP_DURATION_INVALID');
+    if (!positiveDuration(speech.metadata)) throw new Error('SPEECH_ASSET_DURATION_INVALID');
     const provider = input.provider || 'hzagent'; const model = input.model || null; const parameters = input.parameters || {}; const requestHash = hash({ provider, model, clipAssetChecksum: sourceVideo.checksum, speechAssetChecksum: speech.checksum, parameters });
     const existing = await this.db.query('select * from avatar_generations where project_id = $1 and request_hash = $2', [input.projectId, requestHash]);
-    if (existing.rows[0]) { const generation = mapAvatarGeneration(existing.rows[0] as Record<string, unknown>); const job = await this.jobs.get(generation.jobId); if (!job) throw new Error('AVATAR_GENERATION_JOB_NOT_FOUND'); return { generation, job, created: false }; }
+    if (existing.rows[0]) {
+      let generation = mapAvatarGeneration(existing.rows[0] as Record<string, unknown>); let job = await this.jobs.get(generation.jobId); if (!job) throw new Error('AVATAR_GENERATION_JOB_NOT_FOUND');
+      if (['FAILED', 'CANCELLED'].includes(generation.status) && ['FAILED', 'CANCELLED'].includes(job.state)) {
+        job = await this.jobs.requeueTerminal(job.id);
+        if (job.state === 'QUEUED') {
+          await this.db.query("update avatar_generations set status = 'PENDING', error = null, updated_at = now() where id = $1 and status in ('FAILED','CANCELLED')", [generation.id]);
+          generation = (await this.getAvatarGeneration(input.projectId, generation.id)) || generation;
+        }
+      }
+      return { generation, job, created: false };
+    }
     const generationId = stableId('avatar-generation', input.projectId, requestHash);
     const job = await this.jobs.createIdempotent({ id: stableId('job-avatar', input.projectId, requestHash), projectId: input.projectId, type: 'AVATAR_LIPSYNC_GENERATE', idempotencyKey: `digital-human:avatar:${input.projectId}:${requestHash}`, payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId, projectId: input.projectId, correlationId: input.correlationId }, maxAttempts: 5 });
     const result = await this.db.query('insert into avatar_generations (id, project_id, avatar_profile_id, avatar_clip_id, speech_asset_id, provider, model, request_hash, provenance, job_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict (project_id, request_hash) do nothing returning *', [generationId, input.projectId, profile.id, clip.id, input.speechAssetId, provider, model, requestHash, JSON.stringify({ parameters }), job.id]);
@@ -87,9 +110,10 @@ export class DigitalHumanService {
   }
   async getAvatarGeneration(projectId: string, id: string): Promise<AvatarGenerationV1 | null> { const result = await this.db.query('select * from avatar_generations where project_id = $1 and id = $2', [projectId, id]); return result.rows[0] ? mapAvatarGeneration(result.rows[0] as Record<string, unknown>) : null; }
   async listAvatarGenerations(projectId: string): Promise<AvatarGenerationV1[]> { const result = await this.db.query('select * from avatar_generations where project_id = $1 order by created_at desc', [projectId]); return result.rows.map((row) => mapAvatarGeneration(row as Record<string, unknown>)); }
-  async markAvatarRunning(id: string): Promise<void> { await this.db.query("update avatar_generations set status = 'RUNNING', updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL')", [id]); }
-  async markAvatarWaiting(id: string, externalTaskId: string, provenance: Record<string, unknown>): Promise<void> { await this.db.query("update avatar_generations set status = 'WAITING_EXTERNAL', external_task_id = $2, provenance = $3, updated_at = now() where id = $1 and external_task_id is null", [id, externalTaskId, JSON.stringify(provenance)]); }
-  async completeAvatar(id: string, input: { outputAssetId: string; durationMs?: number | undefined; model?: string | undefined; modelVersion?: string | undefined; costAmount?: number | undefined; costCurrency?: string | undefined; provenance?: Record<string, unknown> | undefined }): Promise<void> { await this.db.query("update avatar_generations set status = 'SUCCEEDED', output_asset_id = $2, duration_ms = $3, model = coalesce($4, model), model_version = $5, cost_amount = $6, cost_currency = $7, provenance = coalesce($8, provenance), error = null, updated_at = now() where id = $1", [id, input.outputAssetId, input.durationMs || null, input.model || null, input.modelVersion || null, input.costAmount || null, input.costCurrency || null, input.provenance ? JSON.stringify(input.provenance) : null]); }
-  async failAvatar(id: string, error: { code: string; message: string }): Promise<void> { await this.db.query("update avatar_generations set status = 'FAILED', error = $2, updated_at = now() where id = $1 and status <> 'SUCCEEDED'", [id, JSON.stringify(error)]); }
+  async markAvatarRunning(id: string): Promise<void> { await this.db.query("update avatar_generations set status = 'RUNNING', updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id]); }
+  async markAvatarWaiting(id: string, externalTaskId: string, provenance: Record<string, unknown>): Promise<void> { await this.db.query("update avatar_generations set status = 'WAITING_EXTERNAL', external_task_id = $2, provenance = $3, updated_at = now() where id = $1 and status in ('PENDING','RUNNING') and external_task_id is null", [id, externalTaskId, JSON.stringify(provenance)]); }
+  async replaceAvatarWaiting(id: string, externalTaskId: string, provenance: Record<string, unknown>): Promise<void> { await this.db.query("update avatar_generations set status = 'WAITING_EXTERNAL', external_task_id = $2, provenance = $3, updated_at = now() where id = $1 and status in ('PENDING','RUNNING') and external_task_id is not null", [id, externalTaskId, JSON.stringify(provenance)]); }
+  async completeAvatar(id: string, input: { outputAssetId: string; durationMs?: number | undefined; model?: string | undefined; modelVersion?: string | undefined; costAmount?: number | undefined; costCurrency?: string | undefined; provenance?: Record<string, unknown> | undefined }): Promise<boolean> { const result = await this.db.query("update avatar_generations set status = 'SUCCEEDED', output_asset_id = $2, duration_ms = $3, model = coalesce($4, model), model_version = $5, cost_amount = $6, cost_currency = $7, provenance = coalesce($8, provenance), error = null, updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id, input.outputAssetId, input.durationMs || null, input.model || null, input.modelVersion || null, input.costAmount || null, input.costCurrency || null, input.provenance ? JSON.stringify(input.provenance) : null]); return Boolean(result.rowCount); }
+  async failAvatar(id: string, error: { code: string; message: string }): Promise<void> { await this.db.query("update avatar_generations set status = 'FAILED', error = $2, updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id, JSON.stringify(error)]); }
   async cancelAvatar(id: string): Promise<void> { await this.db.query("update avatar_generations set status = 'CANCELLED', updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL')", [id]); }
 }

@@ -82,6 +82,21 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
   });
   app.get('/api/v1/projects/:projectId/digital-human/speech-generations', async (request) => ({ items: await deps.digitalHuman.listSpeechGenerations(projectId(request)) }));
   app.get('/api/v1/projects/:projectId/digital-human/speech-generations/:generationId', async (request, reply) => { const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getSpeechGeneration(params.projectId, params.generationId); return generation || fail(reply, 404, 'SPEECH_GENERATION_NOT_FOUND', 'Speech Generation not found'); });
+  app.post('/api/v1/projects/:projectId/digital-human/speech-generations/:generationId/retry', async (request, reply) => {
+    const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getSpeechGeneration(params.projectId, params.generationId);
+    if (!generation) return fail(reply, 404, 'SPEECH_GENERATION_NOT_FOUND', 'Speech Generation not found');
+    if (generation.status !== 'FAILED' && generation.status !== 'CANCELLED') return fail(reply, 409, 'SPEECH_GENERATION_NOT_RETRYABLE', 'Only failed or cancelled Speech Generations can be retried');
+    if (deps.providers) {
+      const profile = await deps.digitalHuman.getVoiceProfile(params.projectId, generation.voiceProfileId);
+      if (!profile) return fail(reply, 404, 'VOICE_PROFILE_NOT_FOUND', 'Voice Profile not found');
+      try { const capabilities = await deps.providers.speech.getCapabilities(); if (capabilities.requiresReferenceAudio && !profile.referenceAssetId) return fail(reply, 409, 'VOICE_REFERENCE_REQUIRED', 'This speech provider requires a ready reference audio Asset'); }
+      catch (error) { return fail(reply, 503, 'SPEECH_PROVIDER_UNAVAILABLE', error instanceof Error ? error.message : 'Speech provider is unavailable'); }
+    }
+    try {
+      const result = await deps.digitalHuman.createSpeechGeneration({ projectId: params.projectId, voiceProfileId: generation.voiceProfileId, text: generation.text, provider: generation.provider, model: generation.model, language: typeof generation.parameters.language === 'string' ? generation.parameters.language : undefined, speed: typeof generation.parameters.speed === 'number' ? generation.parameters.speed : undefined, emotion: typeof generation.parameters.emotion === 'string' ? generation.parameters.emotion : undefined, correlationId: `retry-${randomUUID()}` });
+      return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: true });
+    } catch (error) { return fail(reply, 409, 'SPEECH_GENERATION_RETRY_CONFLICT', error instanceof Error ? error.message : 'Unable to retry Speech Generation'); }
+  });
   app.get('/api/v1/projects/:projectId/digital-human/speech-generations/:generationId/subtitles', async (request, reply) => {
     const params = request.params as { projectId: string; generationId: string }; const query = request.query as { format?: string }; const generation = await deps.digitalHuman.getSpeechGeneration(params.projectId, params.generationId);
     if (!generation) return fail(reply, 404, 'SPEECH_GENERATION_NOT_FOUND', 'Speech Generation not found');
@@ -118,4 +133,18 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
   });
   app.get('/api/v1/projects/:projectId/digital-human/avatar-generations', async (request) => ({ items: await deps.digitalHuman.listAvatarGenerations(projectId(request)) }));
   app.get('/api/v1/projects/:projectId/digital-human/avatar-generations/:generationId', async (request, reply) => { const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getAvatarGeneration(params.projectId, params.generationId); return generation || fail(reply, 404, 'AVATAR_GENERATION_NOT_FOUND', 'Avatar Generation not found'); });
+  app.post('/api/v1/projects/:projectId/digital-human/avatar-generations/:generationId/retry', async (request, reply) => {
+    const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getAvatarGeneration(params.projectId, params.generationId);
+    if (!generation) return fail(reply, 404, 'AVATAR_GENERATION_NOT_FOUND', 'Avatar Generation not found');
+    if (generation.status !== 'FAILED' && generation.status !== 'CANCELLED') return fail(reply, 409, 'AVATAR_GENERATION_NOT_RETRYABLE', 'Only failed or cancelled Avatar Generations can be retried');
+    if (deps.providers) {
+      try { const capabilities = await deps.providers.avatar.getCapabilities(); if (!capabilities.videoToVideo && !capabilities.imageToVideo) return fail(reply, 503, 'AVATAR_PROVIDER_UNAVAILABLE', 'Avatar provider is unavailable'); if (capabilities.requiresPublicUrl && !deps.providers.mediaStagingConfigured) return fail(reply, 503, 'MEDIA_STAGING_NOT_CONFIGURED', 'Public media staging is required for this avatar provider'); }
+      catch (error) { return fail(reply, 503, 'AVATAR_PROVIDER_UNAVAILABLE', error instanceof Error ? error.message : 'Avatar provider is unavailable'); }
+    }
+    try {
+      const parameters = generation.provenance.parameters && typeof generation.provenance.parameters === 'object' && !Array.isArray(generation.provenance.parameters) ? generation.provenance.parameters as Record<string, unknown> : {};
+      const result = await deps.digitalHuman.createAvatarGeneration({ projectId: params.projectId, avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, provider: generation.provider, model: generation.model || undefined, parameters, correlationId: `retry-${randomUUID()}` });
+      return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: true });
+    } catch (error) { return fail(reply, 409, 'AVATAR_GENERATION_RETRY_CONFLICT', error instanceof Error ? error.message : 'Unable to retry Avatar Generation'); }
+  });
 }

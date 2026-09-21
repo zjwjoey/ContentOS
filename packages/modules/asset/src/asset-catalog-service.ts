@@ -23,7 +23,7 @@ export interface ReadySourceAsset {
 }
 
 export interface ReadyAssetContent extends AssetSummaryV0 { storageKey: string; }
-export interface ProjectAssetReference { id: string; projectId: string; kind: string; lifecycle: string; storageKey: string; checksum: string; }
+export interface ProjectAssetReference { id: string; projectId: string; kind: string; lifecycle: string; storageKey: string; checksum: string; metadata: Record<string, unknown>; }
 
 function mapAsset(row: Record<string, unknown>): PublishableAsset {
   return {
@@ -65,9 +65,10 @@ export class AssetCatalogService {
   constructor(private readonly db: Pool) {}
 
   async getProjectAsset(projectId: string, assetId: string): Promise<ProjectAssetReference | null> {
-    const result = await this.db.query('select id, project_id, kind, lifecycle, storage_key, checksum from assets where project_id = $1 and id = $2', [projectId, assetId]);
+    const result = await this.db.query('select id, project_id, kind, lifecycle, storage_key, checksum, metadata from assets where project_id = $1 and id = $2', [projectId, assetId]);
     const row = result.rows[0] as Record<string, unknown> | undefined;
-    return row ? { id: String(row.id), projectId: String(row.project_id), kind: String(row.kind), lifecycle: String(row.lifecycle), storageKey: String(row.storage_key), checksum: String(row.checksum) } : null;
+    const metadata = row?.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {};
+    return row ? { id: String(row.id), projectId: String(row.project_id), kind: String(row.kind), lifecycle: String(row.lifecycle), storageKey: String(row.storage_key), checksum: String(row.checksum), metadata } : null;
   }
 
   async listPublishable(projectId: string): Promise<PublishableAsset[]> {

@@ -34,10 +34,11 @@ test('Digital Human worker cancels an external avatar task when its job is abort
       cancelAvatar: async (id: string) => { cancelledGenerations.push(id); },
     },
     assets: {
-      getProjectAsset: async (_projectId: string, id: string) => id === 'video-1' ? { id, projectId: 'project-1', kind: 'VIDEO', lifecycle: 'READY', storageKey: 'video.mp4' } : { id, projectId: 'project-1', kind: 'AUDIO', lifecycle: 'READY', storageKey: 'audio.wav' },
+      getProjectAsset: async (_projectId: string, id: string) => id === 'video-1' ? { id, projectId: 'project-1', kind: 'VIDEO', lifecycle: 'READY', storageKey: 'video.mp4', metadata: { durationMs: 2_000, format: 'mp4' } } : { id, projectId: 'project-1', kind: 'AUDIO', lifecycle: 'READY', storageKey: 'audio.wav', metadata: { durationMs: 2_000, format: 'wav' } },
     },
     staging: { stageAsset: async (id: string) => ({ assetId: id, publicUrl: `https://provider.test/${id}`, expiresAt: new Date(Date.now() + 60_000).toISOString() }) },
     avatarProvider: {
+      getCapabilities: async () => ({ providerId: 'hzagent', local: false, videoToVideo: true, imageToVideo: false, requiresPublicUrl: true, supportedFormats: ['mp4'] }),
       getTask: async () => { await new Promise((resolve) => setTimeout(resolve, 20)); return { externalTaskId: 'remote-1', providerId: 'hzagent', status: 'QUEUED' }; },
       cancelTask: async (id: string) => { cancelledTasks.push(id); },
     },
@@ -49,4 +50,30 @@ test('Digital Human worker cancels an external avatar task when its job is abort
   await assert.rejects(running);
   assert.deepEqual(cancelledTasks, ['remote-1']);
   assert.deepEqual(cancelledGenerations, ['generation-1']);
+});
+
+test('Digital Human worker resubmits only after an old external task is terminal', async () => {
+  let submitted = 0;
+  let waiting = 0;
+  const deps = {
+    digitalHuman: {
+      getAvatarGeneration: async () => ({ id: 'generation-2', status: 'PENDING', externalTaskId: 'remote-old', projectId: 'project-1', avatarClipId: 'clip-1', speechAssetId: 'audio-1', avatarProfileId: 'profile-1', model: null, modelVersion: null, jobId: 'job-2', outputAssetId: null, durationMs: null, costAmount: null, costCurrency: null, requestHash: 'hash', provenance: { parameters: {} }, error: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }),
+      markAvatarRunning: async () => undefined,
+      getAvatarClip: async () => ({ id: 'clip-1', projectId: 'project-1', name: 'clip', assetId: 'video-1', status: 'READY', metadata: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }),
+      replaceAvatarWaiting: async () => { waiting += 1; },
+    },
+    assets: {
+      getProjectAsset: async (_projectId: string, id: string) => id === 'video-1' ? { id, projectId: 'project-1', kind: 'VIDEO', lifecycle: 'READY', storageKey: 'video.mp4', metadata: { durationMs: 2_000, format: 'mp4' } } : { id, projectId: 'project-1', kind: 'AUDIO', lifecycle: 'READY', storageKey: 'audio.wav', metadata: { durationMs: 2_000, format: 'wav' } },
+    },
+    staging: { stageAsset: async (id: string) => ({ assetId: id, publicUrl: `https://provider.test/${id}`, expiresAt: new Date(Date.now() + 60_000).toISOString() }) },
+    avatarProvider: {
+      getCapabilities: async () => ({ providerId: 'hzagent', local: false, videoToVideo: true, imageToVideo: false, requiresPublicUrl: true, supportedFormats: ['mp4'] }),
+      getTask: async () => ({ externalTaskId: 'remote-old', providerId: 'hzagent', status: 'FAILED', errorCode: 'REMOTE_FAILED' }),
+      submitLipSync: async () => { submitted += 1; return { externalTaskId: 'remote-new', providerId: 'hzagent', status: 'QUEUED' }; },
+    },
+  } as never;
+  const job = { id: 'job-2', projectId: 'project-1', workspaceId: null, type: 'AVATAR_LIPSYNC_GENERATE', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-2', projectId: 'project-1', correlationId: 'corr-2' }, result: null, error: null, attemptCount: 1, maxAttempts: 3, leaseOwner: null, leaseExpiresAt: null, progress: null } as never;
+  await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-2', new AbortController().signal), /still running/);
+  assert.equal(submitted, 1);
+  assert.equal(waiting, 1);
 });

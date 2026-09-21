@@ -62,6 +62,14 @@ test('Avatar output enters the existing EditManifest and VIDEO_RENDER path idemp
     assert.equal(new Set(avatarResults.map((result) => result.job.id)).size, 1);
     assert.equal(avatarResults.filter((result) => result.created).length, 1);
     const avatarJobCount = await db.query<{ count: string }>('select count(*)::text as count from jobs where project_id = $1 and type = $2', [project.id, 'AVATAR_LIPSYNC_GENERATE']); assert.equal(avatarJobCount.rows[0]?.count, '2');
+    await db.query("update speech_generations set status = 'FAILED', error = '{\"code\":\"TEST_FAILURE\"}'::jsonb where id = $1", [speechResults[0]!.generation.id]);
+    await db.query("update jobs set state = 'FAILED', error = '{\"code\":\"TEST_FAILURE\"}'::jsonb where id = $1", [speechResults[0]!.job.id]);
+    const speechRetry = await digitalHuman.createSpeechGeneration({ projectId: project.id, voiceProfileId: raceVoiceId, text: '并发幂等测试。', correlationId: 'retry-speech' });
+    assert.equal(speechRetry.created, false); assert.equal(speechRetry.generation.id, speechResults[0]!.generation.id); assert.equal(speechRetry.generation.status, 'PENDING'); assert.equal(speechRetry.job.state, 'QUEUED');
+    await db.query("update avatar_generations set status = 'FAILED', error = '{\"code\":\"TEST_FAILURE\"}'::jsonb where id = $1", [avatarResults[0]!.generation.id]);
+    await db.query("update jobs set state = 'FAILED', error = '{\"code\":\"TEST_FAILURE\"}'::jsonb where id = $1", [avatarResults[0]!.job.id]);
+    const avatarRetry = await digitalHuman.createAvatarGeneration({ projectId: project.id, avatarProfileId, avatarClipId, speechAssetId, correlationId: 'retry-avatar' });
+    assert.equal(avatarRetry.created, false); assert.equal(avatarRetry.generation.id, avatarResults[0]!.generation.id); assert.equal(avatarRetry.generation.status, 'PENDING'); assert.equal(avatarRetry.job.state, 'QUEUED');
     await app.close();
   } finally { if (previousStagingSecret === undefined) delete process.env.CONTENTOS_MEDIA_STAGING_SECRET; else process.env.CONTENTOS_MEDIA_STAGING_SECRET = previousStagingSecret; await db.end(); await rm(storageRoot, { recursive: true, force: true }); await temporary.close(); }
 });
