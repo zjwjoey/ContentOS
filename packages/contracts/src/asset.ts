@@ -1,5 +1,6 @@
 export type AssetImportState = 'STAGED' | 'QUEUED' | 'PROCESSING' | 'READY' | 'DEDUPED' | 'FAILED' | 'CANCELLED';
 export type AssetImportKind = 'VIDEO' | 'AUDIO';
+export type AssetKindV0 = AssetImportKind | 'TEXT' | 'VIDEO_RENDER';
 
 export interface AssetImportV0 {
   schemaVersion: 'ASSET_IMPORT_V0';
@@ -19,7 +20,7 @@ export interface AssetImportV0 {
 
 export interface AssetSummaryV0 {
   id: string;
-  kind: AssetImportKind | 'VIDEO_RENDER';
+  kind: AssetKindV0;
   lifecycle: 'READY' | 'DEDUPED' | 'FAILED' | 'CANCELLED';
   byteSize: number;
   checksum: string;
@@ -44,7 +45,7 @@ export function validateAssetImportV0(value: AssetImportV0): void {
 }
 
 export function validateAssetSummaryV0(value: AssetSummaryV0): void {
-  if (!identifier(value.id) || !importKinds.concat('VIDEO_RENDER' as never).includes(value.kind as never)) throw new Error('Asset summary identifiers are invalid');
+  if (!identifier(value.id) || !(['VIDEO', 'AUDIO', 'TEXT', 'VIDEO_RENDER'] as string[]).includes(value.kind)) throw new Error('Asset summary identifiers are invalid');
   if (!['READY', 'DEDUPED', 'FAILED', 'CANCELLED'].includes(value.lifecycle)) throw new Error('Asset summary lifecycle is invalid');
   if (!Number.isSafeInteger(value.byteSize) || value.byteSize < 0 || !/^sha256:[a-f0-9]{64}$/.test(value.checksum)) throw new Error('Asset summary media fields are invalid');
   if (!safeName(value.originalName)) throw new Error('Asset summary originalName is invalid');

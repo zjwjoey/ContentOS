@@ -25,6 +25,8 @@ export interface QuickEditManifestRecord {
   createdBy: string | null;
   manifest: EditManifestV0;
   createdAt: string;
+  /** Set only by idempotent planned-manifest creation; never persisted. */
+  created?: boolean;
 }
 
 function stableJson(value: unknown): string {
@@ -74,21 +76,31 @@ export class VideoAdjustmentService {
   }
 
   /** Persist a freshly planned V1 manifest as the current editable version. */
-  async createPlannedManifest(input: { projectId?: string; workspaceId?: string; manifest: EditManifestV0; createdBy?: string }): Promise<QuickEditManifestRecord> {
+  async createPlannedManifest(input: { projectId?: string; workspaceId?: string; manifest: EditManifestV0; createdBy?: string; idempotencyKey?: string }): Promise<QuickEditManifestRecord> {
     if ((input.projectId === undefined) === (input.workspaceId === undefined)) throw new Error('VIDEO_ADJUSTMENT_OWNER_REQUIRED');
     validateEditManifest(input.manifest);
     if (input.projectId && input.manifest.projectId !== input.projectId) throw new Error('VIDEO_MANIFEST_PROJECT_SCOPE_MISMATCH');
     if (input.workspaceId && input.manifest.workspaceId !== input.workspaceId) throw new Error('VIDEO_MANIFEST_WORKSPACE_SCOPE_MISMATCH');
-    const ownerValue = input.projectId || input.workspaceId!; const client = await this.db.connect();
+    const ownerValue = input.projectId || input.workspaceId!; const client = await this.db.connect(); const manifestDigest = digestEditManifest(input.manifest);
     try {
       await client.query('begin');
       const scopeColumn = input.projectId ? 'project_id' : 'workspace_id';
+      await client.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:video-manifest:${ownerValue}`]);
+      if (input.idempotencyKey && input.projectId) {
+        const existing = await client.query('select * from edit_manifests where project_id = $1 and idempotency_key = $2', [input.projectId, input.idempotencyKey]);
+        if (existing.rows[0]) {
+          const existingDigest = existing.rows[0].manifest_digest;
+          if (existingDigest && String(existingDigest) !== manifestDigest) throw new Error('VIDEO_MANIFEST_IDEMPOTENCY_CONFLICT');
+          await client.query('commit');
+          return { ...mapRecord(existing.rows[0] as Record<string, unknown>), created: false };
+        }
+      }
       await client.query(`update edit_manifests set status = 'SUPERSEDED' where ${scopeColumn} = $1 and status = 'PERSISTED'`, [ownerValue]);
       const revision = Number((await client.query<{ revision: number }>(`select coalesce(max(revision), 0) + 1 as revision from edit_manifests where ${scopeColumn} = $1`, [ownerValue])).rows[0]?.revision || 1);
       const id = `manifest-${randomUUID()}`;
-      const result = await client.query('insert into edit_manifests (id, project_id, workspace_id, revision, schema_version, manifest, manifest_digest, status, created_by, edit_operations) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *', [id, input.projectId || null, input.workspaceId || null, revision, 'EDIT_MANIFEST_V0', input.manifest, digestEditManifest(input.manifest), 'PERSISTED', input.createdBy?.trim() || 'operator', []]);
+      const result = await client.query('insert into edit_manifests (id, project_id, workspace_id, revision, schema_version, manifest, manifest_digest, status, created_by, edit_operations, idempotency_key) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning *', [id, input.projectId || null, input.workspaceId || null, revision, 'EDIT_MANIFEST_V0', input.manifest, manifestDigest, 'PERSISTED', input.createdBy?.trim() || 'operator', [], input.idempotencyKey || null]);
       await client.query('commit');
-      return mapRecord(result.rows[0] as Record<string, unknown>);
+      return { ...mapRecord(result.rows[0] as Record<string, unknown>), ...(input.idempotencyKey && input.projectId ? { created: true } : {}) };
     } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
   }
 

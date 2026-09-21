@@ -41,6 +41,8 @@ import { LocalPathAccessService } from '../../../packages/modules/local-path/src
 import { UnsupportedNativePathPicker } from '../../../packages/modules/local-path/src/index.js';
 import { WindowsNativePathPicker } from '../../../packages/modules/local-path/src/native-path-picker.js';
 import { registerLocalPathRoutes } from './local-path-routes.js';
+import { DigitalHumanService, createRuntimeDigitalHumanProviders, type RuntimeDigitalHumanProviders } from '../../../packages/modules/digital-human/src/index.js';
+import { registerDigitalHumanRoutes } from './digital-human-routes.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -52,7 +54,7 @@ function directorPlan(projectId: string, input: z.infer<typeof directorInput>): 
   return { schemaVersion: 'DIRECTOR_PLAN_V0', projectId, seed: input.seed, brief: input.brief, storyboard: input.storyboard, provenance: { author: input.provenance.author, source: input.provenance.source, ...(input.provenance.promptVersion ? { promptVersion: input.provenance.promptVersion } : {}), ...(input.provenance.modelProfile ? { modelProfile: input.provenance.modelProfile } : {}) } };
 }
 
-export interface ApiRuntimeDependencies { db: Pool; storage?: LocalStorageProvider; uploadMaxBytes?: number; allowFakePublisherControls?: boolean; localPathAccess?: LocalPathAccessService; nativePathPicker?: import('../../../packages/modules/local-path/src/index.js').NativePathPicker; }
+export interface ApiRuntimeDependencies { db: Pool; storage?: LocalStorageProvider; uploadMaxBytes?: number; allowFakePublisherControls?: boolean; localPathAccess?: LocalPathAccessService; nativePathPicker?: import('../../../packages/modules/local-path/src/index.js').NativePathPicker; digitalHumanProviders?: RuntimeDigitalHumanProviders; }
 
 export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<FastifyInstance> {
   const db = 'query' in input ? input : input.db;
@@ -70,6 +72,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const jobs = new JobService(db);
   const benchmark = new BenchmarkService(db, jobs);
   const assets = new AssetCatalogService(db);
+  const digitalHuman = new DigitalHumanService(db, jobs, assets);
   const assetService = new AssetService(db, storage, (path) => probeMedia(path, process.env.FFPROBE_PATH || 'ffprobe'));
   const localPathAccess = runtime.localPathAccess || new LocalPathAccessService({ db });
   const nativePathPicker = runtime.nativePathPicker || (process.platform === 'win32' ? new WindowsNativePathPicker() : new UnsupportedNativePathPicker());
@@ -90,6 +93,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
   registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, assetService, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes, localMedia, localPathAccess, presets });
   registerLocalPathRoutes(app, { access: localPathAccess, picker: nativePathPicker });
+  registerDigitalHumanRoutes(app, { digitalHuman, projects, jobs, providers: runtime.digitalHumanProviders || createRuntimeDigitalHumanProviders(), quickEdit, video, assets, assetService, storage, mediaStagingSecret: process.env.CONTENTOS_MEDIA_STAGING_SECRET });
   registerEditingWorkbenchRoutes(app, { db, localMedia, localPathAccess, quickEdit, video, jobs, assets, assetService, storage, maxUploadBytes: uploadMaxBytes, presets });
   registerScriptEditingV2Routes(app, { db, jobs, localPathAccess, video, assets, presets, storage });
   registerScriptEditingV3Routes(app, { db, jobs, video, assets: assetService, localMedia, localPathAccess, storage });

@@ -90,6 +90,7 @@ export interface EditManifestV0 {
     rawScript?: string;
     cleanedScript?: string;
     confirmedSegments?: string[];
+    digitalHumanGenerationId?: string;
   };
   output: { format: 'mp4'; videoCodec: 'mpeg4' | 'h264'; audioCodec: 'aac' };
 }

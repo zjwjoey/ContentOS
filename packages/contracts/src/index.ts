@@ -26,7 +26,7 @@ export { validateApprovalDecision } from './approval.js';
 export type { ApprovalDecisionV0, ApprovalStatus, ApprovalTargetType } from './approval.js';
 export type { ProjectCenterAction, ProjectCenterActionKind, ProjectCenterHealthLevel, ProjectCenterJobSummary, ProjectCenterSeverity, ProjectCenterSnapshot, ProjectCenterStage, ProjectCenterStageKey, ProjectCenterStageStatus } from './project-center.js';
 export { validateAssetImportV0, validateAssetSummaryV0 } from './asset.js';
-export type { AssetImportKind, AssetImportState, AssetImportV0, AssetSummaryV0 } from './asset.js';
+export type { AssetImportKind, AssetImportState, AssetKindV0, AssetImportV0, AssetSummaryV0 } from './asset.js';
 export { CONTROLLED_VISUAL_TAGS_V3, normalizeControlledVisualTagsV3, SCRIPT_EDITING_V3_SCORING_WEIGHTS } from './script-editing-v3.js';
 export type { AssetVisualProfileV3, CandidateV3, ClipInstanceV3, EditOperationV3, MaterialAvailabilityV3, MaterialAiStatusV3, MaterialPoolHealthV3, MaterialPoolItemV3, MaterialPoolSnapshotV3, MaterialPoolSource, ReviewStatusV3, SelectionSourceV3, SentenceEditingCardV3, TagEvidenceKind, VisualQueryV3 } from './script-editing-v3.js';
 export { validateAssetVisualProfileV3 } from './script-editing-v3.js';
@@ -34,3 +34,10 @@ export { validateVideoWorkspaceSnapshotV0 } from './video.js';
 export type { VideoWorkspaceSnapshotV0 } from './video.js';
 export { validateBenchmarkAccountV1, validateBenchmarkContentV1, validateBenchmarkAnalysisV1 } from './benchmark.js';
 export type { BenchmarkAccountV1, BenchmarkContentV1, BenchmarkAnalysisV1 } from './benchmark.js';
+export type {
+  AlignmentProvider, AlignmentRequest, AvatarCapabilities, AvatarClipV1, AvatarExternalTask, AvatarGenerationRequest, AvatarGenerationV1,
+  AvatarProfileV1, AvatarProvider, AvatarTaskStatus, DigitalHumanJobType, GenerationStatus, ProfileStatus, ProviderMediaStaging,
+  SpeechCapabilities, SpeechGenerationRequest, SpeechGenerationResult, SpeechGenerationV1, SpeechProvider, SubtitleCue, SubtitleTimeline,
+  VoiceProfileV1,
+} from './digital-human.js';
+export { validateAvatarGenerationRequest, validateSpeechGenerationRequest } from './digital-human.js';

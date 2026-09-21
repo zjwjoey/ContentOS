@@ -86,6 +86,8 @@ importers:
 
   workers/benchmark-worker: {}
 
+  workers/digital-human-worker: {}
+
   workers/director-worker: {}
 
   workers/publisher-worker: {}

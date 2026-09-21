@@ -15,6 +15,14 @@ test('config parses boot values without logging raw secrets', () => {
   assert.equal(config.databaseUrl, 'postgresql://user:password@localhost/db');
 });
 
+test('config exposes digital human runtime defaults and overrides', () => {
+  const defaults = loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgresql://user:password@localhost/db', STORAGE_ROOT: './storage/test' });
+  assert.equal(defaults.digitalHumanSpeechProvider, 'indextts25'); assert.equal(defaults.digitalHumanWorkerConcurrency, 1); assert.equal(defaults.digitalHumanRemoteResultTimeoutMs, 300_000);
+  assert.equal(defaults.digitalHumanAvatarProvider, 'hzagent'); assert.equal(defaults.mediaStagingProvider, 'signed-url');
+  const configured = loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgresql://user:password@localhost/db', STORAGE_ROOT: './storage/test', CONTENTOS_SPEECH_PROVIDER: 'fake-speech', CONTENTOS_INDEXTTS_BASE_URL: 'http://127.0.0.1:9999', DIGITAL_HUMAN_WORKER_CONCURRENCY: '2' });
+  assert.equal(configured.digitalHumanSpeechProvider, 'fake-speech'); assert.equal(configured.indexttsBaseUrl, 'http://127.0.0.1:9999'); assert.equal(configured.digitalHumanWorkerConcurrency, 2);
+});
+
 test('publisher real adapter configuration is disabled and fail-closed by default', () => {
   const defaults = loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgresql://user:password@localhost/db', STORAGE_ROOT: './storage/test' });
   assert.equal(defaults.publisherRealAdaptersEnabled, false);

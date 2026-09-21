@@ -9,7 +9,6 @@ function qwenStatus() {
     embeddingModel: process.env.QWEN_EMBEDDING_MODEL || 'text-embedding-v3',
   };
 }
-
 export function registerQwenRoutes(app: FastifyInstance): void {
   app.get('/api/v1/ai/qwen/status', async () => qwenStatus());
   app.post('/api/v1/ai/qwen/test', async (_request, reply) => {
@@ -22,4 +21,3 @@ export function registerQwenRoutes(app: FastifyInstance): void {
     }
   });
 }
-

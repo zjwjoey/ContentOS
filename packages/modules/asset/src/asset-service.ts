@@ -3,8 +3,8 @@ import { readFile } from 'node:fs/promises';
 import type { Pool } from 'pg';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 
-export interface ImportAssetInput { projectId?: string; workspaceId?: string; global?: boolean; sourcePath: string; kind: string; role?: 'SOURCE' | 'VOICE' | 'OUTPUT'; metadata?: Record<string, unknown>; }
-export interface AssetResult { id: string; projectId: string; workspaceId?: string; checksum: string; storageKey: string; byteSize: number; status: 'READY' | 'DEDUPED'; }
+export interface ImportAssetInput { projectId?: string; workspaceId?: string; global?: boolean; sourcePath: string; kind: string; role?: 'SOURCE' | 'VOICE' | 'OUTPUT'; metadata?: Record<string, unknown>; skipProbe?: boolean; }
+export interface AssetResult { id: string; projectId: string; workspaceId?: string; checksum: string; storageKey: string; byteSize: number; status: 'READY' | 'DEDUPED'; associationCreated?: boolean; }
 export interface AssetProbe { durationMs?: number; width?: number; height?: number; format?: string; }
 export interface AssetTransaction { query(text: string, values?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }> }
 const preparedAssetImportBrand: unique symbol = Symbol('PreparedAssetImport');
@@ -19,7 +19,7 @@ export class AssetService {
   constructor(private readonly db: Pool, private readonly storage: LocalStorageProvider, private readonly probe?: (path: string) => Promise<AssetProbe>) {}
   async prepareFile(input: ImportAssetInput): Promise<PreparedAssetImport> {
     const staged = await this.storage.stage(input.sourcePath);
-    const probe = this.probe ? await this.probe(input.sourcePath) : undefined;
+    const probe = this.probe && !input.skipProbe ? await this.probe(input.sourcePath) : undefined;
     const promoted = await this.storage.promote(staged);
     return new ActivePreparedAssetImport(staged.checksum, staged.byteSize, promoted.storageKey, staged.originalName, this.storage, probe, promoted.deduped);
   }
@@ -36,17 +36,19 @@ export class AssetService {
       : await db.query('select * from assets where checksum = $1 and kind <> $2 limit 1', [prepared.checksum, 'VIDEO_RENDER']);
     if (existing.rows[0]) {
       const row = existing.rows[0] as Record<string, unknown>;
-      if (input.projectId) await db.query('insert into project_assets (project_id, asset_id, role) values ($1, $2, $3) on conflict do nothing', [input.projectId, String(row.id), input.role || 'SOURCE']);
-      else if (input.workspaceId) await db.query('insert into video_workspace_assets (workspace_id, asset_id, role) values ($1, $2, $3) on conflict do nothing', [input.workspaceId, String(row.id), input.role || 'SOURCE']);
-      return { id: String(row.id), projectId: input.projectId || '', ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}), checksum: prepared.checksum, storageKey: String(row.storage_key), byteSize: Number(row.byte_size), status: 'DEDUPED' };
+      let associationCreated = false;
+      if (input.projectId) associationCreated = (await db.query('insert into project_assets (project_id, asset_id, role) values ($1, $2, $3) on conflict do nothing returning asset_id', [input.projectId, String(row.id), input.role || 'SOURCE'])).rows.length > 0;
+      else if (input.workspaceId) associationCreated = (await db.query('insert into video_workspace_assets (workspace_id, asset_id, role) values ($1, $2, $3) on conflict do nothing returning asset_id', [input.workspaceId, String(row.id), input.role || 'SOURCE'])).rows.length > 0;
+      return { id: String(row.id), projectId: input.projectId || '', ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}), checksum: prepared.checksum, storageKey: String(row.storage_key), byteSize: Number(row.byte_size), status: 'DEDUPED', associationCreated };
     }
     const id = `asset-${randomUUID()}`;
     const metadata = { originalName: prepared.originalName, ...(prepared.probe || {}), ...(input.metadata || {}) };
     const result = await db.query('insert into assets (id, project_id, kind, checksum, byte_size, storage_key, lifecycle, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8) returning *', [id, input.projectId || null, input.kind, prepared.checksum, prepared.byteSize, prepared.storageKey, 'READY', metadata]);
-    if (input.projectId) await db.query('insert into project_assets (project_id, asset_id, role) values ($1, $2, $3) on conflict do nothing', [input.projectId, id, input.role || 'SOURCE']);
-    else if (input.workspaceId) await db.query('insert into video_workspace_assets (workspace_id, asset_id, role) values ($1, $2, $3) on conflict do nothing', [input.workspaceId, id, input.role || 'SOURCE']);
+    let associationCreated = false;
+    if (input.projectId) associationCreated = (await db.query('insert into project_assets (project_id, asset_id, role) values ($1, $2, $3) on conflict do nothing returning asset_id', [input.projectId, id, input.role || 'SOURCE'])).rows.length > 0;
+    else if (input.workspaceId) associationCreated = (await db.query('insert into video_workspace_assets (workspace_id, asset_id, role) values ($1, $2, $3) on conflict do nothing returning asset_id', [input.workspaceId, id, input.role || 'SOURCE'])).rows.length > 0;
     const row = result.rows[0] as Record<string, unknown>;
-    return { id, projectId: input.projectId || '', ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}), checksum: prepared.checksum, storageKey: String(row.storage_key), byteSize: prepared.byteSize, status: 'READY' };
+    return { id, projectId: input.projectId || '', ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}), checksum: prepared.checksum, storageKey: String(row.storage_key), byteSize: prepared.byteSize, status: 'READY', associationCreated };
   }
   async prepareStagedUpload(input: ImportAssetInput & { stagedPath: string; originalName: string; checksum: string; byteSize: number; probe?: AssetProbe }): Promise<PreparedAssetImport> {
     const promoted = await this.storage.promote({ tempPath: this.storage.stagedPath(input.stagedPath), checksum: input.checksum, byteSize: input.byteSize, originalName: input.originalName });
@@ -54,6 +56,10 @@ export class AssetService {
   }
   async importFile(input: ImportAssetInput, transaction?: AssetTransaction): Promise<AssetResult> {
     return this.commitPrepared(input, await this.prepareFile(input), transaction);
+  }
+  async removeProjectAssetAssociation(projectId: string, assetId: string, role: 'SOURCE' | 'VOICE' | 'OUTPUT' = 'OUTPUT'): Promise<boolean> {
+    const result = await this.db.query('delete from project_assets where project_id = $1 and asset_id = $2 and role = $3 returning asset_id', [projectId, assetId, role]);
+    return result.rows.length > 0;
   }
   async importGlobalStaged(input: { stagedPath: string; originalName: string; byteSize: number }): Promise<AssetResult> {
     const stagedAbsolutePath = this.storage.stagedPath(input.stagedPath);

@@ -44,8 +44,12 @@ export class JobService {
   }
 
   async createIdempotent(input: CreateJobInput): Promise<JobRecord> {
-    const result = await this.db.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts, scheduled_at) values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now())) on conflict (idempotency_key) do update set id = jobs.id returning *', [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts, input.scheduledAt || null]);
-    return mapJob(result.rows[0] as Record<string, unknown>);
+    const values = [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts, input.scheduledAt || null];
+    const result = await this.db.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts, scheduled_at) values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now())) on conflict do nothing returning *', values);
+    if (result.rows[0]) return mapJob(result.rows[0] as Record<string, unknown>);
+    const existing = await this.db.query('select * from jobs where idempotency_key = $1', [input.idempotencyKey]);
+    if (existing.rows[0]) return mapJob(existing.rows[0] as Record<string, unknown>);
+    throw new Error(`JOB_ID_CONFLICT: ${input.id}`);
   }
 
   async get(id: string): Promise<JobRecord | null> {
@@ -171,7 +175,39 @@ export class JobService {
     finally { scope?.close(); client.release(); }
   }
 
+  async defer(id: string, attemptId: string, error: unknown, retryDelayMs = 1_000): Promise<JobRecord> {
+    const client = await this.db.connect();
+    try {
+      await client.query('begin');
+      const selected = await client.query('select * from jobs where id = $1 for update', [id]);
+      const current = selected.rows[0] as Record<string, unknown> | undefined;
+      if (!current) throw new Error(`Job ${id} not found`);
+      const attempt = await client.query<{ attempt_number: number; status: string }>('select attempt_number, status from job_attempts where id = $1 and job_id = $2', [attemptId, id]);
+      const active = attempt.rows[0];
+      if (!active || active.status !== 'RUNNING' || Number(active.attempt_number) !== Number(current.attempt_count) || current.state !== 'RUNNING') { await client.query('commit'); return mapJob(current); }
+      const delay = Number.isSafeInteger(retryDelayMs) && retryDelayMs > 0 ? Math.min(retryDelayMs, 3_600_000) : 1_000;
+      const retryAt = new Date(Date.now() + delay);
+      await client.query('update job_attempts set status = $2, error = $3, finished_at = now() where id = $1', [attemptId, 'FAILED', error]);
+      const result = await client.query('update jobs set state = $2, error = $3, retry_at = $4, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 returning *', [id, 'RETRY_WAIT', error, retryAt]);
+      await client.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [id, 'job.deferred', { attemptId, retryDelayMs: delay }]);
+      await client.query('commit');
+      return mapJob(result.rows[0] as Record<string, unknown>);
+    } catch (failure) { await client.query('rollback'); throw failure; }
+    finally { client.release(); }
+  }
+
   async requeue(id: string): Promise<void> { await this.db.query("update jobs set state = 'QUEUED', retry_at = null, updated_at = now() where id = $1 and state = 'RETRY_WAIT'", [id]); }
+
+  async requeueTerminal(id: string): Promise<JobRecord> {
+    const updated = await this.db.query("update jobs set state = 'QUEUED', scheduled_at = now(), retry_at = null, result = null, error = null, progress = '{}'::jsonb, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 and state in ('FAILED','CANCELLED') returning *", [id]);
+    if (updated.rows[0]) {
+      await this.db.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [id, 'job.requeued', { reason: 'explicit_retry' }]);
+      return mapJob(updated.rows[0] as Record<string, unknown>);
+    }
+    const current = await this.get(id);
+    if (!current) throw new Error(`Job ${id} not found`);
+    return current;
+  }
 
   async requestCancel(id: string): Promise<void> {
     await this.db.query("update jobs set state = case when state = 'RUNNING' then 'CANCEL_REQUESTED' else 'CANCELLED' end, retry_at = null, lease_owner = case when state = 'RUNNING' then lease_owner else null end, lease_expires_at = case when state = 'RUNNING' then lease_expires_at else null end, updated_at = now() where id = $1 and state in ('QUEUED','RUNNING','RETRY_WAIT')", [id]);
@@ -351,7 +387,8 @@ export class JobRunner {
       const state = heartbeatState === 'ACTIVE' ? await pulse() : heartbeatState;
       if (state === 'CANCEL_REQUESTED') return this.service.cancelAttempt(id, claimed.attemptId);
       if (state === 'STALE') return (await this.service.get(id)) as JobRecord;
-      const candidate = error as { code?: unknown; retryable?: unknown };
+      const candidate = error as { code?: unknown; retryable?: unknown; defer?: unknown; retryDelayMs?: unknown };
+      if (candidate.defer === true) return this.service.defer(id, claimed.attemptId, { code: typeof candidate.code === 'string' ? candidate.code : 'HANDLER_DEFERRED', message: error instanceof Error ? error.message : 'handler deferred' }, typeof (candidate as { retryDelayMs?: unknown }).retryDelayMs === 'number' ? (candidate as { retryDelayMs: number }).retryDelayMs : 1_000);
       const retryable = typeof candidate.retryable === 'boolean' ? candidate.retryable : true;
       const code = typeof candidate.code === 'string' ? candidate.code : 'HANDLER_FAILED';
       return this.service.fail(id, claimed.attemptId, { code, message: error instanceof Error ? error.message : 'unknown' }, retryable);

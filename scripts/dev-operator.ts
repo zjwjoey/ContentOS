@@ -15,8 +15,6 @@ const commonEnv: NodeJS.ProcessEnv = {
   FFMPEG_FONT_FILE: process.env.FFMPEG_FONT_FILE ?? 'C:\\Windows\\Fonts\\msyh.ttc',
 };
 
-// Windows FFmpeg builds may depend on sibling DLLs. Ensure every composed
-// worker can resolve those DLLs when an absolute executable path is configured.
 if (process.platform === 'win32') {
   const executableDirs = [commonEnv.FFMPEG_PATH, commonEnv.FFPROBE_PATH]
     .filter((value): value is string => Boolean(value) && value !== 'ffmpeg' && value !== 'ffprobe')
@@ -82,6 +80,7 @@ if (direct) {
   launchDirect('@contentos/worker-publisher', 'workers/publisher-worker/src/dev-main.ts', { ...commonEnv, PORT: process.env.PUBLISHER_WORKER_PORT ?? '3020' });
   launchDirect('@contentos/review-worker', 'workers/review-worker/src/dev-main.ts', { ...commonEnv, PORT: process.env.REVIEW_WORKER_PORT ?? '3025' });
   launchDirect('@contentos/benchmark-worker', 'workers/benchmark-worker/src/dev-main.ts', { ...commonEnv, PORT: process.env.BENCHMARK_WORKER_PORT ?? '3026' });
+  launchDirect('@contentos/digital-human-worker', 'workers/digital-human-worker/src/dev-main.ts', { ...commonEnv, PORT: process.env.DIGITAL_HUMAN_WORKER_PORT ?? '3027' });
 } else {
   launch(['--filter', '@contentos/web', 'exec', 'next', webMode, '-p', process.env.WEB_PORT ?? '3001'], webEnv);
   launch(['--filter', '@contentos/director-worker', 'dev'], { ...commonEnv, PORT: process.env.DIRECTOR_WORKER_PORT ?? '3010' });
@@ -90,4 +89,5 @@ if (direct) {
   launch(['--filter', '@contentos/worker-publisher', 'dev'], { ...commonEnv, PORT: process.env.PUBLISHER_WORKER_PORT ?? '3020' });
   launch(['--filter', '@contentos/review-worker', 'dev'], { ...commonEnv, PORT: process.env.REVIEW_WORKER_PORT ?? '3025' });
   launch(['--filter', '@contentos/benchmark-worker', 'dev'], { ...commonEnv, PORT: process.env.BENCHMARK_WORKER_PORT ?? '3026' });
+  launch(['--filter', '@contentos/digital-human-worker', 'dev'], { ...commonEnv, PORT: process.env.DIGITAL_HUMAN_WORKER_PORT ?? '3027' });
 }

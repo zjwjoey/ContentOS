@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { defaultPresentationSettings, PresentationSettingsPanel, type PresentationSettingsValue } from '../../_components/presentation-settings';
 import { segmentationChanged } from '../segmentation-policy';
 import { mergeScriptSegmentsV1, splitScriptSegmentV1, type ScriptSegment } from '../segmentation';
@@ -18,7 +18,7 @@ type JianyingRuntime = { platform: string; helperConfigured: boolean; helperAvai
 
 const seconds = (ms: number): string => `${(ms / 1000).toFixed(2)}s`;
 
-export default function ScriptEditingV3Page() {
+function ScriptEditingV3Workbench() {
   const searchParams = useSearchParams();
   const [workspaceId] = useState(() => typeof window === 'undefined' ? 'workspace-v3' : window.localStorage.getItem('contentos-v3-workspace') || 'workspace-v3');
   const [script, setScript] = useState('越来越多消费者开始走进这些低价门店。顾客在货架区域挑选商品。');
@@ -134,4 +134,8 @@ export default function ScriptEditingV3Page() {
     {session && pool.length > 0 && <section className="card"><div className="section-title"><h2>Material Pool Preview</h2><span>复用当前 Snapshot</span></div><p className="muted">这里仅提供素材池预览；选择和 Source Monitor 仍在每个 Sentence Card 内完成。</p><div className="material-thumb-grid material-preview-grid">{filteredPool.slice(0, 20).map((item) => { const shotState = shotsByAsset[item.assetId]; return <div className="material-preview-card" key={item.assetId}>{item.thumbnailUrl ? <img className="history-preview" src={item.thumbnailUrl} alt={item.fileName} /> : <video muted preload="metadata" className="history-preview" src={`/api/v1/edit/v3/media/${encodeURIComponent(item.assetId)}?snapshotId=${encodeURIComponent(session.snapshotId)}`} /> }<strong>{item.fileName}</strong><small>{seconds(item.durationMs)} · {[...item.tags, ...(item.aiTags || [])].join('、') || '无标签'}{item.gold ? ' · Gold' : ''}{item.aiStatus ? ` · AI ${item.aiStatus}` : ''}</small><button type="button" onClick={() => void detectShots(item.assetId)}>检测镜头</button>{shotState && <><small>Shots：{shotState.shots.length}</small>{shotState.shots.slice(0, 6).map((shot) => <div className="inline-field" key={`${shot.sourceInMs}-${shot.sourceOutMs}`}><span>{seconds(shot.sourceInMs)} → {seconds(shot.sourceOutMs)}</span><button type="button" onClick={() => void useShot(item.assetId, shot)}>作为候选使用</button></div>)}</>}</div>; })}</div></section>}
     {session?.manifestId && <section className="card"><div className="page-header-row"><div><h2>5. Full Video Preview</h2><p className="muted">渲染执行 immutable EditManifest；播放时会标出当前 Sentence Card。</p></div><button type="button" onClick={() => void render()}>渲染整片</button></div>{renderUrl && <><video ref={previewRef} controls className="history-preview" src={renderUrl} onTimeUpdate={() => { const timeMs = (previewRef.current?.currentTime || 0) * 1000; const card = session.cards.find((item) => { const start = item.clip?.timelineStartMs ?? item.startMs; const end = start + (item.clip?.durationMs ?? (item.endMs - item.startMs)); return timeMs >= start && timeMs < end; }); if (card) setActiveSentenceId(card.sentenceId); }} />{activeSentenceId && <p className="status">当前句子：{session.cards.find((card) => card.sentenceId === activeSentenceId)?.text || activeSentenceId}</p>}</>}</section>}
   </main>;
+}
+
+export default function ScriptEditingV3Page() {
+  return <Suspense fallback={<main className="shell"><p className="muted">正在加载 Script Editing Workbench…</p></main>}><ScriptEditingV3Workbench /></Suspense>;
 }

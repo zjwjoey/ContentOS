@@ -23,7 +23,7 @@ export interface ReadySourceAsset {
 }
 
 export interface ReadyAssetContent extends AssetSummaryV0 { storageKey: string; }
-export interface ProjectAssetReference { id: string; projectId: string; kind: string; lifecycle: string; storageKey: string; checksum: string; }
+export interface ProjectAssetReference { id: string; projectId: string; kind: string; lifecycle: string; storageKey: string; checksum: string; metadata: Record<string, unknown>; }
 
 function mapAsset(row: Record<string, unknown>): PublishableAsset {
   return {
@@ -65,9 +65,10 @@ export class AssetCatalogService {
   constructor(private readonly db: Pool) {}
 
   async getProjectAsset(projectId: string, assetId: string): Promise<ProjectAssetReference | null> {
-    const result = await this.db.query('select id, project_id, kind, lifecycle, storage_key, checksum from assets where project_id = $1 and id = $2', [projectId, assetId]);
+    const result = await this.db.query('select a.id, pa.project_id, a.kind, a.lifecycle, a.storage_key, a.checksum, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 where a.id = $2', [projectId, assetId]);
     const row = result.rows[0] as Record<string, unknown> | undefined;
-    return row ? { id: String(row.id), projectId: String(row.project_id), kind: String(row.kind), lifecycle: String(row.lifecycle), storageKey: String(row.storage_key), checksum: String(row.checksum) } : null;
+    const metadata = row?.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {};
+    return row ? { id: String(row.id), projectId: String(row.project_id), kind: String(row.kind), lifecycle: String(row.lifecycle), storageKey: String(row.storage_key), checksum: String(row.checksum), metadata } : null;
   }
 
   async listPublishable(projectId: string): Promise<PublishableAsset[]> {
@@ -82,17 +83,19 @@ export class AssetCatalogService {
 
   async listReadySourceAssets(projectId: string, assetIds: string[], kind: SourceAssetKind): Promise<ReadySourceAsset[]> {
     if (assetIds.length === 0) return [];
-    const result = await this.db.query('select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and pa.role = $5 where a.id = any($2::text[]) and a.kind = $3 and a.lifecycle = $4', [projectId, assetIds, kind, 'READY', 'SOURCE']);
+    const roleClause = "pa.role in ('SOURCE','OUTPUT')";
+    const result = await this.db.query(`select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and ${roleClause} where a.id = any($2::text[]) and a.kind = $3 and a.lifecycle = $4`, [projectId, assetIds, kind, 'READY']);
     return result.rows.map((row) => mapSourceAsset(row as Record<string, unknown>));
   }
 
   async getReadySourceAsset(projectId: string, assetId: string, kind: SourceAssetKind): Promise<ReadySourceAsset | null> {
-    const result = await this.db.query('select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and pa.role = $5 where a.id = $2 and a.kind = $3 and a.lifecycle = $4', [projectId, assetId, kind, 'READY', 'SOURCE']);
+    const roleClause = "pa.role in ('SOURCE','OUTPUT')";
+    const result = await this.db.query(`select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and ${roleClause} where a.id = $2 and a.kind = $3 and a.lifecycle = $4`, [projectId, assetId, kind, 'READY']);
     return result.rows[0] ? mapSourceAsset(result.rows[0] as Record<string, unknown>) : null;
   }
 
   async listReadyVideoAssets(projectId: string): Promise<ReadySourceAsset[]> {
-    const result = await this.db.query('select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and pa.role = $2 where a.kind = $3 and a.lifecycle = $4 order by a.created_at, a.id', [projectId, 'SOURCE', 'VIDEO', 'READY']);
+    const result = await this.db.query("select a.id, pa.project_id, a.kind, a.storage_key, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 and pa.role in ('SOURCE','OUTPUT') where a.kind = $2 and a.lifecycle = $3 order by a.created_at, a.id", [projectId, 'VIDEO', 'READY']);
     return result.rows.map((row) => mapSourceAsset(row as Record<string, unknown>));
   }
 
@@ -204,6 +207,22 @@ export class AssetCatalogService {
 
   async getReadyAssetContent(projectId: string, assetId: string): Promise<ReadyAssetContent | null> {
     const result = await this.db.query('select * from assets where project_id = $1 and id = $2 and lifecycle = $3', [projectId, assetId, 'READY']);
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {};
+    return { id: String(row.id), kind: String(row.kind) as AssetSummaryV0['kind'], lifecycle: 'READY', byteSize: Number(row.byte_size), checksum: String(row.checksum), originalName: typeof metadata.originalName === 'string' ? metadata.originalName : String(row.storage_key).split('/').pop() || 'asset', metadata: safeMetadata(row), storageKey: String(row.storage_key) };
+  }
+
+  async getReadyDigitalHumanSubtitle(projectId: string, speechGenerationId: string, format: 'srt' | 'ass'): Promise<ReadyAssetContent | null> {
+    const result = await this.db.query("select a.* from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 where a.project_id = $1 and a.kind = 'TEXT' and a.lifecycle = 'READY' and a.metadata->'digitalHuman'->>'speechGenerationId' = $2 and a.metadata->>'format' = $3 order by a.created_at desc, a.id desc limit 1", [projectId, speechGenerationId, format]);
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {};
+    return { id: String(row.id), kind: 'TEXT', lifecycle: 'READY', byteSize: Number(row.byte_size), checksum: String(row.checksum), originalName: typeof metadata.originalName === 'string' ? metadata.originalName : String(row.storage_key).split('/').pop() || 'asset', metadata: safeMetadata(row), storageKey: String(row.storage_key) };
+  }
+
+  async getReadyAssetForProviderStaging(projectId: string, assetId: string): Promise<ReadyAssetContent | null> {
+    const result = await this.db.query("select a.* from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 where a.id = $2 and a.project_id = $1 and a.kind in ('AUDIO','VIDEO') and a.lifecycle = 'READY'", [projectId, assetId]);
     const row = result.rows[0] as Record<string, unknown> | undefined;
     if (!row) return null;
     const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {};

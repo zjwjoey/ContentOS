@@ -19,6 +19,17 @@ export interface AppConfig {
   publisherWechatHeaded: boolean;
   publisherProfileRoot: string;
   publisherEvidenceRoot: string;
+  digitalHumanWorkerConcurrency: number;
+  digitalHumanPollIntervalMs: number;
+  digitalHumanSpeechProvider: string;
+  indexttsBaseUrl: string;
+  digitalHumanAvatarProvider: string;
+  mediaStagingProvider: string;
+  mediaStagingBaseUrl: string;
+  mediaStagingSecret: string;
+  digitalHumanProviderRequestTimeoutMs: number;
+  digitalHumanProviderCapabilityTimeoutMs: number;
+  digitalHumanRemoteResultTimeoutMs: number;
 }
 
 function required(env: Record<string, string | undefined>, key: string): string {
@@ -66,5 +77,16 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     publisherWechatHeaded: flag(env, 'PUBLISHER_WECHAT_HEADED', true),
     publisherProfileRoot: env.PUBLISHER_PROFILE_ROOT || 'storage/publisher-profiles',
     publisherEvidenceRoot: env.PUBLISHER_EVIDENCE_ROOT || 'artifacts/publisher',
+    digitalHumanWorkerConcurrency: integer(env, 'DIGITAL_HUMAN_WORKER_CONCURRENCY', 1),
+    digitalHumanPollIntervalMs: integer(env, 'DIGITAL_HUMAN_POLL_INTERVAL_MS', 250),
+    digitalHumanSpeechProvider: env.CONTENTOS_SPEECH_PROVIDER || 'indextts25',
+    indexttsBaseUrl: env.CONTENTOS_INDEXTTS_BASE_URL || 'http://127.0.0.1:8788',
+    digitalHumanAvatarProvider: env.CONTENTOS_AVATAR_PROVIDER || 'hzagent',
+    mediaStagingProvider: env.CONTENTOS_MEDIA_STAGING_PROVIDER || 'signed-url',
+    mediaStagingBaseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL || '',
+    mediaStagingSecret: env.CONTENTOS_MEDIA_STAGING_SECRET || '',
+    digitalHumanProviderRequestTimeoutMs: integer(env, 'CONTENTOS_PROVIDER_REQUEST_TIMEOUT_MS', 30_000),
+    digitalHumanProviderCapabilityTimeoutMs: integer(env, 'CONTENTOS_PROVIDER_CAPABILITY_TIMEOUT_MS', 5_000),
+    digitalHumanRemoteResultTimeoutMs: integer(env, 'CONTENTOS_AVATAR_RESULT_TIMEOUT_MS', 300_000),
   };
 }

@@ -74,7 +74,8 @@ export function registerAssetRoutes(app: FastifyInstance, dependencies: AssetRou
     const params = request.params as { projectId: string; assetId: string };
     const asset = await dependencies.assets.getReadyAssetContent(params.projectId, params.assetId);
     if (!asset) return error(reply, 404, 'ASSET_NOT_FOUND', 'Ready asset not found');
-    reply.header('content-type', asset.metadata.format === 'wav' ? 'audio/wav' : asset.kind === 'AUDIO' ? 'audio/mpeg' : 'video/mp4');
+    const contentType = asset.kind === 'TEXT' && asset.metadata.format === 'srt' ? 'application/x-subrip; charset=utf-8' : asset.kind === 'TEXT' && asset.metadata.format === 'ass' ? 'text/x-ssa; charset=utf-8' : asset.metadata.format === 'wav' ? 'audio/wav' : asset.kind === 'AUDIO' ? 'audio/mpeg' : 'video/mp4';
+    reply.header('content-type', contentType);
     reply.header('content-length', asset.byteSize);
     reply.header('accept-ranges', 'bytes');
     reply.header('etag', `"${asset.checksum}"`);
