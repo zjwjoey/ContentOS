@@ -93,6 +93,7 @@ export interface HttpAvatarProviderOptions {
   model?: string;
   authHeaderName?: string;
   authScheme?: string;
+  idempotencyHeaderName?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -103,9 +104,10 @@ export class HttpAvatarProvider implements AvatarProvider {
   private authHeaders(): Record<string, string> { const name = this.options.authHeaderName || 'authorization'; const value = this.options.authScheme === '' ? this.options.apiKey : `${this.options.authScheme || 'Bearer'} ${this.options.apiKey}`; return { [name]: value }; }
   async getCapabilities(): Promise<AvatarCapabilities> { return { providerId: this.providerId, local: false, videoToVideo: true, imageToVideo: false, requiresPublicUrl: true, supportedFormats: ['mp4'] }; }
   async submitLipSync(request: AvatarGenerationRequest): Promise<AvatarExternalTask> {
+    const idempotencyHeaderName = this.options.idempotencyHeaderName === '' ? '' : (this.options.idempotencyHeaderName || 'Idempotency-Key');
     const response = await this.fetchImpl(new URL(this.options.submitPath || '/v1/lipsync/tasks', this.options.baseUrl), {
-      method: 'POST', headers: { 'content-type': 'application/json', ...this.authHeaders() },
-      body: JSON.stringify({ audioUrl: request.audioUrl, videoUrl: request.videoUrl, model: request.model || this.options.model, parameters: request.parameters }),
+      method: 'POST', headers: { 'content-type': 'application/json', ...this.authHeaders(), ...(idempotencyHeaderName ? { [idempotencyHeaderName]: request.requestId } : {}) },
+      body: JSON.stringify({ requestId: request.requestId, projectId: request.projectId, jobId: request.jobId, correlationId: request.correlationId, audioUrl: request.audioUrl, videoUrl: request.videoUrl, model: request.model || this.options.model, parameters: request.parameters }),
     });
     if (!response.ok) throw responseError(response.status);
     const body = jsonObject(await response.json()); const taskId = firstString(body, 'taskId', 'task_id', 'id') || '';

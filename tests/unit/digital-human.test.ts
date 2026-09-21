@@ -52,7 +52,7 @@ test('HTTP adapters preserve provider capability, task status, model version, an
   const submitted = await avatar.submitLipSync({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', audioUrl: 'https://cdn.test/a.wav', videoUrl: 'https://cdn.test/v.mp4', parameters: {} });
   assert.equal(submitted.status, 'RUNNING'); assert.equal(submitted.modelVersion, '2026.09'); assert.equal(submitted.costAmount, 1.25);
   const completed = await avatar.getTask('task-1'); assert.equal(completed.status, 'SUCCEEDED'); assert.equal(completed.outputUrl, 'https://cdn.test/result.mp4'); assert.equal(completed.costCurrency, 'RMB');
-  assert.equal((requests[0]?.headers as Record<string, string>)['x-api-key'], 'test-only'); assert.equal((requests[1]?.headers as Record<string, string>)['x-api-key'], 'test-only');
+  assert.equal((requests[0]?.headers as Record<string, string>)['x-api-key'], 'test-only'); assert.equal((requests[0]?.headers as Record<string, string>)['Idempotency-Key'], 'r'); assert.equal((requests[1]?.headers as Record<string, string>)['x-api-key'], 'test-only');
 });
 
 test('signed provider media staging issues expiring, tamper-resistant URLs', async () => {
