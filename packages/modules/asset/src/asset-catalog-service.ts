@@ -65,7 +65,7 @@ export class AssetCatalogService {
   constructor(private readonly db: Pool) {}
 
   async getProjectAsset(projectId: string, assetId: string): Promise<ProjectAssetReference | null> {
-    const result = await this.db.query('select id, project_id, kind, lifecycle, storage_key, checksum, metadata from assets where project_id = $1 and id = $2', [projectId, assetId]);
+    const result = await this.db.query('select a.id, pa.project_id, a.kind, a.lifecycle, a.storage_key, a.checksum, a.metadata from assets a join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 where a.id = $2', [projectId, assetId]);
     const row = result.rows[0] as Record<string, unknown> | undefined;
     const metadata = row?.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {};
     return row ? { id: String(row.id), projectId: String(row.project_id), kind: String(row.kind), lifecycle: String(row.lifecycle), storageKey: String(row.storage_key), checksum: String(row.checksum), metadata } : null;

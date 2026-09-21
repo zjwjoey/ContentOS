@@ -134,6 +134,7 @@ export class DigitalHumanService {
     const generation = mapAvatarGeneration(row as Record<string, unknown>); return { generation, job, created: result.rowCount === 1 };
   }
   async getAvatarGeneration(projectId: string, id: string): Promise<AvatarGenerationV1 | null> { const result = await this.db.query('select * from avatar_generations where project_id = $1 and id = $2', [projectId, id]); return result.rows[0] ? mapAvatarGeneration(result.rows[0] as Record<string, unknown>) : null; }
+  async hasOtherAvatarOutputReference(projectId: string, assetId: string, generationId: string): Promise<boolean> { const result = await this.db.query("select 1 from avatar_generations where project_id = $1 and output_asset_id = $2 and id <> $3 and status = 'SUCCEEDED' limit 1", [projectId, assetId, generationId]); return result.rows.length > 0; }
   async listAvatarGenerations(projectId: string): Promise<AvatarGenerationV1[]> { const result = await this.db.query('select * from avatar_generations where project_id = $1 order by created_at desc', [projectId]); return result.rows.map((row) => mapAvatarGeneration(row as Record<string, unknown>)); }
   async findAvatarGenerationForRequest(input: Pick<CreateAvatarGenerationInput, 'projectId' | 'avatarProfileId' | 'avatarClipId' | 'speechAssetId' | 'provider' | 'model' | 'parameters'>): Promise<AvatarGenerationV1 | null> {
     const clip = await this.getAvatarClip(input.projectId, input.avatarClipId); if (!clip || clip.avatarProfileId !== input.avatarProfileId) return null;

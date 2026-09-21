@@ -70,9 +70,12 @@ test('Digital Human V1 browser flow completes fake speech, avatar, preflight, bl
     await createClip.getByLabel('上传人物底片').setInputFiles(fixtureVideo);
     await page.getByText('人物底片已导入并选中。', { exact: true }).waitFor({ state: 'visible', timeout: 60_000 });
     await createClip.getByLabel('底片名称').fill('Browser Front Clip');
+    const clipCreateResponsePromise = page.waitForResponse((response) => response.request().method() === 'POST' && response.url().endsWith(`/api/v1/projects/${projectId}/digital-human/avatar-clips`), { timeout: 20_000 });
     await createClip.getByRole('button', { name: '添加底片' }).click();
-    await page.getByText('人物底片已创建。', { exact: true }).waitFor({ state: 'visible', timeout: 20_000 });
-    const avatarWithClip = (await json<{ items: Array<{ id: string; clips: Array<{ id: string; status: string }> }> }>(await page.request.get(`${baseUrl}/api/v1/projects/${projectId}/digital-human/avatars`))).items.find((item) => item.id === avatarProfile.id);
+    const clipCreateResponse = await clipCreateResponsePromise;
+    assert.ok(clipCreateResponse.ok(), `Avatar Clip creation failed: ${clipCreateResponse.status()} ${await clipCreateResponse.text()}`);
+    const avatarsAfterClip = await waitFor(async () => json<{ items: Array<{ id: string; clips: Array<{ id: string; status: string }> }> }>(await page.request.get(`${baseUrl}/api/v1/projects/${projectId}/digital-human/avatars`)), (value) => value.items.some((item) => item.id === avatarProfile.id && item.clips.length > 0), 'avatar clip creation');
+    const avatarWithClip = avatarsAfterClip.items.find((item) => item.id === avatarProfile.id);
     assert.ok(avatarWithClip?.clips[0]);
     const avatarSection = page.locator('section.card').filter({ has: page.getByRole('heading', { name: '② 数字人' }) });
     await avatarSection.locator('select').last().selectOption(avatarWithClip.clips[0].id);
@@ -84,15 +87,27 @@ test('Digital Human V1 browser flow completes fake speech, avatar, preflight, bl
 
     await page.getByRole('button', { name: '生成数字人' }).click();
     await page.getByText('生成前检查：READY', { exact: true }).waitFor({ state: 'visible', timeout: 20_000 });
+    await page.getByLabel('配音 Asset ID').fill('changed-after-preflight');
+    await page.getByText('生成前检查：READY', { exact: true }).waitFor({ state: 'hidden', timeout: 5_000 });
+    await page.getByLabel('配音 Asset ID').fill(speechGeneration.outputAssetId);
     const avatarGeneration = await waitFor(async () => json<{ items: Array<{ id: string; status: string; outputAssetId?: string | null }> }>(await page.request.get(`${baseUrl}/api/v1/projects/${projectId}/digital-human/avatar-generations`)), (value) => value.items.some((item) => item.status === 'SUCCEEDED' && Boolean(item.outputAssetId)), 'avatar generation');
     const generated = avatarGeneration.items.find((item) => item.status === 'SUCCEEDED' && item.outputAssetId);
     assert.ok(generated?.outputAssetId);
     await page.locator('video').first().waitFor({ state: 'visible', timeout: 30_000 });
 
+    const beforeBlockedGenerations = (await json<{ items: Array<{ id: string }> }>(await page.request.get(`${baseUrl}/api/v1/projects/${projectId}/digital-human/avatar-generations`))).items.length;
     const blockedPage = await browser.newPage();
     await blockedPage.route('**/api/v1/projects/*/digital-human/capabilities', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ speech: { status: 'READY', providerId: 'fake-speech' }, avatar: { status: 'UNAVAILABLE', providerId: 'hzagent' }, mediaStaging: { status: 'UNAVAILABLE' } }) }));
     await blockedPage.goto(`${baseUrl}/projects/${projectId}/avatar`, { waitUntil: 'domcontentloaded' });
     await blockedPage.getByText(/数字人：UNAVAILABLE/, { exact: false }).waitFor({ state: 'visible', timeout: 20_000 });
+    const blockedAvatarSection = blockedPage.locator('section.card').filter({ has: blockedPage.getByRole('heading', { name: '② 数字人' }) });
+    await blockedAvatarSection.locator('select').first().selectOption(avatarProfile.id);
+    await blockedAvatarSection.locator('select').last().selectOption(avatarWithClip.clips[0].id);
+    await blockedPage.getByLabel('配音 Asset ID').fill(speechGeneration.outputAssetId);
+    const blockedGenerateButton = blockedPage.getByRole('button', { name: '生成数字人' });
+    assert.equal(await blockedGenerateButton.isDisabled(), true, 'Avatar generation must be disabled when provider capability is UNAVAILABLE');
+    const afterBlockedGenerations = (await json<{ items: Array<{ id: string }> }>(await blockedPage.request.get(`${baseUrl}/api/v1/projects/${projectId}/digital-human/avatar-generations`))).items.length;
+    assert.equal(afterBlockedGenerations, beforeBlockedGenerations, 'blocked Avatar UI must not create a Generation or Job');
     await blockedPage.close();
 
     await page.getByRole('button', { name: '进入视频工作台' }).first().click();

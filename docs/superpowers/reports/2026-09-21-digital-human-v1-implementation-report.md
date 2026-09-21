@@ -63,25 +63,39 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Contract/provider/worker/config tests and a proposed ADR.
 - Remote Avatar result authenticity validation is now fail-closed after download: strong HTML/JSON/XML/text content types are rejected, the response body is streamed under the byte limit, and the temporary file is validated with injected `ffprobe` metadata requiring a real video stream, positive duration, positive dimensions, a codec, and a known format. Probe-derived duration/width/height/format/codec are persisted on the output Asset and Generation provenance; provider task metadata remains in provenance. Download, probe, import, cancellation, and validation failures clean staging files and classify invalid media as non-retryable while preserving bounded download retryability.
 - The provider-neutral Avatar Contract Test Kit now checks capability identity, supported status/capability shapes, successful task identity, request-idempotent submission, task provenance/cost fields, terminal cancel stability, and the normalized provider error vocabulary. `FakeAvatarProvider` passes it without introducing a vendor adapter.
+- Generation completion now keeps authoritative root provenance fields (`provider`, model/version, source/output identity, external task, billing, probe and timing) separate from untrusted provider metadata under `providerMetadata`; provider-supplied keys can no longer overwrite ContentOS-owned attribution. Speech and Avatar integration/unit coverage asserts this boundary.
+- Avatar import completion/cancellation cleanup removes only the newly-created `project_assets` OUTPUT association, never the underlying blob or Asset row, and skips removal when another succeeded Generation references the same deduplicated Asset. The cleanup is attempted even when Generation state persistence fails and fails safe if shared-reference inspection is unavailable; external task reuse remains idempotent without resubmission.
+- Project Asset reads now authorize through `project_assets`, so a deduplicated source Asset owned by another project can be safely consumed by the requesting project without weakening project scoping; the isolated asset/video regression suite covers this case.
+- The Avatar Contract Test Kit now has explicit `FAKE` and `REAL` modes. `REAL` mode refuses to run unless all normalized provider error categories are supplied; no real vendor adapter is shipped.
+- Workspace Preflight state is cleared whenever `avatarId`, `clipId`, or `speechAssetId` changes. Browser coverage now verifies the stale READY card disappears and that a blocked `UNAVAILABLE` Avatar capability disables the Generate button without increasing Generation count.
 - The isolated browser harness now runs the Digital Human flow through the real web UI, API, PostgreSQL schema, durable Jobs, fake Speech/Avatar providers, remote-result proxy, Asset import, and existing Edit Manifest handoff. It verifies successful Speech and Avatar outputs, `READY` preflight, 9:16 Edit Manifest/subtitle/audio binding, and a browser-visible `UNAVAILABLE` Avatar capability case. The harness uses direct local `tsx`/`next` executables when the worktree has a shared `node_modules` Junction, avoiding pnpm task-state false failures.
 
 ## Verification
 
 - Targeted TypeScript compilation: passed.
 - Digital Human/config/worker unit tests and provider contract checks: passed.
-- Digital Human/API/provider suite: 58/58 tests passed, covering the interface-only avatar boundary and fake provider, SSRF-safe remote result handling, provider identity mismatch rejection, the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, the Worker-to-Asset vertical slice, probed Speech Asset duration, Speech-offline Avatar preflight, API cancellation, lease-recovery cancellation, graceful shutdown waiting, Worker preflight failure recording, bounded speech-provider failures, project-bound signed staging, subtitle Asset persistence, public-staging URL validation, fail-closed capability checks, external-task cancellation, terminal-task replacement, ffprobe-backed remote result authenticity, and the provider-neutral Avatar contract kit.
+- Digital Human/API/provider suite: 63/63 tests passed, covering the interface-only avatar boundary and fake provider, SSRF-safe remote result handling, provider identity mismatch rejection, the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, the Worker-to-Asset vertical slice, authoritative provenance, safe output-association cleanup, dedup/shared-Asset protection, probed Speech Asset duration, Speech-offline Avatar preflight, API cancellation, lease-recovery cancellation, graceful shutdown waiting, Worker preflight failure recording, bounded speech-provider failures, project-bound signed staging, subtitle Asset persistence, public-staging URL validation, fail-closed capability checks, external-task cancellation, terminal-task replacement, ffprobe-backed remote result authenticity, and the provider-neutral Avatar contract kit.
 - Job service integration suite: 15 tests passed, including deferred external work being rescheduled beyond `maxAttempts` while preserving attempt history and eventual completion.
 - Job service integration suite: 15/15 passed again against an isolated PostgreSQL schema on the running test service; the shared public database remains unsuitable because of the legacy migration history described below.
 - The Digital Human API integration suite also verifies subtitle generation creates a `TEXT` Asset and that the stored subtitle can be downloaded through the project Asset route.
-- Format check: passed (472 files).
-- Lint check: passed (178 TypeScript files).
+- Format check: passed (351 files).
+- Lint check: passed (158 TypeScript files).
 - `git diff --check`: passed.
 - Root TypeScript typecheck and build pass, and the clean temporary-schema migration matrix passes 9/9. The shared `contentos_test` public database is not clean: its `schema_migrations` history still contains the old pre-renumbering `0031_digital_human.sql`/`0032_digital_human_billing.sql` entries, so the legacy database integration tests fail when the new `0038`/`0039` files attempt to create already-existing Digital Human tables. The database was not reset or its history rewritten.
 - Web production build passed with Next.js 14.2.21, and `python -m py_compile tools/indextts-gateway/gateway.py` passed.
 - Remote Avatar result validation unit tests: 17/17 passed.
-- AvatarProvider contract tests: 2/2 passed.
-- Digital Human complete suite after the result-validation and contract additions: 58/58 passed.
-- Real browser acceptance against an isolated PostgreSQL schema with fake providers: 1/1 passed; this exercised web → API → DB → Job → Worker → Asset → Edit Manifest and the blocked/unavailable browser state.
+- AvatarProvider contract tests: 3/3 passed, including REAL-mode normalized-error completeness.
+- Digital Human complete suite after the final audit fixes: 63/63 passed.
+- Real browser acceptance against an isolated PostgreSQL schema with fake providers: 5/5 passed; this exercised the existing browser flows plus web → API → DB → Job → Worker → Asset → Edit Manifest, cross-project deduplicated Asset authorization, Preflight reset, and the blocked/unavailable browser state.
+- Cross-project Asset Catalog/video regression suite: 11/11 passed in a temporary PostgreSQL schema; the shared public database remains unsuitable for direct migration-up tests because of its pre-existing legacy migration history.
+
+## Final freeze
+
+Blocker count: 0 for the V1 implementation scope. The branch is ready for synchronization review and the current real Avatar API state is intentionally unchanged: the vendor integration remains interface-only because no verifiable official schema, credentials, or staging contract was supplied.
+
+Digital Human V1 feature development is now frozen pending synchronization with the latest main branch.
+Real Avatar vendor API remains intentionally unwired.
+The next step is main synchronization, conflict resolution, and full regression validation — not additional feature development.
 
 ## Runtime status
 

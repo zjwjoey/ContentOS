@@ -145,7 +145,7 @@ async function processSpeech(job: JobRecord, attemptId: string, signal: AbortSig
     const asset = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: result.outputPath, kind: 'AUDIO', role: 'OUTPUT', metadata: { digitalHuman: { generationId: generation.id, provider: result.providerId, model: result.model, modelVersion: result.modelVersion } } });
     signal.throwIfAborted();
     const imported = await deps.assets.getProjectAsset(payload.projectId, asset.id); const measuredDurationMs = Number(imported?.metadata.durationMs); const durationMs = Number.isFinite(measuredDurationMs) && measuredDurationMs > 0 ? measuredDurationMs : result.durationMs;
-    const completed = await deps.digitalHuman.completeSpeech(generation.id, { outputAssetId: asset.id, durationMs, latencyMs: result.latencyMs, modelVersion: result.modelVersion, provenance: { ...result.provenance, provider: result.providerId, model: result.model, modelVersion: result.modelVersion, voiceProfileId: generation.voiceProfileId, referenceAssetId: voice.referenceAssetId, referenceChecksum: reference?.checksum || null, textHash: generation.textHash, parameters: generation.parameters, durationMs, providerDurationMs: result.durationMs, latencyMs: result.latencyMs } });
+    const completed = await deps.digitalHuman.completeSpeech(generation.id, { outputAssetId: asset.id, durationMs, latencyMs: result.latencyMs, modelVersion: result.modelVersion, provenance: { providerMetadata: result.provenance || null, provider: result.providerId, model: result.model, modelVersion: result.modelVersion, voiceProfileId: generation.voiceProfileId, referenceAssetId: voice.referenceAssetId, referenceChecksum: reference?.checksum || null, textHash: generation.textHash, parameters: generation.parameters, durationMs, providerDurationMs: result.durationMs, latencyMs: result.latencyMs } });
     if (!completed) throw Object.assign(new Error('Speech Generation is no longer active'), { code: 'GENERATION_NOT_ACTIVE', retryable: false });
     return { generationId: generation.id, outputAssetId: asset.id, state: 'SUCCEEDED' };
   } catch (error) {
@@ -161,6 +161,13 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
   if (generation.status === 'SUCCEEDED') return { generationId: generation.id, outputAssetId: generation.outputAssetId, state: generation.status };
   await deps.digitalHuman.markAvatarRunning(generation.id);
   let remoteTaskId = generation.externalTaskId;
+  let importedOutput: Awaited<ReturnType<AssetService['importFile']>> | undefined;
+  const cleanupUnboundOutputAssociation = async (): Promise<void> => {
+    if (!importedOutput?.associationCreated) return;
+    const sharedReference = await deps.digitalHuman.hasOtherAvatarOutputReference(payload.projectId, importedOutput.id, generation.id).catch(() => true);
+    if (sharedReference) return;
+    await deps.assetService.removeProjectAssetAssociation(payload.projectId, importedOutput.id, 'OUTPUT').catch(() => undefined);
+  };
   try {
     if (deps.avatarProvider?.providerId && generation.provider !== deps.avatarProvider.providerId) throw Object.assign(new Error('Avatar Generation provider does not match the configured runtime provider'), { code: 'AVATAR_PROVIDER_IDENTITY_MISMATCH', retryable: false });
     const clip = await deps.digitalHuman.getAvatarClip(payload.projectId, generation.avatarClipId); const video = clip ? await deps.assets.getProjectAsset(payload.projectId, clip.assetId) : null; const audio = video ? await deps.assets.getProjectAsset(payload.projectId, generation.speechAssetId) : null;
@@ -193,21 +200,21 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
     if (!deps.probeRemoteResult) throw Object.assign(new Error('Avatar result validation is not configured'), { code: 'AVATAR_RESULT_PROBE_UNAVAILABLE', retryable: false });
     const probe = await downloadAndValidateRemoteAvatarResult(task.outputUrl, { fetchImpl, ...(deps.resolveRemoteMedia ? { resolveRemoteMedia: deps.resolveRemoteMedia } : {}), signal, timeoutMs: remoteResultTimeout(deps), maxBytes: remoteResultLimit(deps), tempPath, probe: deps.probeRemoteResult });
     try {
-      const asset = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: tempPath, kind: 'VIDEO', role: 'OUTPUT', metadata: { durationMs: probe.durationMs, width: probe.width, height: probe.height, format: probe.format, ...(probe.videoCodec ? { codec: probe.videoCodec } : {}), digitalHuman: { generationId: generation.id, provider: task.providerId, externalTaskId: task.externalTaskId, providerMetadata: task.provenance || null } } });
-      const imported = await deps.assets.getReadySourceAsset(payload.projectId, asset.id, 'VIDEO'); const metadata = imported?.metadata || probe;
+      importedOutput = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: tempPath, kind: 'VIDEO', role: 'OUTPUT', metadata: { durationMs: probe.durationMs, width: probe.width, height: probe.height, format: probe.format, ...(probe.videoCodec ? { codec: probe.videoCodec } : {}), digitalHuman: { generationId: generation.id, provider: task.providerId, externalTaskId: task.externalTaskId, providerMetadata: task.provenance || null } } });
+      const imported = await deps.assets.getReadySourceAsset(payload.projectId, importedOutput.id, 'VIDEO'); const metadata = imported?.metadata || probe;
       signal.throwIfAborted();
-      const completed = await deps.digitalHuman.completeAvatar(generation.id, { outputAssetId: asset.id, durationMs: typeof metadata.durationMs === 'number' ? metadata.durationMs : probe.durationMs, model: task.model, modelVersion: task.modelVersion, costAmount: task.costAmount, costCurrency: task.costCurrency, billingQuantity: task.billingQuantity, billingUnit: task.billingUnit, provenance: { provider: task.providerId, model: task.model || generation.model, modelVersion: task.modelVersion || null, avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, sourceVideoAssetId: video.id, externalTaskId: task.externalTaskId, costAmount: task.costAmount ?? null, costCurrency: task.costCurrency ?? null, billingQuantity: task.billingQuantity ?? null, billingUnit: task.billingUnit ?? null, providerMetadata: task.provenance || null, probe: { durationMs: probe.durationMs, width: probe.width, height: probe.height, format: probe.format, codec: probe.videoCodec || null }, ...(task.provenance || {}) } });
+      const completed = await deps.digitalHuman.completeAvatar(generation.id, { outputAssetId: importedOutput.id, durationMs: typeof metadata.durationMs === 'number' ? metadata.durationMs : probe.durationMs, model: task.model, modelVersion: task.modelVersion, costAmount: task.costAmount, costCurrency: task.costCurrency, billingQuantity: task.billingQuantity, billingUnit: task.billingUnit, provenance: { provider: task.providerId, model: task.model || generation.model, modelVersion: task.modelVersion || null, avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, sourceVideoAssetId: video.id, externalTaskId: task.externalTaskId, costAmount: task.costAmount ?? null, costCurrency: task.costCurrency ?? null, billingQuantity: task.billingQuantity ?? null, billingUnit: task.billingUnit ?? null, probe: { durationMs: probe.durationMs, width: probe.width, height: probe.height, format: probe.format, codec: probe.videoCodec || null }, providerMetadata: task.provenance || null } });
       if (!completed) throw Object.assign(new Error('Avatar Generation is no longer active'), { code: 'GENERATION_NOT_ACTIVE', retryable: false });
-      return { generationId: generation.id, outputAssetId: asset.id, state: 'SUCCEEDED' };
+      return { generationId: generation.id, outputAssetId: importedOutput.id, state: 'SUCCEEDED' };
     } finally { await rm(tempPath, { force: true }); }
   } catch (error) {
     if (signal.aborted) {
       if (remoteTaskId && deps.avatarProvider.cancelTask) await deps.avatarProvider.cancelTask(remoteTaskId).catch(() => undefined);
-      await deps.digitalHuman.cancelAvatar(generation.id);
+      try { await deps.digitalHuman.cancelAvatar(generation.id); } finally { await cleanupUnboundOutputAssociation(); }
       throw error;
     }
     if ((error as { code?: unknown }).code === 'EXTERNAL_TASK_PENDING') throw error;
-    await deps.digitalHuman.failAvatar(generation.id, { code: typeof (error as { code?: unknown }).code === 'string' ? String((error as { code: string }).code) : 'AVATAR_GENERATION_FAILED', message: error instanceof Error ? error.message.slice(0, 200) : 'Avatar generation failed' });
+    try { await deps.digitalHuman.failAvatar(generation.id, { code: typeof (error as { code?: unknown }).code === 'string' ? String((error as { code: string }).code) : 'AVATAR_GENERATION_FAILED', message: error instanceof Error ? error.message.slice(0, 200) : 'Avatar generation failed' }); } finally { await cleanupUnboundOutputAssociation(); }
     throw error;
   }
 }

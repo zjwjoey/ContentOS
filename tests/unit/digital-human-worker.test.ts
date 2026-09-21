@@ -1,10 +1,54 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createDigitalHumanDevRunner } from '../../workers/digital-human-worker/src/dev-main.js';
 import { createDigitalHumanWorker } from '../../workers/digital-human-worker/src/main.js';
 import { createDigitalHumanJobHandler, createDigitalHumanLeaseCancellationHandler } from '../../workers/digital-human-worker/src/handler.js';
 
 const fakeDependencies = (jobs: { listRunnable: () => Promise<never[]>; reconcileExpiredLeases: () => Promise<number> }) => ({ jobs, digitalHuman: {}, assets: {}, assetService: {}, storage: {}, speechProvider: {}, avatarProvider: {}, staging: {} } as never);
+
+async function runAvatarCompletionRace(options: { abortAfterImport?: boolean; complete?: boolean; sharedReference?: boolean; existingTaskSucceeded?: boolean }): Promise<{ cancelled: boolean; failed: boolean; completed: boolean; removed: boolean; submitted: number }> {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-avatar-race-'));
+  const controller = new AbortController(); let cancelled = false; let failed = false; let completed = false; let removed = false; let submitted = 0;
+  const generation = { id: 'generation-avatar-race', status: 'PENDING', externalTaskId: options.existingTaskSucceeded ? 'race-task' : null, provider: 'race-avatar', avatarClipId: 'clip-1', speechAssetId: 'audio-1', avatarProfileId: 'profile-1', model: null, provenance: { parameters: {} } };
+  const job = { id: 'job-avatar-race', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: generation.id, projectId: 'project-1', correlationId: 'corr-race' } } as never;
+  const deps = {
+    digitalHuman: {
+      getAvatarGeneration: async () => generation,
+      markAvatarRunning: async () => undefined,
+      getAvatarClip: async () => ({ id: 'clip-1', assetId: 'video-1' }),
+      markAvatarWaiting: async () => undefined,
+      cancelAvatar: async () => { cancelled = true; },
+      failAvatar: async () => { failed = true; },
+      completeAvatar: async () => { completed = true; return options.complete !== false; },
+      hasOtherAvatarOutputReference: async () => Boolean(options.sharedReference),
+    },
+    assets: {
+      getProjectAsset: async (_projectId: string, id: string) => id === 'video-1' ? { id, kind: 'VIDEO', lifecycle: 'READY', storageKey: 'video.mp4', metadata: { durationMs: 2_000, format: 'mp4' } } : { id, kind: 'AUDIO', lifecycle: 'READY', storageKey: 'audio.wav', metadata: { durationMs: 2_000, format: 'wav' } },
+      getReadySourceAsset: async () => ({ id: 'asset-output', kind: 'VIDEO', storageKey: 'objects/output.mp4', metadata: { durationMs: 1_000, width: 640, height: 360, format: 'mp4' } }),
+    },
+    assetService: {
+      importFile: async () => { if (options.abortAfterImport) controller.abort(); return { id: 'asset-output', projectId: 'project-1', checksum: 'sha256:output', storageKey: 'objects/output.mp4', byteSize: 10, status: 'READY' as const, associationCreated: true }; },
+      removeProjectAssetAssociation: async () => { removed = true; return true; },
+    },
+    storage: { root, objectPath: (value: string) => value },
+    avatarProvider: { providerId: 'race-avatar', getCapabilities: async () => ({ providerId: 'race-avatar', local: false, videoToVideo: true, imageToVideo: false, requiresPublicUrl: false, supportedFormats: ['mp4'] }), submitLipSync: async () => { submitted += 1; return { externalTaskId: 'race-task', providerId: 'race-avatar', status: 'SUCCEEDED' as const, outputUrl: 'https://provider.test/race.mp4' }; }, getTask: async () => ({ externalTaskId: 'race-task', providerId: 'race-avatar', status: 'SUCCEEDED' as const, outputUrl: 'https://provider.test/race.mp4' }) },
+    staging: { stageAsset: async (assetId: string) => ({ publicUrl: `https://staging.test/${assetId}`, expiresAt: new Date(Date.now() + 60_000).toISOString() }) },
+    fetchImpl: async () => new Response(Buffer.from('valid-video'), { status: 200, headers: { 'content-type': 'application/octet-stream' } }),
+    resolveRemoteMedia: async () => [{ address: '93.184.216.34', family: 4 as const }],
+    probeRemoteResult: async () => ({ format: 'mp4', durationMs: 1_000, width: 640, height: 360, videoCodec: 'h264' }),
+  } as never;
+  try {
+    let handlerError: unknown;
+    try { await createDigitalHumanJobHandler(deps)(job, 'attempt-race', controller.signal); } catch (error) { handlerError = error; }
+    if (options.existingTaskSucceeded) assert.equal(handlerError, undefined);
+    else assert.ok(handlerError, 'race scenario must reject');
+    return { cancelled, failed, completed, removed, submitted };
+  }
+  finally { await rm(root, { recursive: true, force: true }); }
+}
 
 test('Digital Human Worker registers both durable job types and requires composition', async () => {
   assert.throws(() => createDigitalHumanWorker(), /requires explicit/);
@@ -127,23 +171,23 @@ test('Digital Human worker fails closed when Generation provider identity differ
   assert.deepEqual(failures, [{ id: 'generation-provider-mismatch', code: 'SPEECH_PROVIDER_IDENTITY_MISMATCH' }]);
 });
 
-test('Digital Human worker prefers probed Speech Asset duration for completion', async () => {
-  let completedDuration = 0; let providerDuration = 0;
+test('Digital Human worker prefers probed Speech Asset duration and preserves provider provenance', async () => {
+  let completedDuration = 0; let providerDuration = 0; let completedProvenance: Record<string, unknown> | undefined;
   const deps = {
     digitalHuman: {
       getSpeechGeneration: async () => ({ id: 'generation-speech-duration', status: 'PENDING', voiceProfileId: 'voice-1', text: '测试', textHash: 'text-hash', parameters: { language: 'zh', speed: 1, emotion: 'natural' }, outputAssetId: null }),
       markSpeechRunning: async () => undefined,
       getVoiceProfile: async () => ({ id: 'voice-1', referenceAssetId: null, language: 'zh', defaultSpeed: 1, defaultEmotion: 'natural' }),
-      completeSpeech: async (_id: string, input: { durationMs: number; provenance: { providerDurationMs: number } }) => { completedDuration = input.durationMs; providerDuration = input.provenance.providerDurationMs; return true; },
+      completeSpeech: async (_id: string, input: { durationMs: number; provenance: Record<string, unknown> }) => { completedDuration = input.durationMs; providerDuration = input.provenance.providerDurationMs as number; completedProvenance = input.provenance; return true; },
     },
     assets: { getProjectAsset: async () => ({ id: 'audio-output', projectId: 'project-1', kind: 'AUDIO', lifecycle: 'READY', storageKey: 'audio.wav', checksum: 'checksum', metadata: { durationMs: 1_234, format: 'wav' } }) },
     assetService: { importFile: async () => ({ id: 'audio-output' }) },
     storage: { objectPath: (value: string) => value },
-    speechProvider: { getCapabilities: async () => ({ providerId: 'indextts25', local: true, voiceClone: true, emotion: true, speed: true, languages: ['zh'], supportsReferenceAudio: true, requiresReferenceAudio: false, supportsVoiceId: false }), generateSpeech: async () => ({ providerId: 'indextts25', model: 'indextts-2.5', modelVersion: '2.5', outputPath: 'audio.wav', durationMs: 2_000, latencyMs: 10, provenance: {} }) },
+    speechProvider: { getCapabilities: async () => ({ providerId: 'indextts25', local: true, voiceClone: true, emotion: true, speed: true, languages: ['zh'], supportsReferenceAudio: true, requiresReferenceAudio: false, supportsVoiceId: false }), generateSpeech: async () => ({ providerId: 'indextts25', model: 'indextts-2.5', modelVersion: '2.5', outputPath: 'audio.wav', durationMs: 2_000, latencyMs: 10, provenance: { provider: 'evil-provider', voiceProfileId: 'evil-voice', textHash: 'evil-text', durationMs: 0, latencyMs: 0, marker: 'raw-provider-metadata' } }) },
   } as never;
   const job = { id: 'job-speech-duration', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'SPEECH', generationId: 'generation-speech-duration', projectId: 'project-1', correlationId: 'corr-duration' } } as never;
   const result = await createDigitalHumanJobHandler(deps)(job, 'attempt-speech-duration', new AbortController().signal);
-  assert.deepEqual(result, { generationId: 'generation-speech-duration', outputAssetId: 'audio-output', state: 'SUCCEEDED' }); assert.equal(completedDuration, 1_234); assert.equal(providerDuration, 2_000);
+  assert.deepEqual(result, { generationId: 'generation-speech-duration', outputAssetId: 'audio-output', state: 'SUCCEEDED' }); assert.equal(completedDuration, 1_234); assert.equal(providerDuration, 2_000); assert.equal(completedProvenance?.provider, 'indextts25'); assert.equal(completedProvenance?.voiceProfileId, 'voice-1'); assert.equal(completedProvenance?.textHash, 'text-hash'); assert.equal(completedProvenance?.durationMs, 1_234); assert.equal(completedProvenance?.latencyMs, 10); assert.equal((completedProvenance?.providerMetadata as Record<string, unknown>).marker, 'raw-provider-metadata');
 });
 
 test('Digital Human worker records Avatar preflight failures on the Generation', async () => {
@@ -212,4 +256,24 @@ test('Digital Human worker bounds remote Avatar result downloads', async () => {
   const job = { id: 'job-avatar-timeout', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-avatar-timeout', projectId: 'project-1', correlationId: 'corr-timeout' } } as never;
   await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-avatar-timeout', new AbortController().signal), /download timed out/);
   assert.deepEqual(failures, [{ id: 'generation-avatar-timeout', code: 'AVATAR_RESULT_DOWNLOAD_TIMEOUT' }]);
+});
+
+test('Digital Human worker removes a newly-created output relation when cancellation wins after Asset import', async () => {
+  const result = await runAvatarCompletionRace({ abortAfterImport: true });
+  assert.deepEqual(result, { cancelled: true, failed: false, completed: false, removed: true, submitted: 1 });
+});
+
+test('Digital Human worker removes a newly-created output relation when completeAvatar returns false', async () => {
+  const result = await runAvatarCompletionRace({ complete: false });
+  assert.deepEqual(result, { cancelled: false, failed: true, completed: true, removed: true, submitted: 1 });
+});
+
+test('Digital Human worker never removes a shared output relation during completion cleanup', async () => {
+  const result = await runAvatarCompletionRace({ complete: false, sharedReference: true });
+  assert.deepEqual(result, { cancelled: false, failed: true, completed: true, removed: false, submitted: 1 });
+});
+
+test('Digital Human worker reuses an already-succeeded external task without resubmitting it', async () => {
+  const result = await runAvatarCompletionRace({ existingTaskSucceeded: true });
+  assert.deepEqual(result, { cancelled: false, failed: false, completed: true, removed: false, submitted: 0 });
 });

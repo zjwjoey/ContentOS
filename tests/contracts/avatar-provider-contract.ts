@@ -6,11 +6,17 @@ const statuses = new Set<AvatarTaskStatus['status']>(['QUEUED', 'RUNNING', 'SUCC
 const providerErrorCodes = new Set(['UNAVAILABLE', 'RATE_LIMITED', 'AUTHENTICATION_FAILED', 'INVALID_REQUEST', 'EXTERNAL_FAILED']);
 
 export interface AvatarProviderContractErrorCase { name: string; run: () => Promise<unknown>; code: 'UNAVAILABLE' | 'RATE_LIMITED' | 'AUTHENTICATION_FAILED' | 'INVALID_REQUEST' | 'EXTERNAL_FAILED'; retryable: boolean; }
-export interface AvatarProviderContractOptions { createProvider: () => AvatarProvider | Promise<AvatarProvider>; errorCases?: AvatarProviderContractErrorCase[]; }
+export type AvatarProviderContractMode = 'FAKE' | 'REAL';
+export interface AvatarProviderContractOptions { mode: AvatarProviderContractMode; createProvider: () => AvatarProvider | Promise<AvatarProvider>; errorCases?: AvatarProviderContractErrorCase[]; }
 
 function assertProviderIdentity(providerId: string, value: string, label: string): void { assert.equal(typeof value, 'string', `${label} must be a string`); assert.ok(value.trim(), `${label} must be non-empty`); assert.equal(value, providerId, `${label} must match provider.providerId`); }
 
 export async function runAvatarProviderContractTests(options: AvatarProviderContractOptions): Promise<void> {
+  if (options.mode === 'REAL') {
+    const required = new Set(providerErrorCodes);
+    const supplied = new Set((options.errorCases || []).map((errorCase) => errorCase.code));
+    assert.deepEqual([...supplied].sort(), [...required].sort(), 'REAL AvatarProvider contract tests must cover every normalized provider error code');
+  }
   const provider = await options.createProvider();
   assertProviderIdentity(provider.providerId, provider.providerId, 'provider.providerId');
   const capabilities = await provider.getCapabilities();
