@@ -76,6 +76,8 @@ export interface AvatarExternalTask {
   modelVersion?: string;
   costAmount?: number;
   costCurrency?: string;
+  billingQuantity?: number;
+  billingUnit?: string;
   provenance?: Record<string, unknown>;
 }
 
@@ -202,6 +204,8 @@ export interface AvatarGenerationV1 {
   durationMs: number | null;
   costAmount: number | null;
   costCurrency: string | null;
+  billingQuantity: number | null;
+  billingUnit: string | null;
   requestHash: string;
   provenance: Record<string, unknown>;
   error: { code: string; message: string } | null;

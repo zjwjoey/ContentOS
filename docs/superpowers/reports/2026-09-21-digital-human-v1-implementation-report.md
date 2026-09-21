@@ -10,7 +10,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - IndexTTS 2.5 HTTP adapter and fake speech provider.
 - Configurable remote avatar adapter and fake avatar provider.
 - Synthetic sentence timing provider.
-- PostgreSQL migration `0031_digital_human.sql` with Voice Profile, Avatar Profile/Clip, Speech Generation, and Avatar Generation tables.
+- PostgreSQL migrations `0031_digital_human.sql` and `0032_digital_human_billing.sql` with Voice Profile, Avatar Profile/Clip, Speech Generation, Avatar Generation, and nullable remote billing quantity/unit fields.
 - Digital Human service with project ownership checks, Asset readiness checks, provenance fields, output Asset references, and request-hash idempotency.
 - API routes under `/api/v1/projects/:projectId/digital-human/*`.
 - Durable speech/avatar worker handlers with retry behavior and external-task recovery.
@@ -25,6 +25,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - A named `HzAgentAvatarProvider` adapter now forms the vendor boundary; other remote providers continue to use the generic HTTP adapter.
 - Built-in HMAC/TTL Provider Media Staging is available with `CONTENTOS_MEDIA_STAGING_PROVIDER=signed-url`; ContentOS serves only READY AUDIO/VIDEO Assets through a signed query URL and never exposes `STORAGE_ROOT` or persists the temporary URL.
 - Remote avatar task adapters now preserve normalized status, model version, cost, and provider provenance; result downloads require HTTP(S) and honor Job cancellation signals.
+- Remote avatar cost tracking now preserves provider-reported amount, currency, billing quantity, and billing unit through the contract, Worker, PostgreSQL record, and API response.
 - Job cancellation now persists Speech/Avatar generation `CANCELLED` state and invokes the optional remote avatar `cancelTask`, including the race window immediately after remote submission; a worker regression test covers external-task cancellation.
 - Digital Human lease recovery now supplies a cancellation handler for expired `CANCEL_REQUESTED` Jobs, so a Worker loss cannot leave the Job stranded and an existing external Avatar task is cancelled during recovery.
 - Failed or cancelled Speech/Avatar requests can be explicitly retried through dedicated API/UI actions; terminal local Jobs are requeued idempotently, and a prior remote Avatar task is replaced only after the provider reports `FAILED` or `CANCELLED`.
