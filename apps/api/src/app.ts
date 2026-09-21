@@ -39,6 +39,8 @@ import { LocalPathAccessService } from '../../../packages/modules/local-path/src
 import { UnsupportedNativePathPicker } from '../../../packages/modules/local-path/src/index.js';
 import { WindowsNativePathPicker } from '../../../packages/modules/local-path/src/native-path-picker.js';
 import { registerLocalPathRoutes } from './local-path-routes.js';
+import { DigitalHumanService } from '../../../packages/modules/digital-human/src/index.js';
+import { registerDigitalHumanRoutes } from './digital-human-routes.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -68,6 +70,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const jobs = new JobService(db);
   const benchmark = new BenchmarkService(db, jobs);
   const assets = new AssetCatalogService(db);
+  const digitalHuman = new DigitalHumanService(db, jobs, assets);
   const assetService = new AssetService(db, storage, (path) => probeMedia(path, process.env.FFPROBE_PATH || 'ffprobe'));
   const localPathAccess = runtime.localPathAccess || new LocalPathAccessService({ db });
   const nativePathPicker = runtime.nativePathPicker || (process.platform === 'win32' ? new WindowsNativePathPicker() : new UnsupportedNativePathPicker());
@@ -88,6 +91,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerDirectorV1Routes(app, { director: directorV1, directorJobs: new DirectorJobService(jobs), jobs, projects });
   registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, assetService, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes, localMedia, presets });
   registerLocalPathRoutes(app, { access: localPathAccess, picker: nativePathPicker });
+  registerDigitalHumanRoutes(app, { digitalHuman, projects });
   registerEditingWorkbenchRoutes(app, { db, localMedia, localPathAccess, quickEdit, video, jobs, assets, assetService, storage, maxUploadBytes: uploadMaxBytes, presets });
   registerScriptEditingV2Routes(app, { db, jobs, localPathAccess, video, assets, presets, storage });
   registerMediaProviderRoutes(app, createExternalVideoProvider(), db);

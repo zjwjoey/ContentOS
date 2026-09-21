@@ -31,3 +31,10 @@ export { validateVideoWorkspaceSnapshotV0 } from './video.js';
 export type { VideoWorkspaceSnapshotV0 } from './video.js';
 export { validateBenchmarkAccountV1, validateBenchmarkContentV1, validateBenchmarkAnalysisV1 } from './benchmark.js';
 export type { BenchmarkAccountV1, BenchmarkContentV1, BenchmarkAnalysisV1 } from './benchmark.js';
+export type {
+  AlignmentProvider, AlignmentRequest, AvatarCapabilities, AvatarClipV1, AvatarExternalTask, AvatarGenerationRequest, AvatarGenerationV1,
+  AvatarProfileV1, AvatarProvider, AvatarTaskStatus, DigitalHumanJobType, GenerationStatus, ProfileStatus, ProviderMediaStaging,
+  SpeechCapabilities, SpeechGenerationRequest, SpeechGenerationResult, SpeechGenerationV1, SpeechProvider, SubtitleCue, SubtitleTimeline,
+  VoiceProfileV1,
+} from './digital-human.js';
+export { validateAvatarGenerationRequest, validateSpeechGenerationRequest } from './digital-human.js';
