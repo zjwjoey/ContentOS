@@ -55,6 +55,13 @@ test('HTTP adapters preserve provider capability, task status, model version, an
   assert.equal((requests[0]?.headers as Record<string, string>)['x-api-key'], 'test-only'); assert.equal((requests[0]?.headers as Record<string, string>)['Idempotency-Key'], 'r'); assert.equal((requests[1]?.headers as Record<string, string>)['x-api-key'], 'test-only');
 });
 
+test('HTTP avatar capabilities are health-checked with provider authentication', async () => {
+  let path = ''; let authorization = '';
+  const avatar = new HzAgentAvatarProvider({ baseUrl: 'https://avatar.test', apiKey: 'test-only', fetchImpl: async (input, init) => { path = new URL(String(input)).pathname; authorization = String((init?.headers as Record<string, string>)?.authorization || ''); return new Response(JSON.stringify({ capabilities: { videoToVideo: true, requiresPublicUrl: true, supportedFormats: ['mp4'], maxDurationSeconds: 60 } }), { status: 200 }); } });
+  const capabilities = await avatar.getCapabilities();
+  assert.equal(path, '/v1/capabilities'); assert.equal(authorization, 'Bearer test-only'); assert.equal(capabilities.maxDurationSeconds, 60); assert.deepEqual(capabilities.supportedFormats, ['mp4']);
+});
+
 test('signed provider media staging issues expiring, tamper-resistant URLs', async () => {
   const staging = new SignedProviderMediaStaging({ baseUrl: 'https://contentos.example', secret: 'test-staging-secret' });
   const result = await staging.stageAsset('asset-video-1', { ttlSeconds: 60 }); const token = new URL(result.publicUrl).searchParams.get('token') || '';

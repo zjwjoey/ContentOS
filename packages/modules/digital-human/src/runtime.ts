@@ -22,7 +22,7 @@ class UnavailableAvatarProvider implements AvatarProvider {
 }
 
 export interface RuntimeDigitalHumanProviders { speech: SpeechProvider; avatar: AvatarProvider; staging: ProviderMediaStaging; mediaStagingConfigured: boolean; }
-export interface RuntimeDigitalHumanEnvironment { CONTENTOS_SPEECH_PROVIDER?: string; CONTENTOS_INDEXTTS_BASE_URL?: string; CONTENTOS_AVATAR_PROVIDER?: string; HZAGENT_BASE_URL?: string; HZAGENT_API_KEY?: string; HZAGENT_SUBMIT_PATH?: string; HZAGENT_TASK_PATH?: string; HZAGENT_AUTH_HEADER?: string; HZAGENT_AUTH_SCHEME?: string; CONTENTOS_MEDIA_STAGING_PROVIDER?: string; CONTENTOS_MEDIA_STAGING_BASE_URL?: string; CONTENTOS_MEDIA_STAGING_API_KEY?: string; CONTENTOS_MEDIA_STAGING_SECRET?: string; CONTENTOS_FAKE_SPEECH_OUTPUT_PATH?: string; }
+export interface RuntimeDigitalHumanEnvironment { CONTENTOS_SPEECH_PROVIDER?: string; CONTENTOS_INDEXTTS_BASE_URL?: string; CONTENTOS_AVATAR_PROVIDER?: string; HZAGENT_BASE_URL?: string; HZAGENT_API_KEY?: string; HZAGENT_CAPABILITIES_PATH?: string; HZAGENT_SUBMIT_PATH?: string; HZAGENT_TASK_PATH?: string; HZAGENT_AUTH_HEADER?: string; HZAGENT_AUTH_SCHEME?: string; CONTENTOS_MEDIA_STAGING_PROVIDER?: string; CONTENTOS_MEDIA_STAGING_BASE_URL?: string; CONTENTOS_MEDIA_STAGING_API_KEY?: string; CONTENTOS_MEDIA_STAGING_SECRET?: string; CONTENTOS_FAKE_SPEECH_OUTPUT_PATH?: string; }
 
 export function createRuntimeDigitalHumanProviders(env: RuntimeDigitalHumanEnvironment = process.env as RuntimeDigitalHumanEnvironment): RuntimeDigitalHumanProviders {
   const speechId = env.CONTENTOS_SPEECH_PROVIDER || 'indextts25';
@@ -36,8 +36,8 @@ export function createRuntimeDigitalHumanProviders(env: RuntimeDigitalHumanEnvir
     ? new FakeAvatarProvider()
     : env.HZAGENT_API_KEY
       ? avatarId === 'hzagent'
-        ? new HzAgentAvatarProvider({ baseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn', apiKey: env.HZAGENT_API_KEY, ...(env.HZAGENT_SUBMIT_PATH ? { submitPath: env.HZAGENT_SUBMIT_PATH } : {}), ...(env.HZAGENT_TASK_PATH ? { taskPath: env.HZAGENT_TASK_PATH } : {}), ...(env.HZAGENT_AUTH_HEADER ? { authHeaderName: env.HZAGENT_AUTH_HEADER } : {}), ...(env.HZAGENT_AUTH_SCHEME !== undefined ? { authScheme: env.HZAGENT_AUTH_SCHEME } : {}) })
-        : new HttpAvatarProvider({ providerId: avatarId, baseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn', apiKey: env.HZAGENT_API_KEY })
+        ? new HzAgentAvatarProvider({ baseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn', apiKey: env.HZAGENT_API_KEY, ...(env.HZAGENT_CAPABILITIES_PATH ? { capabilitiesPath: env.HZAGENT_CAPABILITIES_PATH } : {}), ...(env.HZAGENT_SUBMIT_PATH ? { submitPath: env.HZAGENT_SUBMIT_PATH } : {}), ...(env.HZAGENT_TASK_PATH ? { taskPath: env.HZAGENT_TASK_PATH } : {}), ...(env.HZAGENT_AUTH_HEADER ? { authHeaderName: env.HZAGENT_AUTH_HEADER } : {}), ...(env.HZAGENT_AUTH_SCHEME !== undefined ? { authScheme: env.HZAGENT_AUTH_SCHEME } : {}) })
+        : new HttpAvatarProvider({ providerId: avatarId, baseUrl: env.HZAGENT_BASE_URL || 'https://api.ai.hzagent.cn', apiKey: env.HZAGENT_API_KEY, ...(env.HZAGENT_CAPABILITIES_PATH ? { capabilitiesPath: env.HZAGENT_CAPABILITIES_PATH } : {}) })
       : new UnavailableAvatarProvider(avatarId, 'Avatar provider API key is not configured');
   const stagingProvider = env.CONTENTOS_MEDIA_STAGING_PROVIDER || 'http';
   const staging = stagingProvider === 'signed-url' && env.CONTENTOS_MEDIA_STAGING_BASE_URL && env.CONTENTOS_MEDIA_STAGING_SECRET

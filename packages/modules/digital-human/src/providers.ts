@@ -90,6 +90,7 @@ export interface HttpAvatarProviderOptions {
   apiKey: string;
   submitPath?: string;
   taskPath?: string;
+  capabilitiesPath?: string;
   model?: string;
   authHeaderName?: string;
   authScheme?: string;
@@ -102,7 +103,12 @@ export class HttpAvatarProvider implements AvatarProvider {
   private readonly fetchImpl: typeof fetch;
   constructor(private readonly options: HttpAvatarProviderOptions) { this.providerId = options.providerId; this.fetchImpl = options.fetchImpl || fetch; }
   private authHeaders(): Record<string, string> { const name = this.options.authHeaderName || 'authorization'; const value = this.options.authScheme === '' ? this.options.apiKey : `${this.options.authScheme || 'Bearer'} ${this.options.apiKey}`; return { [name]: value }; }
-  async getCapabilities(): Promise<AvatarCapabilities> { return { providerId: this.providerId, local: false, videoToVideo: true, imageToVideo: false, requiresPublicUrl: true, supportedFormats: ['mp4'] }; }
+  async getCapabilities(): Promise<AvatarCapabilities> {
+    const response = await this.fetchImpl(new URL(this.options.capabilitiesPath || '/v1/capabilities', this.options.baseUrl), { headers: this.authHeaders(), signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) throw responseError(response.status);
+    const body = jsonObject(await response.json()); const capabilities = jsonObject(body.capabilities || body); const rawSupportedFormats = capabilities.supportedFormats ?? capabilities.supported_formats; const supportedFormats: string[] = Array.isArray(rawSupportedFormats) ? rawSupportedFormats.filter((value: unknown): value is string => typeof value === 'string') : ['mp4']; const maxDurationSeconds = optionalNumber(capabilities.maxDurationSeconds ?? capabilities.max_duration_seconds);
+    return { providerId: this.providerId, local: false, videoToVideo: capabilities.videoToVideo !== false && capabilities.video_to_video !== false, imageToVideo: capabilities.imageToVideo === true || capabilities.image_to_video === true, requiresPublicUrl: capabilities.requiresPublicUrl !== false && capabilities.requires_public_url !== false, supportedFormats: supportedFormats.length ? supportedFormats : ['mp4'], ...(maxDurationSeconds === undefined ? {} : { maxDurationSeconds }) };
+  }
   async submitLipSync(request: AvatarGenerationRequest): Promise<AvatarExternalTask> {
     const idempotencyHeaderName = this.options.idempotencyHeaderName === '' ? '' : (this.options.idempotencyHeaderName || 'Idempotency-Key');
     const response = await this.fetchImpl(new URL(this.options.submitPath || '/v1/lipsync/tasks', this.options.baseUrl), {

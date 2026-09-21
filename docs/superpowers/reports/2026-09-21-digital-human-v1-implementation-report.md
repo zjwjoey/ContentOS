@@ -28,6 +28,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 - Failed or cancelled Speech/Avatar requests can be explicitly retried through dedicated API/UI actions; terminal local Jobs are requeued idempotently, and a prior remote Avatar task is replaced only after the provider reports `FAILED` or `CANCELLED`.
 - Avatar preflight now requires positive source/audio durations and checks the provider's supported video formats before staging or charging the remote provider; completion writes are conditional on the Generation remaining active, preventing cancellation races from becoming false successes.
 - Remote Avatar submissions carry the stable Generation request ID through a configurable idempotency header and request field, allowing a compatible provider to deduplicate the submit-after-uncertain-write recovery path.
+- Configured remote Avatar providers now health-check the authenticated, configurable capabilities endpoint with a timeout; authentication or availability failures are surfaced before a paid generation Job is created.
 - The named HZAgent adapter is now configuration-driven for submit/task paths and authentication header/scheme, and accepts common camelCase/snake_case task response aliases without leaking vendor details into the service layer.
 - Synthetic subtitle timeline export as Edit Manifest cues, SRT, and ASS through the Speech Generation API.
 - SRT/ASS subtitle downloads now persist idempotent `TEXT` Assets with project ownership and expose the Asset content route, so subtitle files are traceable and reusable rather than transient response bodies.
@@ -41,7 +42,7 @@ The supplied `DIGITAL_HUMAN_V1_DESIGN.md` and isolated-development prompt were t
 
 - Targeted TypeScript compilation: passed.
 - Digital Human/config/worker unit tests and provider contract checks: passed.
-- Digital Human/API/provider suite: 12 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, concurrent Speech/Avatar idempotency and retry checks, signed staging, subtitle Asset persistence, fail-closed capability checks, external-task cancellation, and terminal-task replacement.
+- Digital Human/API/provider suite: 13 tests passed, including the real PostgreSQL temporary-schema EditManifest/VIDEO_RENDER flow, concurrent Speech/Avatar idempotency and retry checks, signed staging, subtitle Asset persistence, authenticated capability health-checks, fail-closed capability checks, external-task cancellation, and terminal-task replacement.
 - The Digital Human API integration suite also verifies subtitle generation creates a `TEXT` Asset and that the stored subtitle can be downloaded through the project Asset route.
 - Format check: passed (467 files).
 - Lint check: passed (176 TypeScript files).
