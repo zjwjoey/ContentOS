@@ -1,6 +1,7 @@
 import { readdir, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { access as accessFile } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve, sep } from 'node:path';
 import { generateVideoThumbnail, probeMedia, type ProbeResult } from '../../../infrastructure/ffmpeg/src/index.js';
@@ -10,6 +11,7 @@ import type { LocalPathAccessService } from '../../local-path/src/index.js';
 export const LOCAL_VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi']);
 
 export interface LocalMediaAsset {
+  fileId?: string;
   sourceRootId?: string;
   fileName: string;
   relativePath: string;
@@ -31,6 +33,15 @@ export interface LocalMediaAsset {
   updatedAt?: string;
   thumbnailKey?: string;
   thumbnailStatus?: 'PENDING' | 'READY' | 'FAILED';
+  sourceFingerprint?: string;
+  gold?: boolean;
+  candidateCount?: number;
+  selectedCount?: number;
+  manualSelectCount?: number;
+  finalUseCount?: number;
+  replaceCount?: number;
+  recentUseCount?: number;
+  jianyingUseCount?: number;
   available: boolean;
   errorMessage?: string;
   /** Internal absolute path used only by the planner/renderer, never by the public mapper. */
@@ -61,6 +72,18 @@ function orientation(width: number, height: number): LocalMediaAsset['orientatio
 function filenameTags(fileName: string): string[] {
   const stem = basename(fileName, extname(fileName));
   return [...new Set((stem.match(/[A-Z]?[a-z]+|[\u3400-\u9fff]+|\d+/gu) || []).map((tag) => tag.trim()).filter(Boolean))];
+}
+
+async function contentFingerprint(path: string, fallback: string): Promise<string> {
+  try {
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+    return `sha256:${hash.digest('hex')}`;
+  } catch { return fallback; }
+}
+
+function fallbackFingerprint(file: { fileSize?: number | null; modifiedAt?: string | null; durationMs: number }): string {
+  return `${Number(file.fileSize || 0)}:${file.modifiedAt ? new Date(file.modifiedAt).toISOString() : ''}:${Math.max(0, Math.round(file.durationMs))}`;
 }
 
 /**
@@ -145,10 +168,11 @@ export class LocalMediaSourceService {
       for (const file of result.files) {
         const fileId = `${result.sourceRootId}:${file.relativePath}`;
         currentFileIds.push(fileId);
+        const fingerprint = await contentFingerprint(file.sourcePath, fallbackFingerprint(file));
         await client.query('insert into local_media_scan_files (scan_id, file_id, file_name, relative_path, source_path, duration_ms, width, height, fps, format, codec, available, error_message, orientation, file_size, modified_at, tags, thumbnail_status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)', [scanId, fileId, file.fileName, file.relativePath, file.sourcePath, Math.round(file.durationMs), file.width, file.height, file.fps || null, file.format, file.codec || null, file.available, file.errorMessage || null, file.orientation, file.fileSize || null, file.modifiedAt || null, JSON.stringify(file.tags), 'PENDING']);
-        await client.query(`insert into local_media_index (file_id, source_root_id, relative_path, file_name, duration_ms, width, height, fps, orientation, format, codec, file_size, modified_at, tags, availability, thumbnail_status)
-          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'PENDING')
-          on conflict (file_id) do update set file_name = excluded.file_name, duration_ms = excluded.duration_ms, width = excluded.width, height = excluded.height, fps = excluded.fps, orientation = excluded.orientation, format = excluded.format, codec = excluded.codec, file_size = excluded.file_size, modified_at = excluded.modified_at, tags = case when local_media_index.tags = excluded.tags then excluded.tags else local_media_index.tags end, availability = excluded.availability, thumbnail_status = case when local_media_index.modified_at is distinct from excluded.modified_at or local_media_index.file_size is distinct from excluded.file_size then 'PENDING' else local_media_index.thumbnail_status end, updated_at = now()`, [fileId, result.sourceRootId, file.relativePath, file.fileName, Math.round(file.durationMs), file.width, file.height, file.fps || null, file.orientation, file.format, file.codec || null, file.fileSize || null, file.modifiedAt || null, JSON.stringify(file.tags), file.available ? 'AVAILABLE' : 'UNAVAILABLE']);
+        await client.query(`insert into local_media_index (file_id, source_root_id, relative_path, file_name, duration_ms, width, height, fps, orientation, format, codec, file_size, modified_at, tags, availability, thumbnail_status, source_fingerprint)
+          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'PENDING',$16)
+          on conflict (file_id) do update set file_name = excluded.file_name, duration_ms = excluded.duration_ms, width = excluded.width, height = excluded.height, fps = excluded.fps, orientation = excluded.orientation, format = excluded.format, codec = excluded.codec, file_size = excluded.file_size, modified_at = excluded.modified_at, source_fingerprint = excluded.source_fingerprint, tags = case when local_media_index.tags = excluded.tags then excluded.tags else local_media_index.tags end, availability = excluded.availability, thumbnail_status = case when local_media_index.modified_at is distinct from excluded.modified_at or local_media_index.file_size is distinct from excluded.file_size then 'PENDING' else local_media_index.thumbnail_status end, updated_at = now()`, [fileId, result.sourceRootId, file.relativePath, file.fileName, Math.round(file.durationMs), file.width, file.height, file.fps || null, file.orientation, file.format, file.codec || null, file.fileSize || null, file.modifiedAt || null, JSON.stringify(file.tags), file.available ? 'AVAILABLE' : 'UNAVAILABLE', fingerprint]);
       }
       await client.query('update local_media_index set availability = \'MISSING\', updated_at = now() where source_root_id = $1 and file_id <> all($2::text[]) and availability <> \'MISSING\'', [result.sourceRootId, currentFileIds]);
       await client.query("update local_media_scans set status = 'SUCCEEDED', progress = $2, scanned_at = now(), updated_at = now(), error = null where id = $1", [scanId, { discovered: result.totalCount, analyzed: result.totalCount, available: result.availableCount, unavailable: result.unavailableCount }]);
@@ -209,8 +233,54 @@ export class LocalMediaSourceService {
     const items = result.rows.map((row) => ({ fileName: String(row.file_name), relativePath: String(row.relative_path), sourcePath: String(row.source_path), durationMs: Number(row.duration_ms), width: Number(row.width), height: Number(row.height), ...(row.fps != null ? { fps: Number(row.fps) } : {}), orientation: row.orientation as LocalMediaAsset['orientation'], format: String(row.format), ...(row.codec ? { codec: String(row.codec) } : {}), ...(row.file_size != null ? { fileSize: Number(row.file_size) } : {}), ...(row.modified_at ? { modifiedAt: new Date(String(row.modified_at)).toISOString() } : {}), tags: Array.isArray(row.tags) ? row.tags as string[] : [], ...(row.category ? { category: String(row.category) } : {}), usageCount: Number(row.usage_count || 0), recentUsageCount: Number(row.recent_usage_count || 0), ...(row.last_used_at ? { lastUsedAt: new Date(String(row.last_used_at)).toISOString() } : {}), ...(row.created_at ? { createdAt: new Date(String(row.created_at)).toISOString() } : {}), ...(row.updated_at ? { updatedAt: new Date(String(row.updated_at)).toISOString() } : {}), ...(row.thumbnail_key ? { thumbnailKey: String(row.thumbnail_key) } : {}), ...(row.thumbnail_status ? { thumbnailStatus: row.thumbnail_status as LocalMediaAsset['thumbnailStatus'] } : {}), available: row.availability === 'AVAILABLE' }) as LocalMediaAsset);
     return { items, total: Number((countResult.rows[0] as { total?: number } | undefined)?.total || 0), page, pageSize };
   }
+
+  async listWorkspaceIndexPage(workspaceId: string, filters: { query?: string; orientation?: LocalMediaAsset['orientation'] | 'ALL'; category?: string; usage?: 'ALL' | 'UNUSED' | 'RECENT' | 'FREQUENT'; sort?: 'NAME' | 'UPDATED' | 'DURATION' | 'USAGE' | 'RECENT' | 'RECOMMENDED' | 'NEWEST' | 'LEAST_USED' | 'MOST_RECENT'; page?: number; pageSize?: number } = {}): Promise<{ items: LocalMediaAsset[]; total: number; page: number; pageSize: number }> {
+    const page = Math.max(1, filters.page || 1); const pageSize = Math.min(100, Math.max(1, filters.pageSize || 50));
+    if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED');
+    const params: unknown[] = [workspaceId]; const clauses = ["s.status = 'SUCCEEDED'", 's.workspace_id = $1']; const add = (value: unknown) => { params.push(value); return `$${params.length}`; };
+    if (filters.query?.trim()) { const key = add(`%${filters.query.trim()}%`); clauses.push(`(i.file_name ilike ${key} or i.relative_path ilike ${key} or exists (select 1 from jsonb_array_elements_text(i.tags) tag where tag ilike ${key}))`); }
+    if (filters.orientation && filters.orientation !== 'ALL') clauses.push(`i.orientation = ${add(filters.orientation)}`);
+    if (filters.category) clauses.push(`i.category = ${add(filters.category)}`);
+    if (filters.usage === 'UNUSED') clauses.push('i.usage_count = 0');
+    if (filters.usage === 'RECENT') clauses.push("i.last_used_at is not null and i.last_used_at > now() - interval '30 days'");
+    if (filters.usage === 'FREQUENT') clauses.push('i.usage_count >= 3');
+    const order = filters.sort === 'DURATION' ? 'latest.duration_ms asc' : filters.sort === 'USAGE' || filters.sort === 'LEAST_USED' ? 'latest.usage_count asc, latest.last_used_at asc nulls first' : filters.sort === 'RECENT' || filters.sort === 'MOST_RECENT' ? 'latest.last_used_at desc nulls last' : filters.sort === 'UPDATED' || filters.sort === 'NEWEST' ? 'latest.updated_at desc' : 'latest.file_name asc';
+    const base = `from local_media_index i join local_media_scan_files f on f.file_id = i.file_id join local_media_scans s on s.id = f.scan_id where ${clauses.join(' and ')}`;
+    const countResult = await this.db.query(`select count(distinct i.file_id)::int as total ${base}`, params);
+    const dataParams = [...params, pageSize, (page - 1) * pageSize];
+    const result = await this.db.query(`select latest.*,u.gold as usage_gold,u.candidate_count,u.selected_count,u.manual_select_count,u.final_use_count,u.replace_count,u.recent_use_count,u.jianying_use_count,u.last_used_at as usage_last_used_at from (select distinct on (i.file_id) i.*, f.source_path ${base} order by i.file_id, s.scanned_at desc nulls last) latest left join script_editing_v3_asset_usage_stats u on u.workspace_id=$1 and u.asset_id=latest.file_id order by ${order} limit $${dataParams.length - 1} offset $${dataParams.length}`, dataParams);
+    const items = result.rows.map((row) => ({ fileId: String(row.file_id), fileName: String(row.file_name), relativePath: String(row.relative_path), sourcePath: String(row.source_path), durationMs: Number(row.duration_ms), width: Number(row.width), height: Number(row.height), ...(row.fps != null ? { fps: Number(row.fps) } : {}), ...(row.codec ? { codec: String(row.codec) } : {}), ...(row.file_size != null ? { fileSize: Number(row.file_size) } : {}), ...(row.modified_at ? { modifiedAt: new Date(String(row.modified_at)).toISOString() } : {}), ...(row.source_fingerprint ? { sourceFingerprint: String(row.source_fingerprint) } : {}), tags: Array.isArray(row.tags) ? row.tags as string[] : [], ...(row.category ? { category: String(row.category) } : {}), usageCount: Number(row.usage_count || 0), candidateCount: Number(row.candidate_count || 0), selectedCount: Number(row.selected_count || 0), manualSelectCount: Number(row.manual_select_count || 0), finalUseCount: Number(row.final_use_count || 0), replaceCount: Number(row.replace_count || 0), recentUseCount: Number(row.recent_use_count || 0), jianyingUseCount: Number(row.jianying_use_count || 0), ...(row.usage_last_used_at ? { lastUsedAt: new Date(String(row.usage_last_used_at)).toISOString() } : row.last_used_at ? { lastUsedAt: new Date(String(row.last_used_at)).toISOString() } : {}), ...(row.thumbnail_key ? { thumbnailKey: String(row.thumbnail_key) } : {}), ...(row.thumbnail_status ? { thumbnailStatus: row.thumbnail_status as LocalMediaAsset['thumbnailStatus'] } : {}), available: row.availability === 'AVAILABLE', gold: Boolean(row.usage_gold ?? row.gold) }) as LocalMediaAsset);
+    return { items, total: Number((countResult.rows[0] as { total?: number } | undefined)?.total || 0), page, pageSize };
+  }
   async updateCategory(fileId: string, category: string | null): Promise<void> { if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED'); await this.db.query('update local_media_index set category = $2, updated_at = now() where file_id = $1', [fileId, category?.trim() || null]); }
   async updateTags(fileId: string, tags: string[]): Promise<void> { if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED'); await this.db.query('update local_media_index set tags = $2, updated_at = now() where file_id = $1', [fileId, JSON.stringify([...new Set(tags.map((tag) => tag.trim()).filter(Boolean))])]); }
+  async updateGold(fileId: string, workspaceId: string, gold: boolean): Promise<void> { if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED'); await this.db.query('update local_media_index set gold=$2,updated_at=now() where file_id=$1', [fileId, gold]); await this.db.query('insert into script_editing_v3_asset_usage_stats (workspace_id,asset_id,gold) values ($1,$2,$3) on conflict (workspace_id,asset_id) do update set gold=excluded.gold,updated_at=now()', [workspaceId, fileId, gold]); }
+
+  async relinkWorkspaceFile(input: { workspaceId: string; fileId: string; newPath: string; actor?: string; force?: boolean }): Promise<{ fileId: string; sourcePath: string; sourceFingerprint: string; availability: string; confidence: string }> {
+    if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED');
+    const row = (await this.db.query(`select i.*,f.source_path as current_source_path,s.id as scan_id,s.source_root_id from local_media_index i join local_media_scan_files f on f.file_id=i.file_id join local_media_scans s on s.id=f.scan_id where i.file_id=$1 and s.workspace_id=$2 and s.status='SUCCEEDED' order by s.scanned_at desc nulls last limit 1`, [input.fileId, input.workspaceId])).rows[0] as Record<string, unknown> | undefined;
+    if (!row) throw new Error('LOCAL_MEDIA_FILE_NOT_FOUND');
+    const details = await stat(input.newPath).catch(() => null); if (!details?.isFile()) throw new Error('RELINK_FILE_NOT_FOUND');
+    const probe = await this.probe(input.newPath);
+    const fingerprint = await contentFingerprint(input.newPath, fallbackFingerprint({ fileSize: details.size, modifiedAt: details.mtime.toISOString(), durationMs: Number(probe.durationMs) }));
+    const durationClose = Math.abs(Number(probe.durationMs) - Number(row.duration_ms)) <= 500;
+    const dimensionsClose = !Number(row.width) || !Number(row.height) || (Number(probe.width) === Number(row.width) && Number(probe.height) === Number(row.height));
+    const sizeClose = !row.file_size || Number(row.file_size) === details.size;
+    const oldFingerprint = String(row.source_fingerprint || '');
+    const legacyFingerprint = fallbackFingerprint({ fileSize: row.file_size == null ? null : Number(row.file_size), modifiedAt: row.modified_at == null ? null : String(row.modified_at), durationMs: Number(row.duration_ms) });
+    const matches = oldFingerprint.startsWith('sha256:') ? oldFingerprint === fingerprint : oldFingerprint === legacyFingerprint;
+    if (!matches && !input.force) throw new Error(!durationClose || !dimensionsClose || !sizeClose ? 'RELINK_FINGERPRINT_MISMATCH' : 'RELINK_CONFIRMATION_REQUIRED');
+    const confidence = matches ? 'HIGH' : 'FORCED';
+    const client = await this.db.connect();
+    try {
+      await client.query('begin');
+      await client.query('update local_media_index set source_fingerprint=$3,file_name=$4,relative_path=$5,file_size=$6,modified_at=$7,duration_ms=$8,width=$9,height=$10,availability=\'AVAILABLE\',updated_at=now() where file_id=$1 and source_root_id=$2', [input.fileId, row.source_root_id, fingerprint, basename(input.newPath), basename(input.newPath), details.size, details.mtime.toISOString(), Math.round(probe.durationMs), probe.width, probe.height]);
+      await client.query('update local_media_scan_files set source_path=$2,file_name=$3,relative_path=$4,file_size=$5,modified_at=$6,duration_ms=$7,width=$8,height=$9,available=true,error_message=null where file_id=$1', [input.fileId, input.newPath, basename(input.newPath), basename(input.newPath), details.size, details.mtime.toISOString(), Math.round(probe.durationMs), probe.width, probe.height]);
+      await client.query('insert into script_editing_v3_asset_relinks (id,workspace_id,snapshot_id,asset_id,old_fingerprint,new_fingerprint,old_path,new_path,reason,actor) values ($1,$2,null,$3,$4,$5,$6,$7,$8,$9)', [`relink-${randomUUID()}`, input.workspaceId, input.fileId, row.source_fingerprint || null, fingerprint, row.current_source_path || null, input.newPath, confidence === 'FORCED' ? 'FORCED_MISMATCH' : 'MANUAL_RELINK', input.actor || 'operator']);
+      await client.query('commit');
+    } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
+    return { fileId: input.fileId, sourcePath: input.newPath, sourceFingerprint: fingerprint, availability: 'AVAILABLE', confidence };
+  }
   async generateThumbnail(fileId: string, ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg'): Promise<{ key: string; path: string } | null> {
     if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED');
     const row = (await this.db.query<{ source_root_id: string; relative_path: string; source_path: string; duration_ms: number; modified_at: string | null; file_size: number | null }>('select source_root_id, relative_path, source_path, duration_ms, modified_at, file_size from local_media_index where file_id = $1 and availability = \'AVAILABLE\'', [fileId])).rows[0];
