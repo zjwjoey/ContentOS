@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +18,12 @@ function pnpmInvocation(args: string[]): { command: string; args: string[] } {
   if (process.platform !== 'win32') return { command: 'pnpm', args };
   const commandLine = ['pnpm.cmd', ...args].join(' ');
   return { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', commandLine] };
+}
+
+function tsxInvocation(args: string[]): { command: string; args: string[] } {
+  const executable = resolve(root, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.CMD' : 'tsx');
+  if (process.platform !== 'win32') return { command: executable, args };
+  return { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', [executable, ...args].join(' ')] };
 }
 
 function scopedDatabaseUrl(schema: string): string {
@@ -69,6 +77,11 @@ function spawnPnpm(args: string[], env: NodeJS.ProcessEnv): ChildProcess {
   });
 }
 
+function spawnTsx(args: string[], env: NodeJS.ProcessEnv): ChildProcess {
+  const invocation = tsxInvocation(args);
+  return spawn(invocation.command, invocation.args, { cwd: root, env, stdio: 'inherit', windowsHide: true, detached: process.platform !== 'win32' });
+}
+
 async function stopOwnedTree(child: ChildProcess): Promise<void> {
   if (!child.pid || child.exitCode !== null) return;
   if (process.platform === 'win32') {
@@ -116,6 +129,7 @@ async function main(): Promise<void> {
   const webPort = await freePort();
   const databaseUrl = scopedDatabaseUrl(schema);
   let operator: ChildProcess | undefined;
+  let fakeAvatarServer: HttpServer | undefined;
   try {
     await admin.query(`create schema "${schema}"`);
     const database = await createDatabase(databaseUrl);
@@ -123,6 +137,9 @@ async function main(): Promise<void> {
     await mkdir(storageRoot, { recursive: true });
     for (const [index, path] of fixtureVideos.entries()) await generateFixtureVideo(path, process.env.FFMPEG_PATH ?? 'ffmpeg', ['0x2057d4', '0x3b82f6', '0x16a34a', '0xea580c'][index]!, 6);
     await generateFixtureAudio(fixtureAudio, process.env.FFMPEG_PATH ?? 'ffmpeg');
+    const fakeAvatarPort = await freePort();
+    fakeAvatarServer = createHttpServer((request, response) => { if (request.url === '/avatar.mp4') { response.writeHead(200, { 'content-type': 'video/mp4' }); createReadStream(fixtureVideos[0]!).pipe(response); return; } response.writeHead(404).end(); });
+    await new Promise<void>((resolveListen, rejectListen) => { fakeAvatarServer!.once('error', rejectListen); fakeAvatarServer!.listen(fakeAvatarPort, '127.0.0.1', () => resolveListen()); });
 
     const apiUrl = `http://127.0.0.1:${apiPort}`;
     const webUrl = `http://127.0.0.1:${webPort}`;
@@ -141,18 +158,23 @@ async function main(): Promise<void> {
       CONTENTOS_LOCAL_MEDIA_ROOTS: temporaryRoot,
       CONTENTOS_MUSIC_ROOTS: temporaryRoot,
       CONTENTOS_OUTPUT_ROOTS: temporaryRoot,
+      CONTENTOS_SPEECH_PROVIDER: 'fake-speech',
+      CONTENTOS_AVATAR_PROVIDER: 'fake-avatar',
+      CONTENTOS_FAKE_SPEECH_OUTPUT_PATH: fixtureAudio,
+      CONTENTOS_FAKE_AVATAR_OUTPUT_URL: 'http://fake-avatar.test/avatar.mp4',
+      CONTENTOS_FAKE_AVATAR_PROXY_URL: `http://127.0.0.1:${fakeAvatarPort}`,
     };
     if (process.env.CONTENTOS_WEB_PRODUCTION === '1') {
       const buildInvocation = pnpmInvocation(['--filter', '@contentos/web', 'exec', 'next', 'build']);
       await run(buildInvocation.command, buildInvocation.args, { ...environment, NODE_ENV: 'production' });
     }
-    operator = spawnPnpm(['dev:operator'], environment);
+    operator = spawnTsx(['scripts/dev-operator.ts'], environment);
     await waitForHealth(apiUrl);
-    const testArgs = ['tsx', '--test', '--test-concurrency=1'];
+    const testArgs = ['--test', '--test-concurrency=1'];
     if (process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN) testArgs.push('--test-name-pattern', process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN);
-      const browserTests = (process.env.CONTENTOS_BROWSER_TEST_FILES || 'tests/e2e/auto-edit-v1-browser.test.ts;tests/e2e/editing-workbench-browser.test.ts;tests/e2e/hybrid-script-edit-browser.test.ts;tests/e2e/script-editing-v2-browser.test.ts').split(';').map((file) => file.trim()).filter(Boolean);
+    const browserTests = (process.env.CONTENTOS_BROWSER_TEST_FILES || 'tests/e2e/auto-edit-v1-browser.test.ts;tests/e2e/editing-workbench-browser.test.ts;tests/e2e/hybrid-script-edit-browser.test.ts;tests/e2e/script-editing-v2-browser.test.ts;tests/e2e/digital-human-browser.test.ts').split(';').map((file) => file.trim()).filter(Boolean);
     testArgs.push(...browserTests);
-    const invocation = pnpmInvocation(testArgs);
+    const invocation = tsxInvocation(testArgs);
     const browserExecutable = process.env.CONTENTOS_BROWSER_EXECUTABLE || (process.platform === 'win32' ? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' : undefined);
     await run(invocation.command, invocation.args, {
       ...environment,
@@ -167,6 +189,7 @@ async function main(): Promise<void> {
     });
   } finally {
     if (operator) await stopOwnedTree(operator);
+    if (fakeAvatarServer) await new Promise<void>((resolveClose) => fakeAvatarServer!.close(() => resolveClose()));
     await admin.query(`drop schema if exists "${schema}" cascade`);
     await admin.end();
     await rm(temporaryRoot, { recursive: true, force: true });

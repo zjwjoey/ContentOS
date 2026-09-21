@@ -173,10 +173,12 @@ export class SignedProviderMediaStaging implements ProviderMediaStaging {
 export class FakeAvatarProvider implements AvatarProvider {
   readonly providerId = 'fake-avatar';
   private readonly tasks = new Map<string, AvatarTaskStatus>();
+  private readonly requestTasks = new Map<string, AvatarTaskStatus>();
+  constructor(private readonly outputUrl = 'https://example.invalid/fake-avatar.mp4') {}
   async getCapabilities(): Promise<AvatarCapabilities> { return { providerId: this.providerId, local: true, videoToVideo: true, imageToVideo: false, requiresPublicUrl: false, supportedFormats: ['mp4'] }; }
-  async submitLipSync(_request: AvatarGenerationRequest): Promise<AvatarExternalTask> { const externalTaskId = `fake-${randomUUID()}`; const task: AvatarTaskStatus = { externalTaskId, providerId: this.providerId, status: 'SUCCEEDED', outputUrl: 'https://example.invalid/fake-avatar.mp4' }; this.tasks.set(externalTaskId, task); return task; }
+  async submitLipSync(request: AvatarGenerationRequest): Promise<AvatarExternalTask> { const existing = this.requestTasks.get(request.requestId); if (existing) return existing; const externalTaskId = `fake-${randomUUID()}`; const task: AvatarTaskStatus = { externalTaskId, providerId: this.providerId, status: 'SUCCEEDED', outputUrl: this.outputUrl, provenance: { fake: true, requestId: request.requestId } }; this.tasks.set(externalTaskId, task); this.requestTasks.set(request.requestId, task); return task; }
   async getTask(externalTaskId: string): Promise<AvatarTaskStatus> { const task = this.tasks.get(externalTaskId); if (!task) throw new DigitalHumanProviderError('EXTERNAL_FAILED', 'Fake avatar task not found', false); return task; }
-  async cancelTask(externalTaskId: string): Promise<void> { this.tasks.set(externalTaskId, { externalTaskId, providerId: this.providerId, status: 'CANCELLED' }); }
+  async cancelTask(externalTaskId: string): Promise<void> { const task = await this.getTask(externalTaskId); if (task.status === 'QUEUED' || task.status === 'RUNNING') this.tasks.set(externalTaskId, { ...task, status: 'CANCELLED' }); }
 }
 
 export class SyntheticTimingProvider implements AlignmentProvider {

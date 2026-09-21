@@ -21,10 +21,21 @@ export interface DigitalHumanWorkerDependencies {
   staging: ProviderMediaStaging;
   fetchImpl?: typeof fetch;
   resolveRemoteMedia?: RemoteMediaResolver;
+  probeRemoteResult?: (path: string, signal?: AbortSignal) => Promise<RemoteVideoProbe>;
   maxRemoteResultBytes?: number;
   remoteResultTimeoutMs?: number;
 }
 export interface DigitalHumanWorkerInvocation { jobId: string; }
+export interface RemoteVideoProbe { format: string; durationMs: number; width: number; height: number; videoCodec?: string; }
+export interface RemoteAvatarResultValidationOptions {
+  fetchImpl: typeof fetch;
+  resolveRemoteMedia?: RemoteMediaResolver;
+  signal: AbortSignal;
+  timeoutMs: number;
+  maxBytes: number;
+  tempPath: string;
+  probe: (path: string, signal?: AbortSignal) => Promise<RemoteVideoProbe>;
+}
 
 function payloadOf(job: JobRecord): { generationId: string; projectId: string; kind: 'SPEECH' | 'AVATAR'; correlationId: string } {
   const payload = job.payload as Record<string, unknown>;
@@ -77,6 +88,8 @@ async function fetchRemoteResult(fetchImpl: typeof fetch, url: string, signal: A
 }
 
 async function streamRemoteResult(response: Response, tempPath: string, maxBytes: number): Promise<void> {
+  const contentType = (response.headers.get('content-type') || '').split(';', 1)[0]?.trim().toLowerCase();
+  if (contentType && ['text/html', 'text/plain', 'application/json', 'application/xml', 'text/xml'].includes(contentType)) throw Object.assign(new Error(`Avatar provider returned an invalid media content type: ${contentType}`), { code: 'AVATAR_RESULT_CONTENT_TYPE_INVALID', retryable: false });
   const contentLength = Number(response.headers.get('content-length') || '');
   if (Number.isFinite(contentLength) && contentLength > maxBytes) throw Object.assign(new Error('Avatar provider result exceeds the configured size limit'), { code: 'AVATAR_RESULT_TOO_LARGE', retryable: false });
   if (!response.body) throw Object.assign(new Error('Avatar provider returned an empty response body'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: true });
@@ -89,6 +102,25 @@ async function streamRemoteResult(response: Response, tempPath: string, maxBytes
     throw error;
   }
   if (total === 0) { await rm(tempPath, { force: true }); throw Object.assign(new Error('Avatar provider returned an empty response body'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: true }); }
+}
+
+export function validateRemoteVideoProbe(probe: RemoteVideoProbe): void {
+  if (!probe || typeof probe !== 'object' || !Number.isFinite(probe.durationMs) || probe.durationMs <= 0 || !Number.isFinite(probe.width) || probe.width <= 0 || !Number.isFinite(probe.height) || probe.height <= 0 || !probe.videoCodec?.trim() || !probe.format || probe.format === 'unknown') throw Object.assign(new Error('Avatar provider result is not a valid video'), { code: 'AVATAR_RESULT_INVALID', retryable: false });
+}
+
+export async function downloadAndValidateRemoteAvatarResult(url: string, options: RemoteAvatarResultValidationOptions): Promise<RemoteVideoProbe> {
+  const response = await fetchRemoteResult(options.fetchImpl, url, options.signal, options.timeoutMs, options.resolveRemoteMedia);
+  if (!response.ok) throw Object.assign(new Error('Unable to download avatar result'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: response.status >= 500 });
+  await streamRemoteResult(response, options.tempPath, options.maxBytes);
+  try {
+    let probe: RemoteVideoProbe;
+    try { probe = await options.probe(options.tempPath, options.signal); validateRemoteVideoProbe(probe); }
+    catch (error) { if (options.signal.aborted) throw error; if (error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string') throw error; throw Object.assign(new Error('Avatar provider result could not be validated as video'), { code: 'AVATAR_RESULT_INVALID', retryable: false, cause: error }); }
+    return probe;
+  } catch (error) {
+    await rm(options.tempPath, { force: true });
+    throw error;
+  }
 }
 
 async function processSpeech(job: JobRecord, attemptId: string, signal: AbortSignal, payload: ReturnType<typeof payloadOf>, deps: DigitalHumanWorkerDependencies): Promise<unknown> {
@@ -156,13 +188,15 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
     if (task.status === 'FAILED' || task.status === 'CANCELLED' || !task.outputUrl) throw Object.assign(new Error(taskError.errorMessage || 'Avatar provider task failed'), { code: taskError.errorCode || 'AVATAR_PROVIDER_FAILED', retryable: false });
     if (deps.avatarProvider?.providerId && task.providerId !== deps.avatarProvider.providerId) throw Object.assign(new Error('Avatar provider task identity does not match the configured runtime provider'), { code: 'AVATAR_PROVIDER_IDENTITY_MISMATCH', retryable: false });
     signal.throwIfAborted();
-    const fetchImpl = deps.fetchImpl || fetch; const response = await fetchRemoteResult(fetchImpl, task.outputUrl, signal, remoteResultTimeout(deps), deps.resolveRemoteMedia); if (!response.ok) throw Object.assign(new Error('Unable to download avatar result'), { code: 'AVATAR_RESULT_DOWNLOAD_FAILED', retryable: response.status >= 500 });
-    const tempPath = join(deps.storage.root, 'staging', `${generation.id}.avatar.mp4`); await mkdir(join(deps.storage.root, 'staging'), { recursive: true }); await streamRemoteResult(response, tempPath, remoteResultLimit(deps));
+    const fetchImpl = deps.fetchImpl || fetch;
+    const tempPath = join(deps.storage.root, 'staging', `${generation.id}.avatar.mp4`); await mkdir(join(deps.storage.root, 'staging'), { recursive: true });
+    if (!deps.probeRemoteResult) throw Object.assign(new Error('Avatar result validation is not configured'), { code: 'AVATAR_RESULT_PROBE_UNAVAILABLE', retryable: false });
+    const probe = await downloadAndValidateRemoteAvatarResult(task.outputUrl, { fetchImpl, ...(deps.resolveRemoteMedia ? { resolveRemoteMedia: deps.resolveRemoteMedia } : {}), signal, timeoutMs: remoteResultTimeout(deps), maxBytes: remoteResultLimit(deps), tempPath, probe: deps.probeRemoteResult });
     try {
-      const asset = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: tempPath, kind: 'VIDEO', role: 'OUTPUT', metadata: { digitalHuman: { generationId: generation.id, provider: task.providerId, externalTaskId: task.externalTaskId } } });
-      const imported = await deps.assets.getReadySourceAsset(payload.projectId, asset.id, 'VIDEO'); const metadata = imported?.metadata || {};
+      const asset = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: tempPath, kind: 'VIDEO', role: 'OUTPUT', metadata: { durationMs: probe.durationMs, width: probe.width, height: probe.height, format: probe.format, ...(probe.videoCodec ? { codec: probe.videoCodec } : {}), digitalHuman: { generationId: generation.id, provider: task.providerId, externalTaskId: task.externalTaskId, providerMetadata: task.provenance || null } } });
+      const imported = await deps.assets.getReadySourceAsset(payload.projectId, asset.id, 'VIDEO'); const metadata = imported?.metadata || probe;
       signal.throwIfAborted();
-      const completed = await deps.digitalHuman.completeAvatar(generation.id, { outputAssetId: asset.id, durationMs: typeof metadata.durationMs === 'number' ? metadata.durationMs : undefined, model: task.model, modelVersion: task.modelVersion, costAmount: task.costAmount, costCurrency: task.costCurrency, billingQuantity: task.billingQuantity, billingUnit: task.billingUnit, provenance: { provider: task.providerId, model: task.model || generation.model, modelVersion: task.modelVersion || null, avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, sourceVideoAssetId: video.id, externalTaskId: task.externalTaskId, costAmount: task.costAmount ?? null, costCurrency: task.costCurrency ?? null, billingQuantity: task.billingQuantity ?? null, billingUnit: task.billingUnit ?? null, ...(task.provenance || {}) } });
+      const completed = await deps.digitalHuman.completeAvatar(generation.id, { outputAssetId: asset.id, durationMs: typeof metadata.durationMs === 'number' ? metadata.durationMs : probe.durationMs, model: task.model, modelVersion: task.modelVersion, costAmount: task.costAmount, costCurrency: task.costCurrency, billingQuantity: task.billingQuantity, billingUnit: task.billingUnit, provenance: { provider: task.providerId, model: task.model || generation.model, modelVersion: task.modelVersion || null, avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, sourceVideoAssetId: video.id, externalTaskId: task.externalTaskId, costAmount: task.costAmount ?? null, costCurrency: task.costCurrency ?? null, billingQuantity: task.billingQuantity ?? null, billingUnit: task.billingUnit ?? null, providerMetadata: task.provenance || null, probe: { durationMs: probe.durationMs, width: probe.width, height: probe.height, format: probe.format, codec: probe.videoCodec || null }, ...(task.provenance || {}) } });
       if (!completed) throw Object.assign(new Error('Avatar Generation is no longer active'), { code: 'GENERATION_NOT_ACTIVE', retryable: false });
       return { generationId: generation.id, outputAssetId: asset.id, state: 'SUCCEEDED' };
     } finally { await rm(tempPath, { force: true }); }
