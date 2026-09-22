@@ -527,7 +527,8 @@ export class ScriptEditingV3Service {
         const restoredId = `manifest-${randomUUID()}`;
         const restoredManifest = { ...(target.manifest as EditManifestV0), metadata: { ...((target.manifest as EditManifestV0).metadata || {}), v3Revision: nextRevision, restoredFromRevisionId: String(target.id), v3SessionId: sessionId } };
         await client.query("update edit_manifests set status='SUPERSEDED' where id=$1 and status='PERSISTED'", [currentId]);
-        await client.query('insert into edit_manifests (id,project_id,workspace_id,revision,schema_version,manifest,manifest_digest,status,parent_manifest_id,created_by,edit_operations) values ($1,null,$2,$3,$4,$5,$6,\'PERSISTED\',$7,\'script-editing-v3-restore\',$8)', [restoredId, String(session.workspace_id), nextRevision, 'EDIT_MANIFEST_V0', restoredManifest, digestEditManifest(restoredManifest), currentId, JSON.stringify([{ type: 'RESTORE_REVISION', fromManifestId: String(target.id), reason: reason || null }])]);
+        const workspace = (await client.query<{ project_id: string | null }>('select project_id from video_workspaces where id=$1', [String(session.workspace_id)])).rows[0];
+        await client.query('insert into edit_manifests (id,project_id,workspace_id,revision,schema_version,manifest,manifest_digest,status,parent_manifest_id,created_by,edit_operations) values ($1,$2,$3,$4,$5,$6,$7,\'PERSISTED\',$8,\'script-editing-v3-restore\',$9)', [restoredId, workspace?.project_id || null, String(session.workspace_id), nextRevision, 'EDIT_MANIFEST_V0', restoredManifest, digestEditManifest(restoredManifest), currentId, JSON.stringify([{ type: 'RESTORE_REVISION', fromManifestId: String(target.id), reason: reason || null }])]);
         await client.query('update script_editing_v3_sessions set current_manifest_id=$2,revision=$3,status=\'READY\',updated_at=now() where id=$1', [sessionId, restoredId, nextRevision]);
         await client.query('insert into script_editing_v3_revision_actions (id,session_id,from_manifest_id,to_manifest_id,action,reason) values ($1,$2,$3,$4,$5,$6)', [`revision-action-${randomUUID()}`, sessionId, currentId, restoredId, action, reason || null]);
         await client.query('commit');
@@ -732,7 +733,8 @@ export class ScriptEditingV3Service {
       const previous = session.current_manifest_id ? String(session.current_manifest_id) : null;
       if (previous) await client.query("update edit_manifests set status='SUPERSEDED' where id=$1 and status='PERSISTED'", [previous]);
       const manifestId = `manifest-${randomUUID()}`;
-      await client.query('insert into edit_manifests (id,project_id,workspace_id,revision,schema_version,manifest,manifest_digest,status,parent_manifest_id,created_by,edit_operations) values ($1,null,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [manifestId, String(session.workspace_id), revision, 'EDIT_MANIFEST_V0', manifest, digestEditManifest(manifest), 'PERSISTED', previous, 'script-editing-v3', operation ? JSON.stringify([operation]) : '[]']);
+      const workspace = (await client.query<{ project_id: string | null }>('select project_id from video_workspaces where id=$1', [String(session.workspace_id)])) .rows[0];
+      await client.query('insert into edit_manifests (id,project_id,workspace_id,revision,schema_version,manifest,manifest_digest,status,parent_manifest_id,created_by,edit_operations) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [manifestId, workspace?.project_id || null, String(session.workspace_id), revision, 'EDIT_MANIFEST_V0', manifest, digestEditManifest(manifest), 'PERSISTED', previous, 'script-editing-v3', operation ? JSON.stringify([operation]) : '[]']);
       await client.query("update script_editing_v3_sessions set current_manifest_id=$2,revision=$3,status='READY',updated_at=now() where id=$1", [sessionId, manifestId, revision]);
       await client.query('delete from clip_instances where session_id=$1', [sessionId]);
       for (const clip of manifest.timeline) if (clip.sentenceId) {

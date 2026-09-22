@@ -123,7 +123,7 @@ export function registerProductionRunRoutes(app: FastifyInstance, dependencies: 
       if (run.approvalRequired && !run.approvalBypassed && run.steps.find((step) => step.stage === 'APPROVAL')?.status !== 'SUCCEEDED') throw new Error('PRODUCTION_APPROVAL_REQUIRED');
       const manifestId = typeof run.trace.manifestRevisionId === 'string' ? run.trace.manifestRevisionId : null; if (!manifestId) throw new Error('PRODUCTION_APPROVED_MANIFEST_REQUIRED');
       const row = (await db.query('select project_id,workspace_id from edit_manifests where id=$1', [manifestId])).rows[0] as { project_id?: string | null; workspace_id?: string } | undefined; if (!row) throw new Error('PRODUCTION_MANIFEST_NOT_FOUND');
-      const job = row.project_id === params.projectId ? await video.createManifestRenderJob(params.projectId, manifestId) : await video.createManifestRenderJobForWorkspace(String(row.workspace_id), manifestId, `production-run:${params.runId}`);
+      const job = row.workspace_id ? await video.createManifestRenderJobForWorkspace(String(row.workspace_id), manifestId, `production-run:${params.runId}`) : await video.createManifestRenderJob(params.projectId, manifestId);
       const updated = await productionRuns.updateStep(params.projectId, params.runId, { stage: 'RENDER', status: 'RUNNING', inputRefs: { manifestRevisionId: manifestId }, outputRefs: { jobId: job.id, manifestId } });
       return reply.code(202).send({ jobId: job.id, run: updated });
     } catch (error) { return failure(reply, error); }
@@ -161,6 +161,24 @@ export function registerProductionRunRoutes(app: FastifyInstance, dependencies: 
       const requestAggregate = await publisher.createRequest({ projectId: params.projectId, accountId: parsed.data.accountId, idempotencyKey: `production-publish:${params.runId}:${parsed.data.accountId}:${renderAssetId}`, correlationId: `production-run:${params.runId}`, revision: { assetId: asset.id, assetChecksum: asset.checksum, title: parsed.data.title, description: parsed.data.description, hashtags: parsed.data.hashtags, desiredPublishAt: null, createdBy: 'production-run' } });
       const updated = await productionRuns.updateStep(params.projectId, params.runId, { stage: 'PUBLISH', status: 'WAITING_USER', inputRefs: { renderAssetId }, outputRefs: { publishRequestId: requestAggregate.request.id } });
       return reply.code(201).send({ request: requestAggregate, run: updated });
+    } catch (error) { return failure(reply, error); }
+  });
+  app.post('/api/v1/projects/:projectId/production-runs/:runId/publish', async (request, reply) => {
+    if (!publisher || !jobs || !approvals) return reply.code(503).send({ error: { code: 'PUBLISHER_SERVICE_UNAVAILABLE', message: 'Publisher service is unavailable', details: [] } });
+    const params = request.params as { projectId: string; runId: string };
+    try {
+      const run = await productionRuns.get(params.projectId, params.runId); if (!run) throw new Error('PRODUCTION_RUN_NOT_FOUND');
+      const publishStep = run.steps.find((step) => step.stage === 'PUBLISH');
+      if (publishStep?.status === 'SUCCEEDED') return { jobId: typeof run.trace.publishJobId === 'string' ? run.trace.publishJobId : null, run };
+      const requestId = typeof run.trace.publishRequestId === 'string' ? run.trace.publishRequestId : null; if (!requestId) throw new Error('PRODUCTION_PUBLISH_REQUEST_REQUIRED');
+      const aggregate = await publisher.getRequestAggregate(params.projectId, requestId); if (!aggregate) throw new Error('PRODUCTION_PUBLISH_REQUEST_NOT_FOUND');
+      const approval = await approvals.getCurrent(params.projectId, 'PUBLISH', requestId, aggregate.revision.id); if (!approval || approval.status !== 'APPROVED') throw new Error('PRODUCTION_PUBLISH_APPROVAL_REQUIRED');
+      const jobId = `job-publish-${requestId}-${aggregate.revision.revision}`;
+      const payload = await publisher.buildPublishJobPayload(params.projectId, requestId, jobId, null);
+      const job = await jobs.createIdempotent({ id: jobId, type: 'PUBLISH', projectId: params.projectId, payload, idempotencyKey: `publisher:publish:${requestId}:${aggregate.revision.id}`, maxAttempts: 3, ...(aggregate.request.desiredPublishAt ? { scheduledAt: aggregate.request.desiredPublishAt } : {}) });
+      if (!['QUEUED', 'SCHEDULED'].includes(aggregate.request.status)) await publisher.transitionRequest(requestId, aggregate.request.desiredPublishAt && new Date(aggregate.request.desiredPublishAt).getTime() > Date.now() ? 'SCHEDULED' : 'QUEUED');
+      const updated = await productionRuns.updateStep(params.projectId, params.runId, { stage: 'PUBLISH', status: 'RUNNING', inputRefs: { publishRequestId: requestId }, outputRefs: { publishRequestId: requestId, publishJobId: job.id } });
+      return reply.code(202).send({ jobId: job.id, run: updated });
     } catch (error) { return failure(reply, error); }
   });
   app.post('/api/v1/projects/:projectId/production-runs/:runId/review', async (request, reply) => {

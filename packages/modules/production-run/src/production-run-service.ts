@@ -154,7 +154,8 @@ export class ProductionRunService {
     if (stage === 'APPROVAL' && !(await exists("select 1 from approval_decisions where id=$1 and project_id=$2 and status='APPROVED'", [one('approvalId'), projectId]))) throw new Error('PRODUCTION_APPROVAL_NOT_APPROVED');
     if (stage === 'RENDER' && one('renderId') && !(await exists("select 1 from renders where id=$1 and project_id=$2 and status='SUCCEEDED'", [one('renderId'), projectId]))) throw new Error('PRODUCTION_RENDER_NOT_SUCCEEDED');
     if (stage === 'PUBLISH' && one('publishJobId') && !(await exists("select 1 from jobs where id=$1 and project_id=$2", [one('publishJobId'), projectId]))) throw new Error('PRODUCTION_PUBLISH_JOB_NOT_FOUND');
-    if (stage === 'REVIEW' && one('reviewId') && !(await exists('select 1 from review_metric_snapshots where id=$1', [one('reviewId')]))) throw new Error('PRODUCTION_REVIEW_NOT_FOUND');
+    if (stage === 'REVIEW' && one('reviewId') && !(await exists('select 1 from review_metric_snapshots where id=$1 and project_id=$2', [one('reviewId'), projectId]))) throw new Error('PRODUCTION_REVIEW_NOT_FOUND');
+    if (stage === 'REVIEW' && one('externalPostId') && !(await exists('select 1 from publisher_external_posts p join publisher_requests r on r.id=p.request_id where p.external_post_id=$1 and r.project_id=$2', [one('externalPostId'), projectId]))) throw new Error('PRODUCTION_EXTERNAL_POST_NOT_FOUND');
   }
 
   async retry(projectId: string, runId: string, stage: ProductionRunStage): Promise<ProductionRunDetail> {
