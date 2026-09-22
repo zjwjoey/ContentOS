@@ -56,7 +56,7 @@ test('Script Editing V3 browser flow covers pool, candidates, locking and full p
     // The product entry is the existing Script Editing route. /edit/script/v3
     // remains only as a compatibility alias and must not be a second workbench.
     await page.goto(`${baseUrl}/edit/script`, { waitUntil: 'domcontentloaded' });
-    await page.getByRole('heading', { name: 'Sentence Editing Workbench' }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByRole('heading', { name: '句子剪辑工作台' }).waitFor({ state: 'visible', timeout: 15_000 });
     const runtimeStatus = page.getByTestId('jianying-runtime-status');
     await runtimeStatus.waitFor({ state: 'visible', timeout: 15_000 });
     assert.match(await runtimeStatus.innerText(), /明文草稿支持/);
@@ -67,13 +67,13 @@ test('Script Editing V3 browser flow covers pool, candidates, locking and full p
     const scanButton = page.getByRole('button', { name: '扫描素材' });
     await page.waitForFunction(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '扫描素材'); return Boolean(button && !(button as HTMLButtonElement).disabled); }, undefined, { timeout: 10_000 });
     await scanButton.click();
-    await page.getByText(/扫描状态：SUCCEEDED/).waitFor({ state: 'visible', timeout: 45_000 });
+    await page.getByText(/扫描状态：已完成/).waitFor({ state: 'visible', timeout: 45_000 });
 
     await page.getByRole('button', { name: '固定素材池快照' }).click();
-    const snapshotLabel = page.getByText(/Snapshot：/);
+    const snapshotLabel = page.getByText(/素材池版本：/);
     await snapshotLabel.waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByTestId('material-pool-health').waitFor({ state: 'visible', timeout: 15_000 });
-    const snapshotId = (await snapshotLabel.innerText()).match(/Snapshot：([^ ·]+)/)?.[1];
+    const snapshotId = (await snapshotLabel.innerText()).match(/素材池版本：([^ ·]+)/)?.[1];
     assert.ok(snapshotId);
     const snapshotResponse = await page.request.get(`${baseUrl}/api/v1/edit/v3/pool/snapshots/${snapshotId}`);
     assert.equal(snapshotResponse.status(), 200, await snapshotResponse.text());
@@ -82,21 +82,21 @@ test('Script Editing V3 browser flow covers pool, candidates, locking and full p
     await page.locator('textarea').fill('门店外景吸引顾客。顾客在货架区域挑选商品。');
     await page.getByRole('button', { name: '整理并确认分段' }).click();
     await page.getByTestId('confirmed-segments').waitFor({ state: 'visible', timeout: 15_000 });
-    await page.getByRole('button', { name: '创建 Workbench' }).click();
+    await page.getByRole('button', { name: '创建剪辑工作台' }).click();
     await page.getByText('文案已生成视觉查询，点击“生成首版方案”。').waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByRole('button', { name: '生成首版方案' }).click();
-    await page.getByRole('heading', { name: 'Sentence Editing Cards' }).waitFor({ state: 'visible', timeout: 20_000 });
+    await page.getByRole('heading', { name: '4. 句子剪辑卡片' }).waitFor({ state: 'visible', timeout: 20_000 });
     const cards = page.locator('article.card');
     await cards.nth(1).waitFor({ state: 'visible', timeout: 15_000 });
     assert.equal(await cards.count(), 2);
 
     const firstCard = cards.nth(0);
     await firstCard.getByRole('button', { name: '锁定', exact: true }).click();
-    await page.getByText('已锁定当前 Clip').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByText('已锁定当前片段').waitFor({ state: 'visible', timeout: 10_000 });
     await firstCard.getByRole('button', { name: '解锁', exact: true }).click();
-    await page.getByText('已解锁当前 Clip').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByText('已解锁当前片段').waitFor({ state: 'visible', timeout: 10_000 });
 
-    const candidateSummary = firstCard.getByText(/Candidate Browser/);
+    const candidateSummary = firstCard.getByText(/候选素材/);
     const candidateLoadingStarted = performance.now();
     await candidateSummary.click();
     await firstCard.getByRole('button', { name: '选择候选' }).first().waitFor({ state: 'visible', timeout: 10_000 });
@@ -111,33 +111,33 @@ test('Script Editing V3 browser flow covers pool, candidates, locking and full p
     await manualPanel.getByPlaceholder('人工标签（逗号分隔）').first().fill('货架');
     await manualPanel.getByRole('button', { name: '保存标签' }).first().click();
     await page.getByText(/已保存 .* 的人工标签/).waitFor({ state: 'visible', timeout: 10_000 });
-    await manualPanel.getByRole('button', { name: '标记 Gold' }).first().click();
-    await page.getByText(/已标记 .* 为 Gold/).waitFor({ state: 'visible', timeout: 10_000 });
+    await manualPanel.getByRole('button', { name: '标记重点' }).first().click();
+    await page.getByText(/已标记 .* 为重点素材/).waitFor({ state: 'visible', timeout: 10_000 });
     await manualPanel.getByTestId('manual-select-clip').last().click();
     await page.getByText(/已人工选择/).waitFor({ state: 'visible', timeout: 10_000 });
     const trimRanges = firstCard.locator('input[type="range"]');
     await trimRanges.nth(0).fill('100');
     await trimRanges.nth(1).fill('3100');
-    await firstCard.getByRole('button', { name: '保存 Trim' }).click();
-    await page.getByText('已保存 Source Monitor 区间').waitFor({ state: 'visible', timeout: 10_000 });
+    await firstCard.getByRole('button', { name: '保存截取' }).click();
+    await page.getByText('已保存 素材监视器区间').waitFor({ state: 'visible', timeout: 10_000 });
 
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await page.getByText('已撤销到上一版；快速预览已过期。').waitFor({ state: 'visible', timeout: 10_000 });
     await page.getByRole('button', { name: '重做', exact: true }).click();
     await page.getByText('已恢复下一版；快速预览已过期。').waitFor({ state: 'visible', timeout: 10_000 });
-    await page.getByText(/Revision History/).click();
+    await page.getByText(/版本历史/).click();
     await page.getByText(/变更句子/).first().waitFor({ state: 'visible', timeout: 10_000 });
     const firstPoolPreview = page.locator('.material-preview-card').first();
     await firstPoolPreview.getByRole('button', { name: '检测镜头' }).click();
     await page.getByText(/镜头检测完成：/).waitFor({ state: 'visible', timeout: 120_000 });
 
-    const revisionPreview = page.locator('section.card').filter({ hasText: 'V3.4 Revision / Preview' });
-    await revisionPreview.getByRole('button', { name: '更新 Draft Preview' }).click();
-    await page.getByText(/Draft Preview 已完成：复用/).waitFor({ state: 'visible', timeout: 120_000 });
+    const revisionPreview = page.locator('section.card').filter({ hasText: '版本与预览' });
+    await revisionPreview.getByRole('button', { name: '更新草稿预览' }).click();
+    await page.getByText(/草稿预览已完成：复用/).waitFor({ state: 'visible', timeout: 120_000 });
     assert.ok(await revisionPreview.locator('video').getAttribute('src'));
 
     await page.getByRole('button', { name: '渲染整片', exact: true }).click();
-    await page.getByText('整片渲染已进入 durable Job；正在等待成片…').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByText('整片渲染已进入后台任务；正在等待成片…').waitFor({ state: 'visible', timeout: 10_000 });
     const preview = page.locator('video.history-preview').last();
     await preview.waitFor({ state: 'visible', timeout: 120_000 });
     await page.getByText('整片已完成，可以播放并按时间定位句子。').waitFor({ state: 'visible', timeout: 15_000 });
@@ -164,18 +164,18 @@ test('Script Editing V3 degraded journey stays manual when Qwen is not configure
     assert.equal(qwenStatus.status(), 200);
     assert.equal((await qwenStatus.json() as { configured: boolean }).configured, false, 'degraded journey requires Qwen to be unconfigured');
     await page.goto(`${baseUrl}/edit/script`, { waitUntil: 'domcontentloaded' });
-    await page.getByRole('heading', { name: 'Sentence Editing Workbench' }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByRole('heading', { name: '句子剪辑工作台' }).waitFor({ state: 'visible', timeout: 15_000 });
     const sourceRootInput = page.locator('input[placeholder="输入已授权的素材文件夹路径"]');
     await sourceRootInput.fill('');
     await sourceRootInput.pressSequentially(sourceRoot, { delay: 1 });
     assert.equal(await sourceRootInput.inputValue(), sourceRoot);
     await page.waitForFunction(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '扫描素材'); return Boolean(button && !(button as HTMLButtonElement).disabled); }, undefined, { timeout: 10_000 });
     await page.getByRole('button', { name: '扫描素材' }).click();
-    await page.getByText(/扫描状态：SUCCEEDED/).waitFor({ state: 'visible', timeout: 45_000 });
+    await page.getByText(/扫描状态：已完成/).waitFor({ state: 'visible', timeout: 45_000 });
     await page.getByRole('button', { name: '固定素材池快照' }).click();
-    const snapshotLabel = page.getByText(/Snapshot：/);
+    const snapshotLabel = page.getByText(/素材池版本：/);
     await snapshotLabel.waitFor({ state: 'visible', timeout: 15_000 });
-    const snapshotId = (await snapshotLabel.innerText()).match(/Snapshot：([^ ·]+)/)?.[1];
+    const snapshotId = (await snapshotLabel.innerText()).match(/素材池版本：([^ ·]+)/)?.[1];
     assert.ok(snapshotId);
     const snapshotResponse = await page.request.get(`${baseUrl}/api/v1/edit/v3/pool/snapshots/${snapshotId}`);
     assert.equal(snapshotResponse.status(), 200, await snapshotResponse.text());
@@ -185,7 +185,7 @@ test('Script Editing V3 degraded journey stays manual when Qwen is not configure
     await page.locator('textarea').fill('人工选择画面完成降级剪辑。');
     await page.getByRole('button', { name: '整理并确认分段' }).click();
     await page.getByTestId('confirmed-segments').waitFor({ state: 'visible', timeout: 15_000 });
-    await page.getByRole('button', { name: '创建 Workbench' }).click();
+    await page.getByRole('button', { name: '创建剪辑工作台' }).click();
     await page.getByRole('button', { name: '生成首版方案' }).click();
     const firstCard = page.locator('article.card').first();
     await firstCard.getByTestId('manual-select-toggle').click();
@@ -196,8 +196,8 @@ test('Script Editing V3 degraded journey stays manual when Qwen is not configure
     const ranges = firstCard.locator('input[type="range"]');
     await ranges.nth(0).fill('0');
     await ranges.nth(1).fill('3000');
-    await firstCard.getByRole('button', { name: '保存 Trim' }).click();
-    await page.getByText('已保存 Source Monitor 区间').waitFor({ state: 'visible', timeout: 10_000 });
+    await firstCard.getByRole('button', { name: '保存截取' }).click();
+    await page.getByText('已保存 素材监视器区间').waitFor({ state: 'visible', timeout: 10_000 });
     await page.getByRole('button', { name: '渲染整片', exact: true }).click();
     await page.locator('video.history-preview').last().waitFor({ state: 'visible', timeout: 120_000 });
     await page.getByText('整片已完成，可以播放并按时间定位句子。').waitFor({ state: 'visible', timeout: 15_000 });
@@ -254,8 +254,8 @@ test('Script Editing V3.4 browser closure covers Asset Library and Gold Set work
     assert.equal(imported.status(), 201, await imported.text()); const set = await imported.json() as { id: string };
     await page.goto(`${baseUrl}/edit/script/v3/evaluation/${encodeURIComponent(set.id)}`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('heading', { name: 'Browser Closure Gold Set' }).waitFor({ state: 'visible', timeout: 15_000 });
-    await page.getByPlaceholder('新增 Visual Need，例如：仓库备货').fill('仓库备货'); await page.getByRole('button', { name: '创建 Visual Need' }).click(); await page.getByText('仓库备货').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByPlaceholder('新增画面需求，例如：仓库备货').fill('仓库备货'); await page.getByRole('button', { name: '创建画面需求' }).click(); await page.getByText('仓库备货').waitFor({ state: 'visible', timeout: 10_000 });
     await page.getByPlaceholder('搜索文件名或标签').fill('closure-1'); await page.getByRole('button', { name: '最佳' }).first().click(); await page.getByText('人工判定已保存').waitFor({ state: 'visible', timeout: 10_000 });
-    await page.getByRole('button', { name: '运行 Rules Baseline' }).click(); await page.getByText('BASELINE_RULES', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByRole('button', { name: '运行 规则基线' }).click(); await page.getByText('规则基线', { exact: true }).last().waitFor({ state: 'visible', timeout: 15_000 });
   } finally { await browser.close(); await rm(root, { recursive: true, force: true }); await rm(movedRoot, { recursive: true, force: true }); }
 });

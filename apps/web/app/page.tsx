@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 type Project = { id: string; name: string; status: string; metadata?: { topic?: string; targetPlatform?: string; targetAccount?: string; plannedDate?: string } };
 type ApiError = { error?: { message?: string } };
 type Dashboard = { counts: { total: number; active: number; attention: number; blocked: number; complete: number; pendingActions: number; runningJobs: number } };
+const projectStatusLabel: Record<string, string> = { DRAFT: '草稿', IN_PRODUCTION: '制作中', READY_TO_PUBLISH: '待发布', PUBLISHED: '已发布', ARCHIVED: '已归档' };
 
 async function responseMessage(response: Response, fallback: string): Promise<string> {
   try {
@@ -54,19 +55,19 @@ export default function HomePage() {
   };
 
   return <main className="shell">
-    <header><p className="eyebrow">ContentOS / Operator</p><h1>内容项目</h1><p className="muted">从项目总控查看 Director、Video、Approval 和 Publisher 的整体进度。快速剪辑（兼容入口）已迁移到独立剪辑工作台。</p><nav className="module-nav"><Link href="/edit">进入独立剪辑工作台</Link></nav></header>
+    <header><p className="eyebrow">ContentOS / 运营台</p><h1>内容项目</h1><p className="muted">从项目总控查看内容策划、视频剪辑、审批和发布的整体进度。快速剪辑（兼容入口）已迁移到独立剪辑工作台。</p><nav className="module-nav"><Link href="/edit">进入独立剪辑工作台</Link></nav></header>
     <section className="card">
-      <div className="section-title"><h2>创建项目</h2><span>Operator</span></div>
+      <div className="section-title"><h2>创建项目</h2><span>运营台</span></div>
       <form className="project-create" onSubmit={createProject}>
         <label>项目名称<input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="例如：门店经营知识矩阵" required maxLength={200} /></label><label>选题<input value={topic} onChange={(event) => setTopic(event.target.value)} placeholder="计划选题" /></label><label>平台<select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="douyin">抖音</option><option value="wechat_channels">视频号</option></select></label><label>目标账号<input value={account} onChange={(event) => setAccount(event.target.value)} placeholder="账号名称" /></label><label>计划日期<input type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)} /></label>
         <button type="submit" disabled={creating}>{creating ? '创建中…' : '创建并进入项目总控'}</button>
       </form>
     </section>
-    {dashboard && <section className="card" data-testid="dashboard-summary"><div className="section-title"><h2>运营总览</h2><span>实时汇总</span></div><div className="grid"><p><strong>{dashboard.counts.active}</strong><br /><small>活跃项目</small></p><p><strong>{dashboard.counts.attention}</strong><br /><small>需要关注</small></p><p><strong>{dashboard.counts.blocked}</strong><br /><small>存在阻塞</small></p><p><strong>{dashboard.counts.pendingActions}</strong><br /><small>待处理事项</small></p><p><strong>{dashboard.counts.runningJobs}</strong><br /><small>运行中 Job</small></p><p><strong>{dashboard.counts.complete}</strong><br /><small>已完成项目</small></p></div></section>}
+    {dashboard && <section className="card" data-testid="dashboard-summary"><div className="section-title"><h2>运营总览</h2><span>实时汇总</span></div><div className="grid"><p><strong>{dashboard.counts.active}</strong><br /><small>活跃项目</small></p><p><strong>{dashboard.counts.attention}</strong><br /><small>需要关注</small></p><p><strong>{dashboard.counts.blocked}</strong><br /><small>存在阻塞</small></p><p><strong>{dashboard.counts.pendingActions}</strong><br /><small>待处理事项</small></p><p><strong>{dashboard.counts.runningJobs}</strong><br /><small>运行中任务</small></p><p><strong>{dashboard.counts.complete}</strong><br /><small>已完成项目</small></p></div></section>}
     <section className="card">
-      <div className="section-title"><h2>项目列表</h2><span>{loading ? '加载中…' : `${projects.length} 个项目`}</span></div><div className="grid"><label>搜索项目 / 选题<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="输入关键词" /></label><label>状态<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">全部状态</option><option>DRAFT</option><option>IN_PRODUCTION</option><option>READY_TO_PUBLISH</option><option>PUBLISHED</option><option>ARCHIVED</option></select></label></div>
+      <div className="section-title"><h2>项目列表</h2><span>{loading ? '加载中…' : `${projects.length} 个项目`}</span></div><div className="grid"><label>搜索项目 / 选题<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="输入关键词" /></label><label>状态<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">全部状态</option>{Object.entries(projectStatusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
       {message && <p className="form-error">{message}</p>}
-      {loading ? <p className="muted">正在读取项目…</p> : projects.length === 0 ? <p className="muted">暂无项目，请先创建一个项目。</p> : <ul className="project-list">{projects.map((project) => <li key={project.id}><Link href={`/projects/${project.id}`}><span><strong>{project.name || project.id}</strong><small>{project.metadata?.topic || '未填写选题'} · {project.metadata?.targetPlatform || '未指定平台'} · {project.metadata?.plannedDate || '未排期'}</small></span><small>{project.status}</small></Link></li>)}</ul>}
+      {loading ? <p className="muted">正在读取项目…</p> : projects.length === 0 ? <p className="muted">暂无项目，请先创建一个项目。</p> : <ul className="project-list">{projects.map((project) => <li key={project.id}><Link href={`/projects/${project.id}`}><span><strong>{project.name || project.id}</strong><small>{project.metadata?.topic || '未填写选题'} · {project.metadata?.targetPlatform || '未指定平台'} · {project.metadata?.plannedDate || '未排期'}</small></span><small>{projectStatusLabel[project.status] || project.status}</small></Link></li>)}</ul>}
     </section>
   </main>;
 }

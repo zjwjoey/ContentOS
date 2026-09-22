@@ -217,7 +217,7 @@ export function WorkbenchForm({ mode }: { mode: 'SCRIPT' | 'MIX' }) {
   return <form className="edit-form" onSubmit={(event) => void submit(event)}>
     <section className="card">
       <div className="section-title"><h2>1. 文案与音频</h2><span>{mode === 'MIX' ? `${items.length} 条任务` : '自动识别段落'}</span></div>
-      <label>任务名称（可选）<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={mode === 'MIX' ? '例如：门店宣传混剪' : '例如：Action 研究视频'} /></label>
+      <label>任务名称（可选）<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={mode === 'MIX' ? '例如：门店宣传混剪' : '例如：门店研究视频'} /></label>
       {mode === 'SCRIPT' ? <>
         <label>输入视频文案<textarea value={script} onChange={(event) => setScript(event.target.value)} placeholder="把要表达的内容粘贴到这里……" required /></label>
         <label>配音文件（可选）<span className="upload-control">选择/上传音频<input aria-label="脚本配音文件" type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAudio(file, (path, name) => { setVoicePath(path); setVoiceName(name); }); event.target.value = ''; }} disabled={uploadingVoice} /></span><button type="button" onClick={() => void pickVoiceFile((path, name) => { setVoicePath(path); setVoiceName(name); })}>选择本地配音</button></label>

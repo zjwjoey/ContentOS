@@ -7,7 +7,13 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // `pnpm` itself may not be present as a standalone PATH command. Keep child
 // process startup consistent with the command that launched this script.
 const pnpmCommand = process.platform === 'win32' ? 'corepack pnpm' : 'pnpm';
-const databaseUrl = process.env.CONTENTOS_OPERATOR_DATABASE_URL ?? process.env.DATABASE_URL ?? 'postgresql://contentos_dev@127.0.0.1:55433/contentos_operator_dev';
+// Keep the local operator preview usable on a clean Windows checkout. The
+// bundled development PostgreSQL cluster uses this non-secret sample
+// credential (the same value documented in .env.example); real deployments
+// must always provide CONTENTOS_OPERATOR_DATABASE_URL or DATABASE_URL.
+const databaseUrl = process.env.CONTENTOS_OPERATOR_DATABASE_URL
+  ?? process.env.DATABASE_URL
+  ?? 'postgresql://contentos_dev:change-me@127.0.0.1:55433/contentos_operator_dev';
 const commonEnv: NodeJS.ProcessEnv = {
   ...process.env,
   NODE_ENV: 'development' as const,

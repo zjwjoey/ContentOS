@@ -29,7 +29,7 @@ test('Production Run browser journey connects Director, Material Pool, V3 Editin
     await json(await page.request.post(`${baseUrl}/api/v1/projects/${projectId}/approvals/SCRIPT/${script.id}/${script.id}/approve`, { data: { approver: 'browser' } }));
 
     await page.goto(`${baseUrl}/projects/${projectId}/production`, { waitUntil: 'domcontentloaded' }); await page.getByRole('heading', { name: '内容生产编排' }).waitFor({ state: 'visible', timeout: 20_000 });
-    await page.getByLabel('运行名称').fill('浏览器闭环运行'); await page.getByRole('button', { name: '创建生产运行' }).click(); await page.getByText('生产运行已创建', { exact: false }).waitFor({ state: 'visible', timeout: 20_000 });
+    await page.getByLabel('任务名称').fill('浏览器闭环运行'); await page.getByRole('button', { name: '创建生产任务' }).click(); await page.getByText('生产任务已创建', { exact: false }).waitFor({ state: 'visible', timeout: 20_000 });
     const runList = await json<{ items: Array<{ id: string; title: string }> }>(await page.request.get(`${baseUrl}/api/v1/projects/${projectId}/production-runs`)); const run = runList.items.find((item) => item.title === '浏览器闭环运行'); assert.ok(run);
     const handoff = async (stage: string, outputRefs: Record<string, unknown>, status = 'SUCCEEDED') => json<{ steps: Array<{ stage: string; status: string }> }>(await page.request.post(`${baseUrl}/api/v1/projects/${projectId}/production-runs/${run.id}/handoff/${stage}`, { data: { outputRefs, status } }));
     await handoff('CONTENT', { scriptRevisionId: script.id }); await handoff('VOICE', {}, 'SKIPPED'); await handoff('DIGITAL_HUMAN', {}, 'SKIPPED');
