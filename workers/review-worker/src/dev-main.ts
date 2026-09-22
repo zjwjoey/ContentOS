@@ -22,7 +22,7 @@ async function startLocalWorker(): Promise<void> {
   const aiRuntime = createRuntimeAI();
   const ai = new AIService(db, aiRuntime.provider, new PromptRegistry(), aiRuntime.profile);
   const worker = createReviewWorker({ jobs, analytics, posts: publisher, metricsSource: new FakeMetricsSource(), ai, context: { async get(projectId, externalPostId) { const pair = await director.getCurrentPair(projectId); const render = await video.getCurrentRender(projectId); const aggregate = await publisher.getProjectSummary(projectId); return { projectId, externalPostId, brief: pair.brief, script: pair.script, storyboard: pair.storyboard, render, publisher: aggregate }; } }, workerId: 'review-worker-dev' });
-  await worker.start();
+  await worker.start(); console.log(JSON.stringify({ status: 'READY', workerId: 'review-worker' }));
   const poll = async () => {
     const runnable = await jobs.listRunnable([REVIEW_COLLECT_METRICS, REVIEW_GENERATE_ANALYSIS], 10);
     await Promise.all(runnable.map((job) => worker.execute(job.type, { jobId: job.id })));

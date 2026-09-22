@@ -76,7 +76,7 @@ async function startLocalWorker(): Promise<void> {
     realAdaptersEnabled: config.publisherRealAdaptersEnabled,
     workerId: 'publisher-worker-dev',
   });
-  await runner.start();
+  await runner.start(); console.log(JSON.stringify({ status: 'READY', workerId: 'publisher-worker' }));
   const close = async (signal: string) => { await runner.stop(signal); await db.end(); };
   process.once('SIGINT', () => { void close('SIGINT'); });
   process.once('SIGTERM', () => { void close('SIGTERM'); });

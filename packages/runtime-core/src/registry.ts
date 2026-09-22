@@ -16,10 +16,11 @@ export class ServiceRegistry {
       if (visited.has(id)) return;
       if (visiting.has(id)) throw new Error(`SERVICE_DEPENDENCY_CYCLE:${id}`);
       const item = selected.get(id); if (!item) throw new Error(`SERVICE_DEPENDENCY_MISSING:${id}`);
-      visiting.add(id); for (const dependency of item.dependsOn) if (selected.has(dependency)) visit(dependency); visiting.delete(id); visited.add(id); result.push(item);
+      visiting.add(id); for (const dependency of item.dependsOn) { if (!this.definitions.has(dependency)) throw new Error(`SERVICE_DEPENDENCY_MISSING:${dependency}`); if (!selected.has(dependency)) throw new Error(`SERVICE_DEPENDENCY_UNAVAILABLE:${id}:${dependency}`); visit(dependency); } visiting.delete(id); visited.add(id); result.push(item);
     };
     for (const item of selected.values()) visit(item.id);
     return result;
   }
   reverse(includeOptional = true): ServiceDefinition[] { return this.topological(includeOptional).reverse(); }
+  dependents(id: string, includeOptional = true): ServiceDefinition[] { return this.list(includeOptional).filter((item) => item.dependsOn.includes(id)); }
 }

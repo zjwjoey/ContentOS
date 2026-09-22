@@ -6,3 +6,5 @@ export * from './port.js';
 export * from './process-manager.js';
 export * from './doctor.js';
 export * from './supervisor.js';
+export * from './config.js';
+export * from './instance-guard.js';

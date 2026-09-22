@@ -2,6 +2,7 @@ export type ServiceState = 'STOPPED' | 'STARTING' | 'READY' | 'DEGRADED' | 'FAIL
 export type RuntimeState = 'STARTING' | 'READY' | 'READY_WITH_WARNINGS' | 'DEGRADED' | 'FAILED' | 'STOPPING' | 'STOPPED';
 export type ServiceKind = 'PROCESS' | 'EXTERNAL' | 'TASK';
 export type RestartClass = 'TRANSIENT' | 'PERMANENT';
+export interface RuntimeIdentity { protocol: 'contentos-runtime'; protocolVersion: 1; instanceId: string; hostPid: number; }
 
 export interface HealthResult { state: Extract<ServiceState, 'READY' | 'DEGRADED' | 'FAILED'>; message?: string; capability?: Record<string, unknown>; }
 export interface RestartPolicy { enabled: boolean; maxRestarts: number; windowMs: number; backoffMs: number[]; }
@@ -21,6 +22,10 @@ export interface ServiceDefinition {
   port?: number;
   healthCheck?: () => Promise<HealthResult>;
   capabilityProbe?: () => Promise<Record<string, unknown>>;
+  allowDegradedReadiness?: boolean;
+  healthFailureThreshold?: number;
+  restartOnHealthFailure?: boolean;
+  readiness?: 'PROCESS' | 'STDOUT_JSON_READY';
   start?: () => Promise<void>;
   stop?: () => Promise<void>;
 }

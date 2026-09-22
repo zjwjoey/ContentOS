@@ -68,7 +68,7 @@ async function startLocalWorker(): Promise<void> {
     benchmark,
   };
   const runner = createDirectorDevRunner(dependencies);
-  await runner.start();
+  await runner.start(); console.log(JSON.stringify({ status: 'READY', workerId: 'director-worker' }));
   const close = async (signal: string) => { await runner.stop(signal); await db.end(); };
   process.once('SIGINT', () => { void close('SIGINT'); });
   process.once('SIGTERM', () => { void close('SIGTERM'); });
