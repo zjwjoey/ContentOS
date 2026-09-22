@@ -117,6 +117,14 @@ export class ProductionRunService {
     return { ...mapRun(run), steps, trace };
   }
 
+  /** Guard every route that can create or mutate a production-domain record. */
+  async requireMutableRun(projectId: string, runId: string): Promise<ProductionRunDetail> {
+    const run = await this.get(projectId, runId);
+    if (!run) throw new Error('PRODUCTION_RUN_NOT_FOUND');
+    this.assertRunMutable(run);
+    return run;
+  }
+
   async updateStep(projectId: string, runId: string, input: UpdateProductionStepInput, options: UpdateProductionStepOptions = {}): Promise<ProductionRunDetail> {
     const current = await this.get(projectId, runId);
     if (!current) throw new Error('PRODUCTION_RUN_NOT_FOUND');
