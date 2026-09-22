@@ -33,3 +33,26 @@ The startup report records the resolved app root, app version/commit when suppli
 result, per-service startup time, service readiness, total startup time, Doctor findings, and
 warnings. The runtime never derives its app root from the shell's current directory unless
 explicitly configured with `CONTENTOS_APP_ROOT`.
+
+## Hardening contract
+
+`contentos up` is a client-orchestrated lifecycle operation. It does not return after merely
+opening the control port: it validates `/runtime/identity`, waits for the aggregate state to be
+`READY` or `READY_WITH_WARNINGS`, and reports `FAILED`/timeout with service state and the log
+root. A control port occupied by a non-ContentOS process is a conflict, not a running instance.
+Stale state/locks are cleaned only after the recorded host PID is no longer alive; concurrent
+starts are serialized by the atomic runtime lock.
+
+The client owns restart: it stops the old host, waits for its PID and service ports to disappear,
+then starts a fresh host and verifies a new identity. A service restart is rejected when it would
+leave dependents running against a changed dependency. On Windows, `ProcessManager` uses
+`taskkill /T /F` for the complete process tree and waits for actual exit.
+
+`CONTENTOS_RUNTIME_MODE=DEVELOPMENT` launches source runners through `tsx`; `PACKAGED` launches
+compiled entries and does not require `pnpm`. Runtime configuration (roots, database URL and all
+ports) is resolved once and propagated to every child. Optional services may be degraded without
+blocking readiness; required services must be healthy and ready. Worker readiness is emitted as a
+`{"status":"READY"}` stdout marker and health failures are bounded by the Supervisor budget.
+
+The runtime gate is covered by `pnpm test:runtime` and `pnpm test:runtime:integration`; CI also
+runs the same gate on `windows-latest`.

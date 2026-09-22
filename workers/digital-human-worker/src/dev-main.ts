@@ -62,7 +62,7 @@ export async function startLocalWorker(): Promise<void> {
   // This boundary is only enabled when the explicitly selected fake provider is used by deterministic tests.
   const staging = process.env.CONTENTOS_MEDIA_STAGING_UPLOAD === 'uguu' ? new UguuMediaStaging(assets, storage) : providers.staging;
   const dependencies: DigitalHumanWorkerDependencies = { jobs, digitalHuman: new DigitalHumanService(db, jobs, assets), assets, assetService: new AssetService(db, storage, (path) => probeMedia(path, config.ffprobePath)), probeRemoteResult: (path, signal) => probeMedia(path, config.ffprobePath, signal), storage, speechProvider: providers.speech, avatarProvider: providers.avatar, staging, ...(fakeAvatarBoundary || {}), ...(providerResultBoundary || {}), maxRemoteResultBytes: config.assetUploadMaxBytes, remoteResultTimeoutMs: config.digitalHumanRemoteResultTimeoutMs };
-  const runner = createDigitalHumanDevRunner(dependencies, { pollIntervalMs: config.digitalHumanPollIntervalMs, batchSize: config.digitalHumanWorkerConcurrency }); await runner.start();
+  const runner = createDigitalHumanDevRunner(dependencies, { pollIntervalMs: config.digitalHumanPollIntervalMs, batchSize: config.digitalHumanWorkerConcurrency }); await runner.start(); console.log(JSON.stringify({ status: 'READY', workerId: 'digital-human-worker' }));
   const close = async (signal: string) => { await runner.stop(signal); await db.end(); }; process.once('SIGINT', () => { void close('SIGINT'); }); process.once('SIGTERM', () => { void close('SIGTERM'); });
 }
 
