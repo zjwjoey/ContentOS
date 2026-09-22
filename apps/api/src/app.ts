@@ -106,6 +106,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerPublisherRoutes(app, { projects, publisher, approvals, assets, jobs, allowFakePublisherControls: runtime.allowFakePublisherControls === true, ...(runtime.allowFakePublisherControls ? { fakeSimulations: new FakePublisherSimulationService(db) } : {}) });
   registerApprovalRoutes(app, { projects, approvals, video: new VideoProjectReadService(db), publisher, director: directorV1 });
   app.get('/health', async () => ({ status: 'ok' }));
+  app.get('/ready', async (_request, reply) => { try { await db.query('select 1'); return { status: 'ready' }; } catch { return reply.code(503).send({ status: 'not_ready' }); } });
   app.get('/api/v1/runtime/status', async () => {
     let postgres: 'HEALTHY' | 'UNAVAILABLE' = 'HEALTHY';
     try { await db.query('select 1'); } catch { postgres = 'UNAVAILABLE'; }

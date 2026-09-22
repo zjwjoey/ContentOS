@@ -29,6 +29,7 @@ workers (Digital Human, Benchmark, Publisher) produce warnings and do not block 
 `--safe` starts only required services. Each transient process has a bounded restart budget
 (three attempts per 60 seconds with backoff); graceful shutdown sends SIGINT before force stop.
 
-The startup report records the resolved app root, migration result, service readiness, total
-startup time, Doctor findings, and warnings. The runtime never derives its app root from the
-shell's current directory unless explicitly configured with `CONTENTOS_APP_ROOT`.
+The startup report records the resolved app root, app version/commit when supplied, migration
+result, per-service startup time, service readiness, total startup time, Doctor findings, and
+warnings. The runtime never derives its app root from the shell's current directory unless
+explicitly configured with `CONTENTOS_APP_ROOT`.

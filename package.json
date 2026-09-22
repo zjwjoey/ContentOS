@@ -10,6 +10,7 @@
     "dev:operator": "tsx scripts/dev-operator.ts",
     "contentos": "tsx apps/cli/src/main.ts",
     "test:runtime": "tsx --test --test-concurrency=1 tests/unit/runtime-core.test.ts",
+    "test:runtime:integration": "tsx --test --test-concurrency=1 tests/integration/runtime-host.test.ts",
     "dev:digital-human": "pnpm --filter @contentos/digital-human-worker dev",
     "doctor": "tsx scripts/doctor.ts",
     "benchmark:script-editing-v3": "tsx scripts/script-editing-v3-benchmark.ts",

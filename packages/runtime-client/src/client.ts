@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { resolveRuntimePaths, RuntimeStateStore, type DoctorReport, type RuntimeLog, type RuntimeResult, type RuntimeStatus, type ServiceStatus } from '../../../packages/runtime-core/src/index.js';
+import { isPortOpen, resolveRuntimePaths, RuntimeStateStore, type DoctorReport, type RuntimeLog, type RuntimeResult, type RuntimeStatus, type ServiceStatus } from '../../../packages/runtime-core/src/index.js';
 
 export interface RuntimeClientOptions { appRoot?: string; env?: Record<string, string | undefined>; controlPort?: number; token?: string; }
 export class RuntimeClient {
@@ -10,6 +10,7 @@ export class RuntimeClient {
   private readonly env: Record<string, string | undefined>;
   constructor(private readonly options: RuntimeClientOptions = {}) { this.env = { ...process.env, ...(options.env || {}) }; this.store = new RuntimeStateStore(resolveRuntimePaths(this.env)); }
   async state() { return this.store.read(); }
+  async start(options: { safeMode?: boolean; timeoutMs?: number } = {}): Promise<RuntimeStatus> { const existing = await this.store.read(); if (existing && await isPortOpen(existing.controlPort)) return this.getStatus(); await RuntimeClient.spawnHost({ ...(options.safeMode === undefined ? {} : { safeMode: options.safeMode }), env: this.env }); const deadline = Date.now() + (options.timeoutMs || 20_000); while (Date.now() < deadline) { const state = await this.store.read(); if (state && await isPortOpen(state.controlPort)) return this.getStatus(); await new Promise((resolveWait) => setTimeout(resolveWait, 250)); } throw new Error('RUNTIME_START_TIMEOUT'); }
   private async request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
     const state = await this.store.read(); if (!state) throw Object.assign(new Error('RUNTIME_NOT_RUNNING'), { code: 'RUNTIME_NOT_RUNNING' });
     const response = await fetch(`http://127.0.0.1:${state.controlPort}${path}`, { method, headers: { ...(state.controlToken ? { authorization: `Bearer ${state.controlToken}` } : {}), ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });

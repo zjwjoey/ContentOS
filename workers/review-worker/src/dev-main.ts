@@ -13,7 +13,7 @@ import { createReviewWorker } from './main.js';
 async function startLocalWorker(): Promise<void> {
   const config = loadConfig();
   const db = await createDatabase(config.databaseUrl);
-  await migrateUp(db);
+  if (process.env.CONTENTOS_SKIP_MIGRATIONS !== '1') await migrateUp(db);
   const jobs = new JobService(db);
   const publisher = new PublisherService(db);
   const director = new DirectorV1Service(db);
