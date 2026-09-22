@@ -68,7 +68,8 @@ async function runAvatarPreflight(projectId: string, input: { avatarProfileId: s
          const audioFormat = String(speech?.metadata.format || '').toLowerCase().replace(/^\./, '').split('/').pop() || '';
          if (videoFormat && capabilities.supportedFormats.length > 0 && !capabilities.supportedFormats.some((format) => format.toLowerCase().replace(/^\./, '') === videoFormat)) block('AVATAR_VIDEO_FORMAT_UNSUPPORTED', `Avatar provider does not support ${videoFormat} video input`);
          if (audioFormat && capabilities.supportedAudioFormats?.length && !capabilities.supportedAudioFormats.some((format) => format.toLowerCase().replace(/^\./, '') === audioFormat)) block('AVATAR_AUDIO_FORMAT_UNSUPPORTED', `Avatar provider does not support ${audioFormat} audio input`);
-         if (video && capabilities.maxDurationSeconds !== undefined && Number(video.metadata.durationMs) > capabilities.maxDurationSeconds * 1_000) block('AVATAR_DURATION_EXCEEDS_PROVIDER_LIMIT', 'Avatar source video exceeds provider duration limit');
+         const providerInputDurationMs = timing?.targetDurationMs ?? Number(video?.metadata.durationMs || 0);
+         if (providerInputDurationMs > 0 && capabilities.maxDurationSeconds !== undefined && providerInputDurationMs > capabilities.maxDurationSeconds * 1_000) block('AVATAR_DURATION_EXCEEDS_PROVIDER_LIMIT', 'Requested avatar output duration exceeds provider duration limit');
        }
     } catch { block('AVATAR_PROVIDER_UNAVAILABLE', 'Avatar provider capability check failed'); }
   }
