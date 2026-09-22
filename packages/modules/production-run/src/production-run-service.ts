@@ -95,7 +95,9 @@ export class ProductionRunService {
       await client.query('begin');
       await client.query('insert into production_runs (id,project_id,title,digital_human_mode,approval_required,approval_bypassed,metadata,idempotency_key) values ($1,$2,$3,$4,$5,$6,$7,$8)', [runId, input.projectId, title, digitalHumanMode, approvalRequired, approvalBypassed, input.metadata || {}, idempotencyKey]);
       for (const stage of PRODUCTION_RUN_STAGES) {
-        const status: ProductionStepStatus = stage === 'DIGITAL_HUMAN' && digitalHumanMode === 'NONE' ? 'SKIPPED' : 'PENDING';
+        const status: ProductionStepStatus = stage === 'DIGITAL_HUMAN' && digitalHumanMode === 'NONE'
+          ? 'SKIPPED'
+          : stage === 'APPROVAL' && !approvalRequired ? 'SKIPPED' : 'PENDING';
         await client.query('insert into production_run_steps (id,production_run_id,stage,status,idempotency_key) values ($1,$2,$3,$4,$5)', [`production-step-${runId}-${stage.toLowerCase()}`, runId, stage, status, `${runId}:${stage}`]);
       }
       await client.query('commit');
@@ -163,7 +165,14 @@ export class ProductionRunService {
     }
     const previousIndex = PRODUCTION_RUN_STAGES.indexOf(stage);
     for (const previous of current.steps.slice(0, previousIndex)) if (!['SUCCEEDED', 'SKIPPED'].includes(previous.status)) throw new Error(`PRODUCTION_PREVIOUS_STAGE_NOT_READY:${previous.stage}`);
-    return this.updateStep(projectId, runId, { stage, status, outputRefs }, { allowTerminalTransition: true });
+    const updated = await this.updateStep(projectId, runId, { stage, status, outputRefs }, { allowTerminalTransition: true });
+    if (stage === 'PUBLISH' && status === 'SKIPPED') {
+      const review = updated.steps.find((candidate) => candidate.stage === 'REVIEW');
+      if (review && !TERMINAL_STEP_STATUSES.has(review.status)) {
+        return this.updateStep(projectId, runId, { stage: 'REVIEW', status: 'SKIPPED' }, { allowTerminalTransition: true });
+      }
+    }
+    return updated;
   }
 
   private assertRunMutable(run: ProductionRunDetail): void {
