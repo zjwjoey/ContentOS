@@ -15,6 +15,7 @@ draft_content.json.dec.json
 storage/local/*
 !storage/local/.gitkeep
 storage/postgres-data/
+runtime/
 research/repos/
 *.log
 *.mp4
