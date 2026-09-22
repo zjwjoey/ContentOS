@@ -123,9 +123,10 @@ async function main(): Promise<void> {
   const schema = `contentos_browser_${randomUUID().replaceAll('-', '')}`;
   const admin = new pg.Pool({ connectionString: adminUrl });
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'contentos-browser-acceptance-'));
+  const fakeAvatarRoot = await mkdtemp(join(tmpdir(), 'contentos-fake-avatar-'));
   const storageRoot = join(temporaryRoot, 'storage');
   const fixtureVideos = ['source.mp4', 'source-2.mp4', 'source-3.mp4', 'source-4.mp4', 'source-5.mp4'].map((name) => join(temporaryRoot, name));
-  const fakeAvatarOutput = join(temporaryRoot, 'avatar-output.mp4');
+  const fakeAvatarOutput = join(fakeAvatarRoot, 'avatar-output.mp4');
   const fixtureAudio = join(temporaryRoot, 'voice.wav');
   const apiPort = await freePort();
   const webPort = await freePort();
@@ -204,6 +205,7 @@ async function main(): Promise<void> {
     await admin.query(`drop schema if exists "${schema}" cascade`);
     await admin.end();
     await rm(temporaryRoot, { recursive: true, force: true });
+    await rm(fakeAvatarRoot, { recursive: true, force: true });
   }
 }
 
