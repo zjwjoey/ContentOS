@@ -141,10 +141,11 @@ export default function DigitalHumanIndexPage() {
     setBusy(true); setNotice('');
     try {
       const timingInput = { avatarProfileId: avatarId, avatarClipId: clipId, speechAssetId, sourceInMs: Number(sourceInMs) || 0 };
-      const preflight = await readJson<{ status: string; checks: Array<{ status: string; message: string }> }>(await fetch(`/api/v1/projects/${projectId}/digital-human/avatar-generations/preflight`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(timingInput) }));
+      const preflight = await readJson<{ status: string; checks: Array<{ status: string; message: string }>; timing?: { sourceDurationMs: number; audioDurationMs: number; targetDurationMs: number; sourceInMs: number; sourceOutMs: number } }>(await fetch(`/api/v1/projects/${projectId}/digital-human/avatar-generations/preflight`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(timingInput) }));
       if (preflight.status !== 'READY') throw new Error(preflight.checks.find((item) => item.status === 'BLOCKED')?.message || '生成前检查未通过');
       await readJson(await fetch(`/api/v1/projects/${projectId}/digital-human/avatar-generations`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(timingInput) }));
-      setNotice('数字人视频已提交，正在生成。'); await refresh();
+      const timingNotice = preflight.timing ? `源视频 ${(preflight.timing.sourceDurationMs / 1000).toFixed(2)} 秒 · 配音 ${(preflight.timing.audioDurationMs / 1000).toFixed(2)} 秒 · 预计成片 ${(preflight.timing.targetDurationMs / 1000).toFixed(2)} 秒 · 使用 ${(preflight.timing.sourceInMs / 1000).toFixed(2)} → ${(preflight.timing.sourceOutMs / 1000).toFixed(2)} 秒` : '';
+      setNotice(`数字人视频已提交，正在生成。${timingNotice ? ` ${timingNotice}` : ''}`); await refresh();
     } catch (error) { setNotice(error instanceof Error ? error.message : '数字人生成失败'); }
     finally { setBusy(false); }
   };

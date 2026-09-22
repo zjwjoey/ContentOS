@@ -38,7 +38,7 @@ async function runAvatarCompletionRace(options: { abortAfterImport?: boolean; co
     staging: { stageAsset: async (assetId: string) => ({ publicUrl: `https://staging.test/${assetId}`, expiresAt: new Date(Date.now() + 60_000).toISOString() }) },
     fetchImpl: async () => new Response(Buffer.from('valid-video'), { status: 200, headers: { 'content-type': 'application/octet-stream' } }),
     resolveRemoteMedia: async () => [{ address: '93.184.216.34', family: 4 as const }],
-    probeRemoteResult: async () => ({ format: 'mp4', durationMs: 1_000, width: 640, height: 360, videoCodec: 'h264' }),
+    probeRemoteResult: async () => ({ format: 'mp4', durationMs: 2_000, width: 640, height: 360, videoCodec: 'h264' }),
   } as never;
   try {
     let handlerError: unknown;
@@ -226,7 +226,7 @@ test('Digital Human worker rejects an oversized remote Avatar result before impo
     storage: { root: 'C:/contentos-test-storage' },
     fetchImpl: async () => new Response(Buffer.from('large'), { status: 200, headers: { 'content-length': '5' } }),
     resolveRemoteMedia: async () => [{ address: '93.184.216.34', family: 4 }],
-    probeRemoteResult: async () => ({ format: 'mp4', durationMs: 1_000, width: 640, height: 360, videoCodec: 'h264' }),
+    probeRemoteResult: async () => ({ format: 'mp4', durationMs: 2_000, width: 640, height: 360, videoCodec: 'h264' }),
     maxRemoteResultBytes: 4,
   } as never;
   const job = { id: 'job-avatar-large', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-avatar-large', projectId: 'project-1', correlationId: 'corr-large' } } as never;
@@ -250,7 +250,7 @@ test('Digital Human worker bounds remote Avatar result downloads', async () => {
     storage: { root: 'C:/contentos-test-storage' },
     fetchImpl: async (_input: RequestInfo | URL, init?: RequestInit) => await new Promise<Response>((_resolve, reject) => { init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }); }),
     resolveRemoteMedia: async () => [{ address: '93.184.216.34', family: 4 }],
-    probeRemoteResult: async () => ({ format: 'mp4', durationMs: 1_000, width: 640, height: 360, videoCodec: 'h264' }),
+    probeRemoteResult: async () => ({ format: 'mp4', durationMs: 2_000, width: 640, height: 360, videoCodec: 'h264' }),
     remoteResultTimeoutMs: 10,
   } as never;
   const job = { id: 'job-avatar-timeout', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-avatar-timeout', projectId: 'project-1', correlationId: 'corr-timeout' } } as never;

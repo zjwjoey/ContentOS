@@ -37,12 +37,12 @@ export interface RemoteAvatarResultValidationOptions {
   probe: (path: string, signal?: AbortSignal) => Promise<RemoteVideoProbe>;
 }
 
-function payloadOf(job: JobRecord): { generationId: string; projectId: string; kind: 'SPEECH' | 'AVATAR'; correlationId: string; timing?: { sourceInMs?: number; sourceOutMs?: number; targetDurationMs?: number } } {
+function payloadOf(job: JobRecord): { generationId: string; projectId: string; kind: 'SPEECH' | 'AVATAR'; correlationId: string; timing?: { sourceVideoAssetId?: string; audioAssetId?: string; sourceInMs?: number; sourceOutMs?: number; targetDurationMs?: number } } {
   const payload = job.payload as Record<string, unknown>;
   if (payload.schemaVersion !== 'DIGITAL_HUMAN_JOB_PAYLOAD_V1' || typeof payload.generationId !== 'string' || typeof payload.projectId !== 'string' || typeof payload.correlationId !== 'string' || !['SPEECH', 'AVATAR'].includes(String(payload.kind))) throw Object.assign(new Error('Invalid Digital Human Job payload'), { code: 'DIGITAL_HUMAN_PAYLOAD_INVALID', retryable: false });
   if (payload.projectId !== job.projectId) throw Object.assign(new Error('Digital Human Job project mismatch'), { code: 'DIGITAL_HUMAN_PROJECT_MISMATCH', retryable: false });
   const rawTiming = payload.timing && typeof payload.timing === 'object' ? payload.timing as Record<string, unknown> : undefined;
-  return { generationId: payload.generationId, projectId: payload.projectId, kind: payload.kind as 'SPEECH' | 'AVATAR', correlationId: payload.correlationId, ...(rawTiming ? { timing: { ...(typeof rawTiming.sourceInMs === 'number' ? { sourceInMs: rawTiming.sourceInMs } : {}), ...(typeof rawTiming.sourceOutMs === 'number' ? { sourceOutMs: rawTiming.sourceOutMs } : {}), ...(typeof rawTiming.targetDurationMs === 'number' ? { targetDurationMs: rawTiming.targetDurationMs } : {}) } } : {}) };
+  return { generationId: payload.generationId, projectId: payload.projectId, kind: payload.kind as 'SPEECH' | 'AVATAR', correlationId: payload.correlationId, ...(rawTiming ? { timing: { ...(typeof rawTiming.sourceVideoAssetId === 'string' ? { sourceVideoAssetId: rawTiming.sourceVideoAssetId } : {}), ...(typeof rawTiming.audioAssetId === 'string' ? { audioAssetId: rawTiming.audioAssetId } : {}), ...(typeof rawTiming.sourceInMs === 'number' ? { sourceInMs: rawTiming.sourceInMs } : {}), ...(typeof rawTiming.sourceOutMs === 'number' ? { sourceOutMs: rawTiming.sourceOutMs } : {}), ...(typeof rawTiming.targetDurationMs === 'number' ? { targetDurationMs: rawTiming.targetDurationMs } : {}) } } : {}) };
 }
 
 export function createDigitalHumanLeaseCancellationHandler(deps: DigitalHumanWorkerDependencies): JobLeaseCancellationHandler {
@@ -171,7 +171,7 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
   };
   try {
     if (deps.avatarProvider?.providerId && generation.provider !== deps.avatarProvider.providerId) throw Object.assign(new Error('Avatar Generation provider does not match the configured runtime provider'), { code: 'AVATAR_PROVIDER_IDENTITY_MISMATCH', retryable: false });
-    const clip = await deps.digitalHuman.getAvatarClip(payload.projectId, generation.avatarClipId); const video = clip ? await deps.assets.getProjectAsset(payload.projectId, clip.assetId) : null; const audio = video ? await deps.assets.getProjectAsset(payload.projectId, generation.speechAssetId) : null;
+    const clip = await deps.digitalHuman.getAvatarClip(payload.projectId, generation.avatarClipId); const sourceVideoAssetId = generation.sourceVideoAssetId || payload.timing?.sourceVideoAssetId || clip?.assetId || ''; const audioAssetId = generation.speechAssetId || payload.timing?.audioAssetId || ''; const video = sourceVideoAssetId ? await deps.assets.getProjectAsset(payload.projectId, sourceVideoAssetId) : null; const audio = audioAssetId ? await deps.assets.getProjectAsset(payload.projectId, audioAssetId) : null;
     if (!clip || !video || video.kind !== 'VIDEO' || video.lifecycle !== 'READY') throw Object.assign(new Error('Avatar source video is not ready'), { code: 'AVATAR_CLIP_ASSET_NOT_READY', retryable: false });
     if (!audio || audio.kind !== 'AUDIO' || audio.lifecycle !== 'READY') throw Object.assign(new Error('Speech asset is not ready'), { code: 'SPEECH_ASSET_NOT_READY', retryable: false });
     const videoDurationMs = Number(video.metadata.durationMs); const audioDurationMs = Number(audio.metadata.durationMs);
@@ -183,7 +183,8 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
     try {
       const normalized = normalizeAvatarTiming(video, audio, persistedSourceInMs);
       if (persistedTargetDurationMs !== undefined && persistedTargetDurationMs !== normalized.targetDurationMs) throw Object.assign(new Error('Speech asset duration changed after job creation'), { code: 'AUDIO_DURATION_CHANGED', retryable: false, details: { sourceDurationMs: videoDurationMs, audioDurationMs, requiredDurationMs: persistedTargetDurationMs } });
-      if (generation.sourceOutMs !== null && generation.sourceOutMs !== undefined && generation.sourceOutMs !== normalized.sourceOutMs) throw Object.assign(new Error('Persisted source range no longer matches asset timing'), { code: 'SOURCE_RANGE_CHANGED', retryable: false });
+      const persistedSourceOutMs = generation.sourceOutMs ?? payload.timing?.sourceOutMs;
+      if (persistedSourceOutMs !== undefined && persistedSourceOutMs !== null && persistedSourceOutMs !== normalized.sourceOutMs) throw Object.assign(new Error('Persisted source range no longer matches asset timing'), { code: 'SOURCE_RANGE_CHANGED', retryable: false });
       timing = normalized;
     } catch (error) { if (error instanceof DigitalHumanDurationError) throw Object.assign(new Error(error.message), { code: error.code, details: error.details, retryable: false }); throw error; }
     const capabilities = await deps.avatarProvider.getCapabilities();
@@ -209,6 +210,8 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
     const tempPath = join(deps.storage.root, 'staging', `${generation.id}.avatar.mp4`); await mkdir(join(deps.storage.root, 'staging'), { recursive: true });
     if (!deps.probeRemoteResult) throw Object.assign(new Error('Avatar result validation is not configured'), { code: 'AVATAR_RESULT_PROBE_UNAVAILABLE', retryable: false });
     const probe = await downloadAndValidateRemoteAvatarResult(task.outputUrl, { fetchImpl, ...(deps.resolveRemoteMedia ? { resolveRemoteMedia: deps.resolveRemoteMedia } : {}), signal, timeoutMs: remoteResultTimeout(deps), maxBytes: remoteResultLimit(deps), tempPath, probe: deps.probeRemoteResult });
+    const durationToleranceMs = 250;
+    if (Math.abs(probe.durationMs - timing.targetDurationMs) > durationToleranceMs) throw Object.assign(new Error('Avatar provider output duration does not match the audio duration'), { code: 'AVATAR_OUTPUT_DURATION_MISMATCH', retryable: false, details: { outputDurationMs: probe.durationMs, audioDurationMs: timing.targetDurationMs, toleranceMs: durationToleranceMs } });
     try {
       importedOutput = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: tempPath, kind: 'VIDEO', role: 'OUTPUT', metadata: { durationMs: probe.durationMs, width: probe.width, height: probe.height, format: probe.format, ...(probe.videoCodec ? { codec: probe.videoCodec } : {}), digitalHuman: { generationId: generation.id, provider: task.providerId, externalTaskId: task.externalTaskId, providerMetadata: task.provenance || null } } });
       const imported = await deps.assets.getReadySourceAsset(payload.projectId, importedOutput.id, 'VIDEO'); const metadata = imported?.metadata || probe;

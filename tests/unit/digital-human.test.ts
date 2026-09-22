@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateAvatarGenerationRequest, validateSpeechGenerationRequest } from '../../packages/contracts/src/index.js';
-import { DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging, SyntheticTimingProvider, createRuntimeDigitalHumanProviders, isPublicHttpUrl, speechCapabilityError, subtitleTimelineToAss, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../packages/modules/digital-human/src/index.js';
+import { DigitalHumanDurationError, DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging, SyntheticTimingProvider, createRuntimeDigitalHumanProviders, isPublicHttpUrl, normalizeAvatarTiming, speechCapabilityError, subtitleTimelineToAss, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../packages/modules/digital-human/src/index.js';
 
 test('digital human contracts reject unsafe generation requests', () => {
   assert.doesNotThrow(() => validateSpeechGenerationRequest({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', text: '你好', language: 'zh', speed: 1, emotion: 'natural' }));
@@ -12,6 +12,17 @@ test('digital human contracts reject unsafe generation requests', () => {
   assert.throws(() => validateSpeechGenerationRequest({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', text: 'x', language: 'zh', speed: 9, emotion: 'natural' }), /speed/);
   assert.doesNotThrow(() => validateAvatarGenerationRequest({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', audioUrl: 'https://media.example/audio.wav', videoUrl: 'https://media.example/video.mp4', parameters: {} }));
   assert.throws(() => validateAvatarGenerationRequest({ requestId: 'r', projectId: 'p', jobId: 'j', attemptId: 'a', correlationId: 'c', audioUrl: 'file:///secret', videoUrl: 'https://media.example/video.mp4', parameters: {} }), /http/);
+});
+
+test('digital human duration policy uses audio as the sole target and rejects short source ranges', () => {
+  const source = (durationMs: number) => ({ id: 'source-video', metadata: { durationMs } });
+  const audio = (durationMs: number) => ({ metadata: { durationMs } });
+  assert.deepEqual(normalizeAvatarTiming(source(240_000), audio(60_000)), { sourceVideoAssetId: 'source-video', sourceInMs: 0, sourceOutMs: 60_000, targetDurationMs: 60_000, sourceDurationMs: 240_000, audioDurationMs: 60_000 });
+  assert.equal(normalizeAvatarTiming(source(240_000), audio(60_000), 35_000).sourceOutMs, 95_000);
+  assert.equal(normalizeAvatarTiming(source(60_000), audio(60_000)).sourceOutMs, 60_000);
+  assert.throws(() => normalizeAvatarTiming(source(59_000), audio(60_000)), (error: unknown) => error instanceof DigitalHumanDurationError && error.code === 'SOURCE_VIDEO_TOO_SHORT' && error.details.requiredDurationMs === 60_000);
+  assert.throws(() => normalizeAvatarTiming(source(60_000), audio(60_000), 10_000), (error: unknown) => error instanceof DigitalHumanDurationError && error.code === 'SOURCE_VIDEO_TOO_SHORT' && error.details.sourceOutMs === 70_000);
+  assert.throws(() => normalizeAvatarTiming(source(240_000), audio(0)), (error: unknown) => error instanceof DigitalHumanDurationError && error.code === 'SPEECH_ASSET_DURATION_INVALID');
 });
 
 test('SyntheticTimingProvider creates deterministic sentence cues that cover duration', async () => {
