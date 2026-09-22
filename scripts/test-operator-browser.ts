@@ -125,6 +125,7 @@ async function main(): Promise<void> {
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'contentos-browser-acceptance-'));
   const storageRoot = join(temporaryRoot, 'storage');
   const fixtureVideos = ['source.mp4', 'source-2.mp4', 'source-3.mp4', 'source-4.mp4', 'source-5.mp4'].map((name) => join(temporaryRoot, name));
+  const fakeAvatarOutput = join(temporaryRoot, 'avatar-output.mp4');
   const fixtureAudio = join(temporaryRoot, 'voice.wav');
   const apiPort = await freePort();
   const webPort = await freePort();
@@ -138,8 +139,11 @@ async function main(): Promise<void> {
     await mkdir(storageRoot, { recursive: true });
     for (const [index, path] of fixtureVideos.entries()) await generateFixtureVideo(path, process.env.FFMPEG_PATH ?? 'ffmpeg', ['0x2057d4', '0x3b82f6', '0x16a34a', '0xea580c'][index]!, 6);
     await generateFixtureAudio(fixtureAudio, process.env.FFMPEG_PATH ?? 'ffmpeg');
+    // The fake provider output must obey the same duration contract as a real
+    // provider: its video duration must match the generated speech fixture.
+    await generateFixtureVideo(fakeAvatarOutput, process.env.FFMPEG_PATH ?? 'ffmpeg', '0x2057d4', 5);
     const fakeAvatarPort = await freePort();
-    fakeAvatarServer = createHttpServer((request, response) => { if (request.url === '/avatar.mp4') { response.writeHead(200, { 'content-type': 'video/mp4' }); createReadStream(fixtureVideos[0]!).pipe(response); return; } response.writeHead(404).end(); });
+    fakeAvatarServer = createHttpServer((request, response) => { if (request.url === '/avatar.mp4') { response.writeHead(200, { 'content-type': 'video/mp4' }); createReadStream(fakeAvatarOutput).pipe(response); return; } response.writeHead(404).end(); });
     await new Promise<void>((resolveListen, rejectListen) => { fakeAvatarServer!.once('error', rejectListen); fakeAvatarServer!.listen(fakeAvatarPort, '127.0.0.1', () => resolveListen()); });
 
     const apiUrl = `http://127.0.0.1:${apiPort}`;
