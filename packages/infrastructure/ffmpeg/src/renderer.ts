@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { access, constants, mkdir, rename, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, win32 } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { EditManifestV0 } from '../../../contracts/src/index.js';
 
@@ -254,12 +254,28 @@ export async function renderDraftPreviewFragment(input: {
   return renderEditManifest({ manifest, outputPath: input.outputPath, ffmpegPath: input.ffmpegPath, ffprobePath: input.ffprobePath, ...(input.fontFile ? { fontFile: input.fontFile } : {}), ...(input.signal ? { signal: input.signal } : {}) });
 }
 
+/**
+ * FFmpeg's concat demuxer resolves relative entries against the list file's
+ * directory. Preview fragments can live under a different storage root (and
+ * may be reused after a replacement), so every entry must be an absolute path
+ * before it is written. Keep Windows drive/UNC paths intact even when this
+ * helper is exercised from a non-Windows test runner.
+ */
+export function formatFfmpegConcatFileLine(inputPath: string): string {
+  const trimmed = inputPath.trim();
+  if (!trimmed || trimmed.includes('\0')) throw new Error('DRAFT_PREVIEW_FRAGMENT_PATH_INVALID');
+  const absolutePath = isAbsolute(trimmed) || win32.isAbsolute(trimmed) ? trimmed : resolve(trimmed);
+  const normalizedPath = absolutePath.replaceAll('\\', '/');
+  const escapedPath = normalizedPath.replaceAll("'", "'\\''");
+  return `file '${escapedPath}'`;
+}
+
 export async function concatDraftPreviewFragments(input: { fragmentPaths: string[]; outputPath: string; ffmpegPath: string; ffprobePath: string; signal?: AbortSignal }): Promise<RenderResult> {
   if (!input.fragmentPaths.length) throw new Error('DRAFT_PREVIEW_NO_FRAGMENTS');
   await mkdir(dirname(input.outputPath), { recursive: true });
   const listPath = `${input.outputPath}.${randomUUID()}.txt`;
   const tempOutput = `${input.outputPath}.${randomUUID()}.part.mp4`;
-  const list = input.fragmentPaths.map((path) => `file '${path.replaceAll('\\', '/').replaceAll("'", "'\\''")}'`).join('\n');
+  const list = input.fragmentPaths.map(formatFfmpegConcatFileLine).join('\n');
   await writeFile(listPath, `${list}\n`, 'utf8');
   try {
     await run(input.ffmpegPath, ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', '-movflags', '+faststart', tempOutput], input.signal);

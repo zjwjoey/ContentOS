@@ -115,6 +115,10 @@ jobs:
         run: pnpm test:script-editing-v34 2>&1 | tee script-editing-v3-4-output.log
       - name: Script Editing V3.4 database benchmark
         run: pnpm benchmark:script-editing-v3:db 2>&1 | tee script-editing-v3-4-benchmark-output.log
+      - name: Digital Human
+        run: pnpm test:digital-human 2>&1 | tee digital-human-output.log
+      - name: Production Pipeline
+        run: pnpm test:production-pipeline 2>&1 | tee production-pipeline-output.log
       - name: Upload test diagnostics
         if: failure()
         uses: actions/upload-artifact@v4

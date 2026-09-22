@@ -210,7 +210,7 @@ export function createScriptPlanJobHandler(deps: VideoHandlerDeps): (job: JobRec
           await deps.localMedia.completeScan(scanId, scan);
           for (const file of scan.files.filter((item) => item.available)) {
             if (signal.aborted) throw new Error('EDIT_SCRIPT_PLAN_CANCELLED');
-            try { await deps.localMedia.generateThumbnail(`${scan.sourceRootId}:${file.relativePath}`, deps.ffmpegPath); } catch { /* preview can still use metadata if a thumbnail fails */ }
+            try { await deps.localMedia.generateThumbnail(`${scan.sourceRootId}:${file.relativePath}`, deps.ffmpegPath); } catch (error) { console.error(JSON.stringify({ level: 'error', event: 'local_media.thumbnail_failed', code: 'THUMBNAIL_GENERATION_FAILED', fileId: `${scan.sourceRootId}:${file.relativePath}`, message: error instanceof Error ? error.message.slice(0, 500) : 'thumbnail generation failed' })); }
           }
           scannedAssets.push(...scan.files.filter((file) => file.available).map((file) => { const id = `${scan.sourceRootId}:${file.relativePath}`; const terms = `${file.fileName} ${(file.tags || []).join(' ')}`.toLocaleLowerCase(); const entity = knownEntities.find((candidate) => terms.includes(candidate.toLocaleLowerCase())); return { id, path: file.sourcePath, durationMs: file.durationMs, source: 'LOCAL' as const, originalName: file.fileName, keywords: file.tags, tags: file.tags, thumbnailUrl: `/api/v1/video/local-media/thumbnails/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(job.workspaceId || 'workspace-local')}`, ...(entity ? { entity } : {}) }; }));
         }
@@ -475,7 +475,7 @@ export function createLocalMediaScanJobHandler(deps: VideoHandlerDeps): (job: Jo
       await deps.localMedia.completeScan(payload.scanId, result);
       for (const file of result.files.filter((item) => item.available)) {
         if (signal.aborted) throw new Error('LOCAL_MEDIA_SCAN_CANCELLED');
-        try { await deps.localMedia.generateThumbnail(`${result.sourceRootId}:${file.relativePath}`, deps.ffmpegPath); } catch { /* thumbnail failure is recorded and must not hide a usable scan */ }
+        try { await deps.localMedia.generateThumbnail(`${result.sourceRootId}:${file.relativePath}`, deps.ffmpegPath); } catch (error) { console.error(JSON.stringify({ level: 'error', event: 'local_media.thumbnail_failed', code: 'THUMBNAIL_GENERATION_FAILED', fileId: `${result.sourceRootId}:${file.relativePath}`, message: error instanceof Error ? error.message.slice(0, 500) : 'thumbnail generation failed' })); }
       }
       return { scanId: payload.scanId, sourceRootId: result.sourceRootId, totalCount: result.totalCount, availableCount: result.availableCount, unavailableCount: result.unavailableCount };
     } catch (error) {

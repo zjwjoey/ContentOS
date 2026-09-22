@@ -41,3 +41,4 @@ export type {
   VoiceProfileV1,
 } from './digital-human.js';
 export { validateAvatarGenerationRequest, validateSpeechGenerationRequest } from './digital-human.js';
+export * from './production-run.js';

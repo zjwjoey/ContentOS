@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { blurBackgroundBranches, generateFixtureAudio, generateFixtureVideo, renderEditManifest, probeMedia, subtitlePositionExpressions } from '../../packages/infrastructure/ffmpeg/src/index.js';
+import { blurBackgroundBranches, formatFfmpegConcatFileLine, generateFixtureAudio, generateFixtureVideo, renderEditManifest, probeMedia, subtitlePositionExpressions } from '../../packages/infrastructure/ffmpeg/src/index.js';
 import { buildVideoManifest, type PlannerAsset } from '../../packages/modules/video/src/index.js';
 import type { EditManifestV0 } from '../../packages/contracts/src/index.js';
 import { DEFAULT_PRESENTATION_SETTINGS_V1 } from '../../packages/contracts/src/index.js';
@@ -23,6 +23,14 @@ test('blur background foreground branch preserves source aspect without black pa
   assert.match(branches.background, /boxblur/);
   assert.match(branches.foreground, /force_original_aspect_ratio=decrease/);
   assert.doesNotMatch(branches.foreground, /pad=/);
+});
+
+test('draft preview concat entries are absolute and FFmpeg-safe across path styles', () => {
+  assert.equal(formatFfmpegConcatFileLine('storage/preview fragment.mp4'), `file '${join(process.cwd(), 'storage/preview fragment.mp4').replaceAll('\\', '/')}'`);
+  assert.equal(formatFfmpegConcatFileLine("/tmp/owner's clip.mp4"), "file '/tmp/owner'\\''s clip.mp4'");
+  assert.equal(formatFfmpegConcatFileLine('C:\\Media Library\\owner\'s clip.mp4'), "file 'C:/Media Library/owner'\\''s clip.mp4'");
+  assert.equal(formatFfmpegConcatFileLine('\\\\server\\share\\clip.mp4'), "file '//server/share/clip.mp4'");
+  assert.throws(() => formatFfmpegConcatFileLine(''), /DRAFT_PREVIEW_FRAGMENT_PATH_INVALID/);
 });
 
 test('FFmpeg renderer creates a playable vertical MP4 and probe validates it', async () => {

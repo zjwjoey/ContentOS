@@ -176,7 +176,7 @@ async function main(): Promise<void> {
     await waitForHealth(apiUrl);
     const testArgs = ['--test', '--test-concurrency=1'];
     if (process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN) testArgs.push('--test-name-pattern', process.env.CONTENTOS_BROWSER_TEST_NAME_PATTERN);
-    const browserTests = (process.env.CONTENTOS_BROWSER_TEST_FILES || 'tests/e2e/auto-edit-v1-browser.test.ts;tests/e2e/editing-workbench-browser.test.ts;tests/e2e/hybrid-script-edit-browser.test.ts;tests/e2e/script-editing-v2-browser.test.ts;tests/e2e/script-editing-v3-browser.test.ts;tests/e2e/digital-human-browser.test.ts').split(';').map((file) => file.trim()).filter(Boolean);
+    const browserTests = (process.env.CONTENTOS_BROWSER_TEST_FILES || 'tests/e2e/auto-edit-v1-browser.test.ts;tests/e2e/editing-workbench-browser.test.ts;tests/e2e/hybrid-script-edit-browser.test.ts;tests/e2e/script-editing-v2-browser.test.ts;tests/e2e/script-editing-v3-browser.test.ts;tests/e2e/digital-human-browser.test.ts;tests/e2e/production-pipeline-browser.test.ts').split(';').map((file) => file.trim()).filter(Boolean);
     testArgs.push(...browserTests);
     const invocation = directOperator
       ? { command: process.execPath, args: [resolve(root, 'node_modules/tsx/dist/cli.mjs'), ...testArgs] }
