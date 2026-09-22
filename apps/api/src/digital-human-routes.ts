@@ -4,7 +4,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { DigitalHumanService, SyntheticTimingProvider, speechCapabilityError, subtitleTimelineToAss, subtitleTimelineToManifestCues, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../../packages/modules/digital-human/src/index.js';
+import { DigitalHumanDurationError, DigitalHumanService, SyntheticTimingProvider, normalizeAvatarTiming, speechCapabilityError, subtitleTimelineToAss, subtitleTimelineToManifestCues, subtitleTimelineToSrt, verifyProviderMediaToken } from '../../../packages/modules/digital-human/src/index.js';
 import type { RuntimeDigitalHumanProviders } from '../../../packages/modules/digital-human/src/index.js';
 import { DEFAULT_PRESENTATION_SETTINGS_V1, type EditManifestV0 } from '../../../packages/contracts/src/index.js';
 import { AssetService, type AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
@@ -19,9 +19,9 @@ const avatarInput = z.object({ name: z.string().trim().min(1).max(200), ownerNam
 const avatarPatch = z.object({ name: z.string().trim().min(1).max(200).optional(), ownerName: z.string().trim().max(200).optional(), status: z.enum(['DRAFT', 'READY', 'DISABLED']).optional() }).strict();
 const clipInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), assetId: z.string().trim().min(1).max(200), name: z.string().trim().min(1).max(200), durationMs: z.number().int().positive().optional(), width: z.number().int().positive().optional(), height: z.number().int().positive().optional(), fps: z.number().positive().optional(), sceneType: z.string().trim().max(100).optional(), gestureLevel: z.string().trim().max(100).optional(), tags: z.array(z.string().trim().min(1).max(100)).max(64).optional() }).strict();
 const clipPatch = z.object({ assetId: z.string().trim().min(1).max(200).optional(), name: z.string().trim().min(1).max(200).optional(), durationMs: z.number().int().positive().nullable().optional(), width: z.number().int().positive().nullable().optional(), height: z.number().int().positive().nullable().optional(), fps: z.number().positive().nullable().optional(), sceneType: z.string().trim().max(100).nullable().optional(), gestureLevel: z.string().trim().max(100).nullable().optional(), tags: z.array(z.string().trim().min(1).max(100)).max(64).optional(), status: z.enum(['DRAFT', 'READY', 'DISABLED']).optional() }).strict();
-const avatarPreflightInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), avatarClipId: z.string().trim().min(1).max(200), speechAssetId: z.string().trim().min(1).max(200) }).strict();
+const avatarPreflightInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), avatarClipId: z.string().trim().min(1).max(200), speechAssetId: z.string().trim().min(1).max(200), sourceInMs: z.number().int().nonnegative().default(0) }).strict();
 const speechInput = z.object({ voiceProfileId: z.string().trim().min(1).max(200), text: z.string().trim().min(1).max(100_000), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), language: z.string().trim().min(1).max(20).optional(), speed: z.number().min(.5).max(2).optional(), emotion: z.string().trim().min(1).max(100).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
-const avatarGenerationInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), avatarClipId: z.string().trim().min(1).max(200), speechAssetId: z.string().trim().min(1).max(200), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), parameters: z.record(z.string(), z.unknown()).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
+const avatarGenerationInput = z.object({ avatarProfileId: z.string().trim().min(1).max(200), avatarClipId: z.string().trim().min(1).max(200), speechAssetId: z.string().trim().min(1).max(200), sourceInMs: z.number().int().nonnegative().default(0), provider: z.string().trim().min(1).max(100).optional(), model: z.string().trim().min(1).max(100).optional(), parameters: z.record(z.string(), z.unknown()).optional(), correlationId: z.string().trim().min(1).max(200).optional() }).strict();
 const editManifestInput = z.object({ seed: z.number().int().default(1), includeSubtitles: z.boolean().default(true) }).strict();
 
 export interface DigitalHumanRouteDependencies { digitalHuman: DigitalHumanService; projects: ProjectService; jobs: JobService; providers?: RuntimeDigitalHumanProviders; quickEdit?: VideoAdjustmentService; video?: VideoService; assets?: AssetCatalogService; assetService?: AssetService; storage?: LocalStorageProvider; mediaStagingSecret?: string | undefined; }
@@ -31,10 +31,10 @@ function projectId(request: { params: unknown }): string { return (request.param
 function configuredProviderId(deps: DigitalHumanRouteDependencies, kind: 'speech' | 'avatar'): string | undefined { return deps.providers?.[kind].providerId; }
 function providerMismatch(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, kind: 'SPEECH' | 'AVATAR', expected: string, received: string): unknown { return fail(reply, 409, `${kind}_PROVIDER_ID_MISMATCH`, `${kind === 'SPEECH' ? 'Speech' : 'Avatar'} provider must be ${expected}; received ${received}`); }
 
-type PreflightCheck = { code: string; status: 'READY' | 'BLOCKED'; message: string };
-type AvatarPreflightResult = { status: 'READY' | 'BLOCKED'; checks: PreflightCheck[] };
+type PreflightCheck = { code: string; status: 'READY' | 'BLOCKED'; message: string; details?: Record<string, number> };
+type AvatarPreflightResult = { status: 'READY' | 'BLOCKED'; checks: PreflightCheck[]; timing?: ReturnType<typeof normalizeAvatarTiming> };
 
-async function runAvatarPreflight(projectId: string, input: { avatarProfileId: string; avatarClipId: string; speechAssetId: string }, deps: DigitalHumanRouteDependencies): Promise<AvatarPreflightResult> {
+async function runAvatarPreflight(projectId: string, input: { avatarProfileId: string; avatarClipId: string; speechAssetId: string; sourceInMs?: number }, deps: DigitalHumanRouteDependencies): Promise<AvatarPreflightResult> {
   const checks: PreflightCheck[] = [];
   const block = (code: string, message: string) => checks.push({ code, status: 'BLOCKED', message });
   const ready = (code: string, message: string) => checks.push({ code, status: 'READY', message });
@@ -50,6 +50,8 @@ async function runAvatarPreflight(projectId: string, input: { avatarProfileId: s
   if (!speech) block('SPEECH_ASSET_NOT_READY', 'Speech audio Asset must be READY');
   else if (!(Number(speech.metadata.durationMs) > 0)) block('SPEECH_ASSET_DURATION_INVALID', 'Speech audio duration must be positive');
   else ready('SPEECH_ASSET_READY', 'Speech audio Asset is READY');
+  let timing: ReturnType<typeof normalizeAvatarTiming> | undefined;
+  if (video && speech) { try { timing = normalizeAvatarTiming(video, speech, input.sourceInMs ?? 0); ready('DURATION_POLICY_READY', 'Audio duration is the output duration and source range is valid'); } catch (error) { if (error instanceof DigitalHumanDurationError) checks.push({ code: error.code, status: 'BLOCKED', message: error.code === 'SOURCE_VIDEO_TOO_SHORT' ? 'Source video is shorter than the requested audio duration' : error.message, details: error.details }); } }
   if (!deps.providers) {
     block('DIGITAL_HUMAN_PROVIDERS_UNCONFIGURED', 'Digital Human providers are not configured');
   } else {
@@ -70,7 +72,7 @@ async function runAvatarPreflight(projectId: string, input: { avatarProfileId: s
        }
     } catch { block('AVATAR_PROVIDER_UNAVAILABLE', 'Avatar provider capability check failed'); }
   }
-  return { status: checks.some((check) => check.status === 'BLOCKED') ? 'BLOCKED' : 'READY', checks };
+  return { status: checks.some((check) => check.status === 'BLOCKED') ? 'BLOCKED' : 'READY', checks, ...(timing ? { timing } : {}) };
 }
 
 function preflightFailure(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, result: AvatarPreflightResult): unknown {
@@ -206,7 +208,7 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
     const provider = runtimeProvider || parsed.data.provider;
     const existing = await deps.digitalHuman.findAvatarGenerationForRequest({ projectId: id, ...parsed.data, ...(provider ? { provider } : {}) });
     if (!existing || existing.status === 'FAILED' || existing.status === 'CANCELLED') { const preflight = await runAvatarPreflight(id, parsed.data, deps); if (preflight.status === 'BLOCKED') return preflightFailure(reply, preflight); }
-    try { const result = await deps.digitalHuman.createAvatarGeneration({ projectId: id, ...parsed.data, ...(provider ? { provider } : {}), correlationId: parsed.data.correlationId || `api-${randomUUID()}` }); return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: !result.created }); } catch (error) { return fail(reply, 409, 'AVATAR_GENERATION_CONFLICT', error instanceof Error ? error.message : 'Unable to create Avatar Generation'); }
+    try { const result = await deps.digitalHuman.createAvatarGeneration({ projectId: id, ...parsed.data, ...(provider ? { provider } : {}), correlationId: parsed.data.correlationId || `api-${randomUUID()}` }); return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: !result.created }); } catch (error) { if (error instanceof DigitalHumanDurationError) return reply.code(409).send({ error: { code: error.code, message: error.message, details: error.details } }); return fail(reply, 409, 'AVATAR_GENERATION_CONFLICT', error instanceof Error ? error.message : 'Unable to create Avatar Generation'); }
   });
   app.get('/api/v1/projects/:projectId/digital-human/avatar-generations', async (request) => ({ items: await deps.digitalHuman.listAvatarGenerations(projectId(request)) }));
   app.get('/api/v1/projects/:projectId/digital-human/avatar-generations/:generationId', async (request, reply) => { const params = request.params as { projectId: string; generationId: string }; const generation = await deps.digitalHuman.getAvatarGeneration(params.projectId, params.generationId); return generation || fail(reply, 404, 'AVATAR_GENERATION_NOT_FOUND', 'Avatar Generation not found'); });
@@ -231,10 +233,10 @@ export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHu
     const job = await deps.jobs.get(generation.jobId);
     if (!job) return fail(reply, 409, 'AVATAR_GENERATION_JOB_NOT_FOUND', 'Avatar Generation Job not found');
     if (job.state !== 'FAILED' && job.state !== 'CANCELLED') return fail(reply, 409, 'AVATAR_GENERATION_JOB_NOT_TERMINAL', 'Avatar Generation Job is still active; retry after cancellation or failure completes');
-    const preflight = await runAvatarPreflight(params.projectId, { avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId }, deps); if (preflight.status === 'BLOCKED') return preflightFailure(reply, preflight);
+    const preflight = await runAvatarPreflight(params.projectId, { avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, sourceInMs: generation.sourceInMs }, deps); if (preflight.status === 'BLOCKED') return preflightFailure(reply, preflight);
     try {
       const parameters = generation.provenance.parameters && typeof generation.provenance.parameters === 'object' && !Array.isArray(generation.provenance.parameters) ? generation.provenance.parameters as Record<string, unknown> : {};
-      const result = await deps.digitalHuman.createAvatarGeneration({ projectId: params.projectId, avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, provider: runtimeProvider || generation.provider, model: generation.model || undefined, parameters, correlationId: `retry-${randomUUID()}` });
+      const result = await deps.digitalHuman.createAvatarGeneration({ projectId: params.projectId, avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, sourceInMs: generation.sourceInMs, provider: runtimeProvider || generation.provider, model: generation.model || undefined, parameters, correlationId: `retry-${randomUUID()}` });
       return reply.code(result.created ? 202 : 200).send({ ...result.generation, jobId: result.job.id, deduplicated: true });
     } catch (error) { return fail(reply, 409, 'AVATAR_GENERATION_RETRY_CONFLICT', error instanceof Error ? error.message : 'Unable to retry Avatar Generation'); }
   });

@@ -1,5 +1,5 @@
-export { DigitalHumanService } from './digital-human-service.js';
-export type { CreateAvatarClipInput, CreateAvatarGenerationInput, CreateAvatarProfileInput, CreateSpeechGenerationInput, CreateVoiceProfileInput, DigitalHumanAssetReader, UpdateAvatarClipInput, UpdateAvatarProfileInput, UpdateVoiceProfileInput } from './digital-human-service.js';
+export { DigitalHumanDurationError, DigitalHumanService, normalizeAvatarTiming } from './digital-human-service.js';
+export type { AvatarTiming, CreateAvatarClipInput, CreateAvatarGenerationInput, CreateAvatarProfileInput, CreateSpeechGenerationInput, CreateVoiceProfileInput, DigitalHumanAssetReader, UpdateAvatarClipInput, UpdateAvatarProfileInput, UpdateVoiceProfileInput } from './digital-human-service.js';
 export { safeFetchRemoteMedia, validateRemotePublicHttpUrl, RemoteMediaSecurityError } from './remote-media.js';
 export type { RemoteMediaAddress, RemoteMediaResolver, SafeRemoteMediaFetchOptions } from './remote-media.js';
 export { createProviderMediaToken, DigitalHumanProviderError, FakeAvatarProvider, FakeSpeechProvider, IndexTTS25SpeechProvider, SignedProviderMediaStaging, SyntheticTimingProvider, isPublicHttpUrl, speechCapabilityError, verifyProviderMediaToken } from './providers.js';

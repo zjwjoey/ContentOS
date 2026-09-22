@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Transform, Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { JobRunner, type JobLeaseCancellationHandler, type JobRecord, type JobService } from '../../../packages/modules/job/src/index.js';
-import { DigitalHumanProviderError, DigitalHumanService, safeFetchRemoteMedia, speechCapabilityError, type RemoteMediaResolver } from '../../../packages/modules/digital-human/src/index.js';
+import { DigitalHumanDurationError, DigitalHumanProviderError, DigitalHumanService, normalizeAvatarTiming, safeFetchRemoteMedia, speechCapabilityError, type RemoteMediaResolver } from '../../../packages/modules/digital-human/src/index.js';
 import type { AvatarProvider, ProviderMediaStaging, SpeechProvider } from '../../../packages/contracts/src/index.js';
 import { AssetCatalogService, AssetService } from '../../../packages/modules/asset/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
@@ -37,11 +37,12 @@ export interface RemoteAvatarResultValidationOptions {
   probe: (path: string, signal?: AbortSignal) => Promise<RemoteVideoProbe>;
 }
 
-function payloadOf(job: JobRecord): { generationId: string; projectId: string; kind: 'SPEECH' | 'AVATAR'; correlationId: string } {
+function payloadOf(job: JobRecord): { generationId: string; projectId: string; kind: 'SPEECH' | 'AVATAR'; correlationId: string; timing?: { sourceInMs?: number; sourceOutMs?: number; targetDurationMs?: number } } {
   const payload = job.payload as Record<string, unknown>;
   if (payload.schemaVersion !== 'DIGITAL_HUMAN_JOB_PAYLOAD_V1' || typeof payload.generationId !== 'string' || typeof payload.projectId !== 'string' || typeof payload.correlationId !== 'string' || !['SPEECH', 'AVATAR'].includes(String(payload.kind))) throw Object.assign(new Error('Invalid Digital Human Job payload'), { code: 'DIGITAL_HUMAN_PAYLOAD_INVALID', retryable: false });
   if (payload.projectId !== job.projectId) throw Object.assign(new Error('Digital Human Job project mismatch'), { code: 'DIGITAL_HUMAN_PROJECT_MISMATCH', retryable: false });
-  return { generationId: payload.generationId, projectId: payload.projectId, kind: payload.kind as 'SPEECH' | 'AVATAR', correlationId: payload.correlationId };
+  const rawTiming = payload.timing && typeof payload.timing === 'object' ? payload.timing as Record<string, unknown> : undefined;
+  return { generationId: payload.generationId, projectId: payload.projectId, kind: payload.kind as 'SPEECH' | 'AVATAR', correlationId: payload.correlationId, ...(rawTiming ? { timing: { ...(typeof rawTiming.sourceInMs === 'number' ? { sourceInMs: rawTiming.sourceInMs } : {}), ...(typeof rawTiming.sourceOutMs === 'number' ? { sourceOutMs: rawTiming.sourceOutMs } : {}), ...(typeof rawTiming.targetDurationMs === 'number' ? { targetDurationMs: rawTiming.targetDurationMs } : {}) } } : {}) };
 }
 
 export function createDigitalHumanLeaseCancellationHandler(deps: DigitalHumanWorkerDependencies): JobLeaseCancellationHandler {
@@ -176,6 +177,15 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
     const videoDurationMs = Number(video.metadata.durationMs); const audioDurationMs = Number(audio.metadata.durationMs);
     if (!Number.isFinite(videoDurationMs) || videoDurationMs <= 0) throw Object.assign(new Error('Avatar source video duration is invalid'), { code: 'AVATAR_CLIP_DURATION_INVALID', retryable: false });
     if (!Number.isFinite(audioDurationMs) || audioDurationMs <= 0) throw Object.assign(new Error('Speech asset duration is invalid'), { code: 'SPEECH_ASSET_DURATION_INVALID', retryable: false });
+    const persistedSourceInMs = generation.sourceInMs ?? payload.timing?.sourceInMs ?? 0;
+    const persistedTargetDurationMs = generation.targetDurationMs ?? payload.timing?.targetDurationMs;
+    let timing;
+    try {
+      const normalized = normalizeAvatarTiming(video, audio, persistedSourceInMs);
+      if (persistedTargetDurationMs !== undefined && persistedTargetDurationMs !== normalized.targetDurationMs) throw Object.assign(new Error('Speech asset duration changed after job creation'), { code: 'AUDIO_DURATION_CHANGED', retryable: false, details: { sourceDurationMs: videoDurationMs, audioDurationMs, requiredDurationMs: persistedTargetDurationMs } });
+      if (generation.sourceOutMs !== null && generation.sourceOutMs !== undefined && generation.sourceOutMs !== normalized.sourceOutMs) throw Object.assign(new Error('Persisted source range no longer matches asset timing'), { code: 'SOURCE_RANGE_CHANGED', retryable: false });
+      timing = normalized;
+    } catch (error) { if (error instanceof DigitalHumanDurationError) throw Object.assign(new Error(error.message), { code: error.code, details: error.details, retryable: false }); throw error; }
     const capabilities = await deps.avatarProvider.getCapabilities();
     if (deps.avatarProvider?.providerId && capabilities.providerId !== deps.avatarProvider.providerId) throw Object.assign(new Error('Avatar provider capability identity does not match the configured runtime provider'), { code: 'AVATAR_PROVIDER_IDENTITY_MISMATCH', retryable: false });
     if (!capabilities.videoToVideo) throw Object.assign(new Error('Avatar provider does not support video-to-video generation for this video clip'), { code: 'AVATAR_VIDEO_TO_VIDEO_UNSUPPORTED', retryable: false });
@@ -186,7 +196,7 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
     signal.throwIfAborted();
     const existingTask = generation.externalTaskId ? await deps.avatarProvider.getTask(generation.externalTaskId) : null;
     const replaceTerminalTask = existingTask && (existingTask.status === 'FAILED' || existingTask.status === 'CANCELLED');
-    const task = !replaceTerminalTask && existingTask ? existingTask : await deps.avatarProvider.submitLipSync({ requestId: generation.id, projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, audioUrl: (await deps.staging.stageAsset(audio.id, { projectId: payload.projectId })).publicUrl, videoUrl: (await deps.staging.stageAsset(video.id, { projectId: payload.projectId })).publicUrl, ...(generation.model ? { model: generation.model } : {}), parameters: generation.provenance.parameters && typeof generation.provenance.parameters === 'object' ? generation.provenance.parameters as Record<string, unknown> : {} });
+    const task = !replaceTerminalTask && existingTask ? existingTask : await deps.avatarProvider.submitLipSync({ requestId: generation.id, projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, audioUrl: (await deps.staging.stageAsset(audio.id, { projectId: payload.projectId })).publicUrl, videoUrl: (await deps.staging.stageAsset(video.id, { projectId: payload.projectId })).publicUrl, sourceVideoAssetId: timing.sourceVideoAssetId, audioAssetId: audio.id, sourceInMs: timing.sourceInMs, sourceOutMs: timing.sourceOutMs, targetDurationMs: timing.targetDurationMs, ...(generation.model ? { model: generation.model } : {}), parameters: generation.provenance.parameters && typeof generation.provenance.parameters === 'object' ? generation.provenance.parameters as Record<string, unknown> : {} });
     remoteTaskId = task.externalTaskId;
     if (!generation.externalTaskId) await deps.digitalHuman.markAvatarWaiting(generation.id, task.externalTaskId, { provider: task.providerId, externalTaskId: task.externalTaskId });
     else if (replaceTerminalTask) await deps.digitalHuman.replaceAvatarWaiting(generation.id, task.externalTaskId, { provider: task.providerId, externalTaskId: task.externalTaskId });

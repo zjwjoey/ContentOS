@@ -68,6 +68,11 @@ export interface AvatarGenerationRequest {
   videoUrl: string;
   model?: string;
   parameters: Record<string, unknown>;
+  sourceVideoAssetId?: string;
+  audioAssetId?: string;
+  sourceInMs?: number;
+  sourceOutMs?: number;
+  targetDurationMs?: number;
 }
 
 export interface AvatarExternalTask {
@@ -197,6 +202,10 @@ export interface AvatarGenerationV1 {
   avatarProfileId: string;
   avatarClipId: string;
   speechAssetId: string;
+  sourceVideoAssetId: string | null;
+  sourceInMs: number;
+  sourceOutMs: number | null;
+  targetDurationMs: number | null;
   provider: string;
   model: string | null;
   modelVersion: string | null;
@@ -232,4 +241,8 @@ export function validateAvatarGenerationRequest(value: AvatarGenerationRequest):
   nonEmpty(value.attemptId, 'attemptId'); nonEmpty(value.correlationId, 'correlationId'); nonEmpty(value.audioUrl, 'audioUrl'); nonEmpty(value.videoUrl, 'videoUrl');
   if (!value.audioUrl.startsWith('https://') && !value.audioUrl.startsWith('http://')) throw new Error('audioUrl must be http(s)');
   if (!value.videoUrl.startsWith('https://') && !value.videoUrl.startsWith('http://')) throw new Error('videoUrl must be http(s)');
+  for (const [field, raw] of [['sourceInMs', value.sourceInMs], ['sourceOutMs', value.sourceOutMs], ['targetDurationMs', value.targetDurationMs]] as const) {
+    if (raw !== undefined && (!Number.isInteger(raw) || raw < 0)) throw new Error(`${field} must be a non-negative integer`);
+  }
+  if (value.sourceOutMs !== undefined && value.sourceInMs !== undefined && value.sourceOutMs <= value.sourceInMs) throw new Error('sourceOutMs must be greater than sourceInMs');
 }
