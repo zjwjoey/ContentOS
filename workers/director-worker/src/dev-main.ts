@@ -56,7 +56,7 @@ export function createDirectorDevRunner(dependencies: DirectorWorkerDependencies
 async function startLocalWorker(): Promise<void> {
   const config = loadConfig();
   const db = await createDatabase(config.databaseUrl);
-  await migrateUp(db);
+  if (process.env.CONTENTOS_SKIP_MIGRATIONS !== '1') await migrateUp(db);
   const jobs = new JobService(db);
   const benchmark = new BenchmarkService(db, jobs);
   const aiRuntime = createRuntimeAI();
