@@ -3,7 +3,10 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const pnpmCommand = 'pnpm';
+// On Windows the repository is commonly started with `corepack pnpm`, while
+// `pnpm` itself may not be present as a standalone PATH command. Keep child
+// process startup consistent with the command that launched this script.
+const pnpmCommand = process.platform === 'win32' ? 'corepack pnpm' : 'pnpm';
 const databaseUrl = process.env.CONTENTOS_OPERATOR_DATABASE_URL ?? process.env.DATABASE_URL ?? 'postgresql://contentos_dev@127.0.0.1:55433/contentos_operator_dev';
 const commonEnv: NodeJS.ProcessEnv = {
   ...process.env,
