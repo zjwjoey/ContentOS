@@ -43,6 +43,7 @@ export interface ProductionRunStepRecord {
   idempotencyKey: string;
   startedAt: string | null;
   completedAt: string | null;
+  staleAt: string | null;
   errorCode: string | null;
   errorMessage: string | null;
   inputRefs: Record<string, string | string[]>;

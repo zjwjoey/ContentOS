@@ -5,7 +5,7 @@ import type { Pool } from 'pg';
 import { ProjectService } from '../../../packages/modules/project/src/index.js';
 import { AssetCatalogService, AssetImportService, AssetService, LocalMediaSourceService } from '../../../packages/modules/asset/src/index.js';
 import { DirectorService, DirectorProjectReadService } from '../../../packages/modules/director/src/index.js';
-import { DirectorVideoService, VideoProjectReadService, VideoAdjustmentService, StandaloneQuickEditService, VideoService, VideoEditPresetService } from '../../../packages/modules/video/src/index.js';
+import { DirectorVideoService, VideoProjectReadService, VideoAdjustmentService, StandaloneQuickEditService, VideoService, VideoEditPresetService, ScriptEditingV3Service } from '../../../packages/modules/video/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
 import { ReviewAnalyticsService, ReviewService } from '../../../packages/modules/review/src/index.js';
 import type { DirectorPlanV0 } from '../../../packages/contracts/src/index.js';
@@ -97,7 +97,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerVideoRoutes(app, { projects, director: directorV1, videoFromDirector, videoRead: new VideoProjectReadService(db), assets, assetService, approvals, jobs, video, quickEdit, standaloneQuickEdit, assetImports: new AssetImportService(db), storage, maxUploadBytes: uploadMaxBytes, localMedia, localPathAccess, presets });
   registerLocalPathRoutes(app, { access: localPathAccess, picker: nativePathPicker });
   registerDigitalHumanRoutes(app, { digitalHuman, projects, jobs, providers: runtime.digitalHumanProviders || createRuntimeDigitalHumanProviders(), quickEdit, video, assets, assetService, storage, mediaStagingSecret: process.env.CONTENTOS_MEDIA_STAGING_SECRET });
-  registerProductionRunRoutes(app, { projects, productionRuns });
+  registerProductionRunRoutes(app, { db, projects, productionRuns, editing: new ScriptEditingV3Service(db), jobs, video, approvals, publisher, digitalHuman });
   registerEditingWorkbenchRoutes(app, { db, localMedia, localPathAccess, quickEdit, video, jobs, assets, assetService, storage, maxUploadBytes: uploadMaxBytes, presets });
   registerScriptEditingV2Routes(app, { db, jobs, localPathAccess, video, assets, presets, storage });
   registerScriptEditingV3Routes(app, { db, jobs, video, assets: assetService, localMedia, localPathAccess, storage });

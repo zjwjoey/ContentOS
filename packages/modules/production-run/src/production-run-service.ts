@@ -30,6 +30,7 @@ function mapStep(row: Record<string, unknown>): ProductionRunStepRecord {
     id: String(row.id), productionRunId: String(row.production_run_id), stage: String(row.stage) as ProductionRunStage,
     status: String(row.status) as ProductionStepStatus, attempt: Number(row.attempt), idempotencyKey: String(row.idempotency_key),
     startedAt: iso(row.started_at), completedAt: iso(row.completed_at), errorCode: row.error_code ? String(row.error_code) : null,
+    staleAt: iso(row.stale_at),
     errorMessage: row.error_message ? String(row.error_message) : null,
     inputRefs: (row.input_refs || {}) as Record<string, string | string[]>, outputRefs: (row.output_refs || {}) as Record<string, string | string[]>,
     createdAt: new Date(String(row.created_at)).toISOString(), updatedAt: new Date(String(row.updated_at)).toISOString(),
@@ -54,6 +55,12 @@ export interface UpdateProductionStepInput {
   errorCode?: string | null;
   errorMessage?: string | null;
 }
+
+const STAGE_REQUIRED_REFS: Record<ProductionRunStage, string[]> = {
+  CONTENT: ['scriptRevisionId'], VOICE: ['voiceAssetId'], DIGITAL_HUMAN: ['digitalHumanAssetId'], MATERIALS: ['materialPoolSnapshotId'],
+  EDITING: ['editSessionId', 'manifestRevisionId'], PREVIEW: ['previewAssetId'], APPROVAL: ['approvalId'], RENDER: ['renderAssetId'],
+  PUBLISH: ['publishJobId'], REVIEW: ['reviewId'],
+};
 
 export class ProductionRunService {
   constructor(private readonly db: Pool) {}
@@ -108,8 +115,46 @@ export class ProductionRunService {
     if (step.status === 'SUCCEEDED' && input.status === 'RUNNING') throw new Error('PRODUCTION_STEP_ALREADY_SUCCEEDED');
     const runStatus = input.status === 'FAILED' ? 'FAILED' : input.status === 'WAITING_USER' ? 'WAITING_USER' : 'RUNNING';
     await this.db.query('update production_run_steps set status=$3, attempt=case when $3=\'RUNNING\' and status <> \'RUNNING\' then attempt+1 else attempt end, started_at=case when $3=\'RUNNING\' and started_at is null then now() else started_at end, completed_at=case when $3 in (\'SUCCEEDED\',\'SKIPPED\',\'CANCELLED\',\'FAILED\') then now() else completed_at end, error_code=$4,error_message=$5,input_refs=input_refs || $6::jsonb,output_refs=output_refs || $7::jsonb,updated_at=now() where id=$1 and production_run_id=$2', [step.id, runId, input.status, input.errorCode || null, input.errorMessage || null, JSON.stringify(inputRefs), JSON.stringify(outputRefs)]);
+    if (input.stage === 'EDITING' && input.status === 'SUCCEEDED') await this.db.query("update production_run_steps set stale_at=now(),updated_at=now() where production_run_id=$1 and stage='PREVIEW' and status='SUCCEEDED' and stale_at is null", [runId]);
+    if (input.stage === 'EDITING' && input.status === 'SUCCEEDED' && current.steps.find((candidate) => candidate.stage === 'APPROVAL')?.status === 'SUCCEEDED') await this.db.query("update production_run_steps set status='PENDING',completed_at=null,error_code='APPROVAL_STALE',error_message='Manifest changed after approval; approval is required again',updated_at=now() where production_run_id=$1 and stage='APPROVAL'", [runId]);
     await this.refreshRunState(runId, runStatus);
     return (await this.get(projectId, runId))!;
+  }
+
+  async handoff(projectId: string, runId: string, stage: ProductionRunStage, outputRefs: Record<string, unknown>, status: Extract<ProductionStepStatus, 'SUCCEEDED' | 'SKIPPED'> = 'SUCCEEDED'): Promise<ProductionRunDetail> {
+    const current = await this.get(projectId, runId); if (!current) throw new Error('PRODUCTION_RUN_NOT_FOUND');
+    const step = current.steps.find((candidate) => candidate.stage === stage); if (!step) throw new Error('PRODUCTION_STAGE_INVALID');
+    if (status === 'SKIPPED' && stage !== 'DIGITAL_HUMAN' && stage !== 'VOICE' && stage !== 'PUBLISH') throw new Error('PRODUCTION_SKIP_NOT_ALLOWED');
+    if (stage === 'DIGITAL_HUMAN' && current.digitalHumanMode === 'NONE') status = 'SKIPPED';
+    if (status === 'SUCCEEDED') {
+      const alternatives: Partial<Record<ProductionRunStage, string[][]>> = { VOICE: [['voiceAssetId', 'speechGenerationId', 'fallbackTiming']], PREVIEW: [['previewAssetId', 'previewId']], RENDER: [['renderAssetId', 'renderId']], PUBLISH: [['publishJobId', 'publishRequestId', 'externalPostId']], REVIEW: [['reviewId', 'externalPostId']] };
+      const alternativeKeys = new Set((alternatives[stage] || []).flat());
+      const required = STAGE_REQUIRED_REFS[stage].filter((key) => !alternativeKeys.has(key) && outputRefs[key] === undefined);
+      const alternativeMissing = (alternatives[stage] || []).some((keys) => !keys.some((key) => outputRefs[key] !== undefined));
+      if (alternativeMissing) throw new Error(`PRODUCTION_HANDOFF_REFS_REQUIRED:${(alternatives[stage] || []).flat().join(',')}`);
+      if (required.length) throw new Error(`PRODUCTION_HANDOFF_REFS_REQUIRED:${required.join(',')}`);
+      await this.verifyHandoffRefs(projectId, current, stage, outputRefs);
+    }
+    const previousIndex = PRODUCTION_RUN_STAGES.indexOf(stage);
+    for (const previous of current.steps.slice(0, previousIndex)) if (!['SUCCEEDED', 'SKIPPED'].includes(previous.status)) throw new Error(`PRODUCTION_PREVIOUS_STAGE_NOT_READY:${previous.stage}`);
+    return this.updateStep(projectId, runId, { stage, status, outputRefs });
+  }
+
+  private async verifyHandoffRefs(projectId: string, run: ProductionRunDetail, stage: ProductionRunStage, refs: Record<string, unknown>): Promise<void> {
+    const one = (key: string): string | null => typeof refs[key] === 'string' ? String(refs[key]) : null;
+    const exists = async (sql: string, params: unknown[]): Promise<boolean> => (await this.db.query(sql, params)).rows.length > 0;
+    if (stage === 'CONTENT' && !(await exists("select 1 from director_script_revisions where id=$1 and project_id=$2 and status='ACCEPTED'", [one('scriptRevisionId'), projectId]))) throw new Error('PRODUCTION_SCRIPT_REVISION_NOT_ACCEPTED');
+    if (stage === 'VOICE' && one('voiceAssetId') && !(await exists("select 1 from assets where id=$1 and project_id=$2 and lifecycle='READY' and kind='AUDIO'", [one('voiceAssetId'), projectId]))) throw new Error('PRODUCTION_VOICE_ASSET_NOT_READY');
+    if (stage === 'VOICE' && one('speechGenerationId') && !(await exists('select 1 from speech_generations where id=$1 and project_id=$2', [one('speechGenerationId'), projectId]))) throw new Error('PRODUCTION_SPEECH_GENERATION_NOT_FOUND');
+    if (stage === 'DIGITAL_HUMAN' && !(await exists("select 1 from assets where id=$1 and project_id=$2 and lifecycle='READY' and kind='VIDEO'", [one('digitalHumanAssetId'), projectId]))) throw new Error('PRODUCTION_DIGITAL_HUMAN_ASSET_NOT_READY');
+    if (stage === 'MATERIALS' && !(await exists('select 1 from material_pool_snapshots p join video_workspaces w on w.id=p.workspace_id where p.id=$1 and w.project_id=$2', [one('materialPoolSnapshotId'), projectId]))) throw new Error('PRODUCTION_MATERIAL_POOL_NOT_FOUND');
+    if (stage === 'EDITING' && !(await exists('select 1 from script_editing_v3_sessions s join video_workspaces w on w.id=s.workspace_id where s.id=$1 and w.project_id=$2 and s.material_pool_snapshot_id=$3', [one('editSessionId'), projectId, run.trace.materialPoolSnapshotId]))) throw new Error('PRODUCTION_EDIT_SESSION_NOT_FOUND');
+    if (stage === 'EDITING' && !(await exists('select 1 from edit_manifests m join video_workspaces w on w.id=m.workspace_id where m.id=$1 and w.project_id=$2', [one('manifestRevisionId'), projectId]))) throw new Error('PRODUCTION_MANIFEST_NOT_FOUND');
+    if (stage === 'PREVIEW' && one('previewAssetId') && !(await exists(`select 1 from assets where id=$1 and project_id=$2 and lifecycle='READY' and kind in ('VIDEO','VIDEO_RENDER')`, [one('previewAssetId'), projectId]))) throw new Error('PRODUCTION_PREVIEW_ASSET_NOT_READY');
+    if (stage === 'APPROVAL' && !(await exists("select 1 from approval_decisions where id=$1 and project_id=$2 and status='APPROVED'", [one('approvalId'), projectId]))) throw new Error('PRODUCTION_APPROVAL_NOT_APPROVED');
+    if (stage === 'RENDER' && one('renderId') && !(await exists("select 1 from renders where id=$1 and project_id=$2 and status='SUCCEEDED'", [one('renderId'), projectId]))) throw new Error('PRODUCTION_RENDER_NOT_SUCCEEDED');
+    if (stage === 'PUBLISH' && one('publishJobId') && !(await exists("select 1 from jobs where id=$1 and project_id=$2", [one('publishJobId'), projectId]))) throw new Error('PRODUCTION_PUBLISH_JOB_NOT_FOUND');
+    if (stage === 'REVIEW' && one('reviewId') && !(await exists('select 1 from review_metric_snapshots where id=$1', [one('reviewId')]))) throw new Error('PRODUCTION_REVIEW_NOT_FOUND');
   }
 
   async retry(projectId: string, runId: string, stage: ProductionRunStage): Promise<ProductionRunDetail> {
@@ -119,6 +164,14 @@ export class ProductionRunService {
     if (!step || step.status !== 'FAILED') throw new Error('PRODUCTION_RETRY_STAGE_NOT_FAILED');
     await this.db.query("update production_run_steps set status='PENDING',error_code=null,error_message=null,completed_at=null,updated_at=now() where id=$1", [step.id]);
     await this.db.query("update production_runs set status='RUNNING',failed_at=null,updated_at=now() where id=$1", [runId]);
+    return (await this.get(projectId, runId))!;
+  }
+
+  async resetForChanges(projectId: string, runId: string): Promise<ProductionRunDetail> {
+    const current = await this.get(projectId, runId); if (!current) throw new Error('PRODUCTION_RUN_NOT_FOUND');
+    const approval = current.steps.find((step) => step.stage === 'APPROVAL'); if (!approval || !['WAITING_USER', 'FAILED', 'SUCCEEDED'].includes(approval.status)) throw new Error('PRODUCTION_APPROVAL_REQUIRED');
+    await this.db.query("update production_run_steps set status='PENDING',completed_at=null,error_code=null,error_message=null,updated_at=now() where production_run_id=$1 and stage in ('EDITING','PREVIEW','APPROVAL')", [runId]);
+    await this.db.query("update production_runs set status='RUNNING',current_stage='EDITING',failed_at=null,completed_at=null,updated_at=now() where id=$1", [runId]);
     return (await this.get(projectId, runId))!;
   }
 
@@ -138,9 +191,26 @@ export class ProductionRunService {
     for (const step of current.steps) {
       const jobIds = Object.entries(step.outputRefs).filter(([key]) => key === 'jobId' || key === 'publishJobId').flatMap(([, value]) => Array.isArray(value) ? value : [value]);
       if (!jobIds.length) continue;
-      const jobs = await this.db.query<{ state: string; error: { code?: string; message?: string } | null }>('select state,error from jobs where id=any($1::text[]) order by updated_at desc', [jobIds]);
+      const jobs = await this.db.query<{ id: string; state: string; error: { code?: string; message?: string } | null; result: Record<string, unknown> | null }>('select id,state,error,result from jobs where id=any($1::text[]) order by updated_at desc', [jobIds]);
       const job = jobs.rows[0];
-      if (job?.state === 'SUCCEEDED' && step.status !== 'SUCCEEDED') await this.updateStep(projectId, runId, { stage: step.stage, status: 'SUCCEEDED' });
+      const outputRefs: Record<string, unknown> = {};
+      if (job?.state === 'SUCCEEDED' && step.stage === 'RENDER') {
+        const render = (await this.db.query<{ id: string; output_asset_id: string | null }>('select id,output_asset_id from renders where job_id=$1 order by created_at desc limit 1', [job.id])).rows[0];
+        if (render) { outputRefs.renderId = render.id; if (render.output_asset_id) outputRefs.renderAssetId = render.output_asset_id; }
+      }
+      if (job?.state === 'SUCCEEDED' && step.stage === 'PUBLISH') {
+        const post = (await this.db.query<{ external_post_id: string }>('select p.external_post_id from publisher_external_posts p join publisher_attempts a on a.request_id=p.request_id where a.job_id=$1 order by p.first_observed_at desc limit 1', [job.id])).rows[0];
+        if (post) outputRefs.externalPostId = post.external_post_id;
+      }
+      if (job?.state === 'SUCCEEDED' && step.stage === 'VOICE') {
+        const generationId = typeof step.outputRefs.speechGenerationId === 'string' ? step.outputRefs.speechGenerationId : null;
+        if (generationId) { const generation = (await this.db.query<{ output_asset_id: string | null }>('select output_asset_id from speech_generations where id=$1 and project_id=$2', [generationId, projectId])).rows[0]; if (generation?.output_asset_id) outputRefs.voiceAssetId = generation.output_asset_id; }
+      }
+      if (job?.state === 'SUCCEEDED' && step.stage === 'DIGITAL_HUMAN') {
+        const generationId = typeof step.outputRefs.avatarGenerationId === 'string' ? step.outputRefs.avatarGenerationId : null;
+        if (generationId) { const generation = (await this.db.query<{ output_asset_id: string | null }>('select output_asset_id from avatar_generations where id=$1 and project_id=$2', [generationId, projectId])).rows[0]; if (generation?.output_asset_id) outputRefs.digitalHumanAssetId = generation.output_asset_id; }
+      }
+      if (job?.state === 'SUCCEEDED' && step.status !== 'SUCCEEDED') await this.updateStep(projectId, runId, { stage: step.stage, status: 'SUCCEEDED', ...(Object.keys(outputRefs).length ? { outputRefs } : {}) });
       else if (job && ['FAILED', 'BLOCKED'].includes(job.state) && step.status !== 'FAILED') await this.updateStep(projectId, runId, { stage: step.stage, status: 'FAILED', errorCode: job.error?.code || 'DOMAIN_JOB_FAILED', errorMessage: job.error?.message || 'Domain job failed' });
     }
     return (await this.get(projectId, runId))!;
