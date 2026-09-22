@@ -54,7 +54,7 @@ test('runtime provider selection is environment-driven and subtitle exports pres
 test('unconfigured runtime providers fail closed during capability checks', async () => {
   const runtime = createRuntimeDigitalHumanProviders({ CONTENTOS_SPEECH_PROVIDER: 'missing-speech', CONTENTOS_AVATAR_PROVIDER: 'hzagent' });
   await assert.rejects(() => runtime.speech.getCapabilities(), /not configured/);
-  await assert.rejects(() => runtime.avatar.getCapabilities(), /interface-only/);
+  await assert.rejects(() => runtime.avatar.getCapabilities(), /API key is not configured/);
   assert.equal(runtime.mediaStagingConfigured, false);
 });
 

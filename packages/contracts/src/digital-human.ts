@@ -103,7 +103,7 @@ export interface AvatarProvider {
 }
 
 export interface ProviderMediaStaging {
-  stageAsset(assetId: string, options?: { ttlSeconds?: number; projectId?: string }): Promise<{ publicUrl: string; expiresAt: string }>;
+  stageAsset(assetId: string, options?: { ttlSeconds?: number; projectId?: string; extension?: string }): Promise<{ publicUrl: string; expiresAt: string }>;
 }
 
 export interface AlignmentRequest {

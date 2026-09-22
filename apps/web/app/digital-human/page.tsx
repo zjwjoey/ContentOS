@@ -38,6 +38,8 @@ export default function DigitalHumanIndexPage() {
   const [clipId, setClipId] = useState('');
   const [speechAssetId, setSpeechAssetId] = useState('');
   const [sourceInMs, setSourceInMs] = useState('0');
+  const [avatarName, setAvatarName] = useState('');
+  const [avatarOwnerName, setAvatarOwnerName] = useState('');
   const [voiceName, setVoiceName] = useState('');
   const [referenceAssetId, setReferenceAssetId] = useState('');
   const [historyFilter, setHistoryFilter] = useState<'ALL' | 'SPEECH' | 'AVATAR'>('ALL');
@@ -116,6 +118,16 @@ export default function DigitalHumanIndexPage() {
     finally { setBusy(false); }
   };
 
+  const createAvatar = async () => {
+    if (!projectId || !avatarName.trim()) return;
+    setBusy(true); setNotice('正在创建人物档案…');
+    try {
+      const avatar = await readJson<Avatar>(await fetch(`/api/v1/projects/${projectId}/digital-human/avatars`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: avatarName.trim(), ownerName: avatarOwnerName.trim() }) }));
+      setAvatarName(''); setAvatarOwnerName(''); setAvatarId(avatar.id); setNotice('人物档案已创建，现在可以上传人物底片。'); await refresh();
+    } catch (error) { setNotice(error instanceof Error ? error.message : '人物档案创建失败'); }
+    finally { setBusy(false); }
+  };
+
   const uploadReference = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; event.target.value = ''; if (!file || !projectId) return;
     setBusy(true); setNotice('正在导入参考音频…');
@@ -133,6 +145,29 @@ export default function DigitalHumanIndexPage() {
       if (!current.outputAssetId) throw new Error('参考音频仍在处理中，请稍后重试');
       setReferenceAssetId(current.outputAssetId); setNotice('参考音频已导入，可创建 TTS 2.5 音色。');
     } catch (error) { setNotice(error instanceof Error ? error.message : '参考音频导入失败'); }
+    finally { setBusy(false); }
+  };
+
+  const uploadAvatarClip = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]; event.target.value = '';
+    if (!file || !projectId || !avatarId) return;
+    setBusy(true); setNotice('正在导入人物底片…');
+    try {
+      const body = new FormData(); body.append('file', file);
+      const initial = await readJson<{ import: { id: string; state: string; outputAssetId?: string | null } }>(await fetch(`/api/v1/projects/${projectId}/asset-imports`, { method: 'POST', body }));
+      let current = initial.import;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        if ((current.state === 'READY' || current.state === 'DEDUPED') && current.outputAssetId) break;
+        if (current.state === 'FAILED' || current.state === 'CANCELLED') throw new Error('人物底片导入失败');
+        await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+        const list = await readJson<{ items: Array<{ id: string; state: string; outputAssetId?: string | null }> }>(await fetch(`/api/v1/projects/${projectId}/asset-imports`));
+        current = list.items.find((item) => item.id === initial.import.id) || current;
+      }
+      if (!current.outputAssetId) throw new Error('人物底片仍在处理中，请稍后重试');
+      const name = file.name.replace(/\.[^.]+$/, '') || '人物底片';
+      const clip = await readJson<AvatarClip>(await fetch(`/api/v1/projects/${projectId}/digital-human/avatar-clips`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ avatarProfileId: avatarId, assetId: current.outputAssetId, name }) }));
+      setClipId(clip.id); setNotice(`人物底片“${name}”已上传并添加。`); await refresh();
+    } catch (error) { setNotice(error instanceof Error ? error.message : '人物底片上传失败'); }
     finally { setBusy(false); }
   };
 
@@ -165,7 +200,7 @@ export default function DigitalHumanIndexPage() {
       <section className="card"><div className="section-title"><div><h2>TTS 2.5 本地配音</h2><p className="muted">模型：indextts-2.5 · 中文语音 · 生成结果自动进入历史</p></div><span className={capability?.status === 'READY' ? 'status-ok' : 'status-warn'}>{capability?.status === 'READY' ? '已连接' : '未连接'}</span></div><p className="muted">{capability?.status === 'READY' ? `TTS 2.5 已就绪${capability.providerId ? ` · ${capability.providerId}` : ''}。` : '未检测到 TTS 2.5 网关，请启动本地 IndexTTS 2.5 服务（默认 127.0.0.1:8788）。'}</p></section>
       <section className="grid grid-2">
         <section className="card"><div className="section-title"><h2>开始生成</h2><span>交互式</span></div><label>口播文案<textarea rows={7} value={script} onChange={(event) => setScript(event.target.value)} placeholder="输入要让数字人说的话…" maxLength={capability?.maxTextCharacters || 100000} /></label><div className="grid grid-2"><label>音色<select value={voiceId} onChange={(event) => setVoiceId(event.target.value)}><option value="">请选择音色</option>{voices.map((voice) => <option key={voice.id} value={voice.id}>{voice.name} · {label(voice.status)}</option>)}</select></label><label>语速<input type="number" min="0.5" max="2" step="0.05" value={speed} onChange={(event) => setSpeed(event.target.value)} /></label></div><label>情绪<input value={emotion} onChange={(event) => setEmotion(event.target.value)} placeholder="natural" /></label><div className="entry-actions"><button type="button" disabled={busy || capability?.status !== 'READY' || !voiceId || !script.trim()} onClick={() => void generateSpeech()}>生成配音（TTS 2.5）</button><details><summary>创建新音色</summary><div className="inline-field"><input value={voiceName} onChange={(event) => setVoiceName(event.target.value)} placeholder="音色名称" /><input value={referenceAssetId} onChange={(event) => setReferenceAssetId(event.target.value)} placeholder="参考音频素材 ID" /><label>上传参考音频<input type="file" accept="audio/*" disabled={busy} onChange={uploadReference} /></label><button type="button" disabled={busy || !voiceName.trim() || !referenceAssetId.trim()} onClick={() => void createVoice()}>创建音色</button></div><p className="muted">TTS 2.5 当前需要一条参考音频来创建可用音色。</p></details></div></section>
-        <section className="card"><div className="section-title"><h2>数字人视频</h2><span>可交互预览</span></div><label>人物<select value={avatarId} onChange={(event) => setAvatarId(event.target.value)}><option value="">请选择人物</option>{avatars.map((avatar) => <option key={avatar.id} value={avatar.id}>{avatar.name} · {label(avatar.status)}</option>)}</select></label><label>人物底片<select value={clipId} onChange={(event) => setClipId(event.target.value)}><option value="">请选择底片</option>{clips.map((clip) => <option key={clip.id} value={clip.id}>{clip.name} · 使用 {clip.usageCount} 次</option>)}</select></label><label>配音素材 ID<input value={speechAssetId} onChange={(event) => setSpeechAssetId(event.target.value)} placeholder="生成配音后自动填入" /></label><label>源视频起始位置（毫秒）<input type="number" min="0" step="100" value={sourceInMs} onChange={(event) => setSourceInMs(event.target.value)} /></label><button type="button" disabled={busy || !avatarId || !clipId || !speechAssetId} onClick={() => void generateAvatar()}>生成数字人视频</button><p className="muted">音频时长是输出时长唯一依据；源视频按起始位置截取同等时长，超出源视频会被阻止。</p></section>
+        <section className="card"><div className="section-title"><h2>数字人视频</h2><span>可交互预览</span></div><label>人物<select value={avatarId} onChange={(event) => setAvatarId(event.target.value)}><option value="">请选择人物</option>{avatars.map((avatar) => <option key={avatar.id} value={avatar.id}>{avatar.name} · {label(avatar.status)}</option>)}</select></label><details><summary>创建人物档案</summary><div className="inline-field"><input value={avatarName} onChange={(event) => setAvatarName(event.target.value)} placeholder="人物名称，例如：品牌主持人" /><input value={avatarOwnerName} onChange={(event) => setAvatarOwnerName(event.target.value)} placeholder="归属人（可选）" /><button type="button" disabled={busy || !avatarName.trim()} onClick={() => void createAvatar()}>创建人物</button></div></details><label>人物底片<select value={clipId} onChange={(event) => setClipId(event.target.value)}><option value="">请选择底片</option>{clips.map((clip) => <option key={clip.id} value={clip.id}>{clip.name} · 使用 {clip.usageCount} 次</option>)}</select></label><div className="inline-field"><label>上传人物底片<input type="file" accept="video/*" disabled={busy || !avatarId} onChange={uploadAvatarClip} /></label><small className="muted">先选择或创建人物，视频导入完成后会自动添加到人物底片库。</small></div><label>配音素材 ID<input value={speechAssetId} onChange={(event) => setSpeechAssetId(event.target.value)} placeholder="生成配音后自动填入" /></label><label>源视频起始位置（毫秒）<input type="number" min="0" step="100" value={sourceInMs} onChange={(event) => setSourceInMs(event.target.value)} /></label><button type="button" disabled={busy || !avatarId || !clipId || !speechAssetId} onClick={() => void generateAvatar()}>生成数字人视频</button><p className="muted">音频时长是输出时长唯一依据；源视频按起始位置截取同等时长，超出源视频会被阻止。</p></section>
       </section>
       <section className="card"><div className="section-title"><h2>生成历史</h2><div className="entry-actions"><button type="button" className={historyFilter === 'ALL' ? 'selected' : ''} onClick={() => setHistoryFilter('ALL')}>全部</button><button type="button" className={historyFilter === 'SPEECH' ? 'selected' : ''} onClick={() => setHistoryFilter('SPEECH')}>配音</button><button type="button" className={historyFilter === 'AVATAR' ? 'selected' : ''} onClick={() => setHistoryFilter('AVATAR')}>数字人视频</button><button type="button" onClick={() => void refresh()}>刷新</button></div></div>{history.length === 0 ? <p className="muted">暂无生成记录，先在上方输入文案开始工作。</p> : <div className="revision-list">{history.map(({ kind, item }) => <article className="compact-card" key={`${kind}-${item.id}`}><div className="section-title"><strong>{kind === 'speech' ? 'TTS 2.5 配音' : '数字人视频'}</strong><span>{label(item.status)}</span></div><p className="muted">{'text' in item ? item.text : `配音素材：${item.speechAssetId}`}</p>{item.error?.message && <p className="form-error">{item.error.message}</p>}{'outputAssetId' in item && item.outputAssetId && kind === 'speech' && <audio controls preload="none" src={`/api/v1/projects/${item.projectId}/assets/${item.outputAssetId}/content`} />}{'outputAssetId' in item && item.outputAssetId && kind === 'avatar' && <video controls preload="metadata" src={`/api/v1/projects/${item.projectId}/assets/${item.outputAssetId}/content`} />}{kind === 'speech' && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(item.status) && <button type="button" disabled={busy} onClick={() => void cancelSpeech(item)}>取消任务</button>}{kind === 'speech' && (item.status === 'FAILED' || item.status === 'CANCELLED') && <button type="button" disabled={busy} onClick={() => void retrySpeech(item)}>重新提交</button>}{kind === 'speech' && item.outputAssetId && <button type="button" onClick={() => setSpeechAssetId(item.outputAssetId || '')}>用于数字人</button>}</article>)}</div>}</section>
     </>}

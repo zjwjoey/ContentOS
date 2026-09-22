@@ -87,6 +87,80 @@ export interface IndexTTS25SpeechProviderOptions {
   fetchImpl?: typeof fetch;
 }
 
+export interface HzAgentAvatarProviderOptions {
+  baseUrl?: string;
+  apiKey: string;
+  requestTimeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}
+
+function hzAgentTaskId(body: Record<string, unknown>): string | undefined {
+  const data = jsonObject(body.data);
+  const candidate = typeof body.data === 'string' ? body.data : data.id ?? data.task_id ?? data.taskId;
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
+}
+
+function hzAgentTaskData(body: Record<string, unknown>): Record<string, unknown> {
+  return jsonObject(body.data);
+}
+
+function hzAgentStatus(value: unknown, outputUrl: string | undefined): AvatarTaskStatus['status'] {
+  if (outputUrl) return 'SUCCEEDED';
+  const normalized = typeof value === 'string' ? value.toLowerCase() : value;
+  if (normalized === 2 || normalized === '2' || normalized === 'success' || normalized === 'succeeded' || normalized === 'completed' || normalized === 'complete') return 'SUCCEEDED';
+  if (normalized === 3 || normalized === '3' || normalized === 'failed' || normalized === 'error') return 'FAILED';
+  if (normalized === 4 || normalized === '4' || normalized === 'cancelled' || normalized === 'canceled') return 'CANCELLED';
+  return 'RUNNING';
+}
+
+/** HZAgent's documented asynchronous video-to-video lip-sync API. */
+export class HzAgentAvatarProvider implements AvatarProvider {
+  readonly providerId = 'hzagent';
+  private readonly fetchImpl: typeof fetch;
+  private readonly baseUrl: string;
+  private readonly requestTimeoutMs: number;
+
+  constructor(private readonly options: HzAgentAvatarProviderOptions) {
+    this.fetchImpl = options.fetchImpl || fetch;
+    this.baseUrl = options.baseUrl || 'https://api.ai.hzagent.cn';
+    this.requestTimeoutMs = timeoutMs(options.requestTimeoutMs, 30_000);
+  }
+
+  async getCapabilities(): Promise<AvatarCapabilities> {
+    if (!this.options.apiKey.trim()) throw new DigitalHumanProviderError('AUTHENTICATION_FAILED', 'HZAgent API key is not configured', false);
+    return { providerId: this.providerId, local: false, videoToVideo: true, imageToVideo: false, requiresPublicUrl: true, supportedFormats: ['mp4', 'mov', 'webm'], supportedAudioFormats: ['mp3', 'wav', 'm4a', 'aac', 'ogg'] };
+  }
+
+  async submitLipSync(request: AvatarGenerationRequest): Promise<AvatarExternalTask> {
+    const response = await providerFetch(this.fetchImpl, new URL('/v1/avatar-lipsync/generations', this.baseUrl), {
+      method: 'POST', headers: { authorization: `Bearer ${this.options.apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ videoName: String(request.parameters.videoName || request.requestId), audioUrl: request.audioUrl, videoUrl: request.videoUrl }),
+    }, this.requestTimeoutMs);
+    const body = jsonObject(await response.json().catch(() => ({})));
+    if (!response.ok || (body.code !== undefined && Number(body.code) !== 200)) {
+      const message = typeof body.msg === 'string' && body.msg.trim() ? `HZAgent rejected the request: ${body.msg.trim()}` : 'HZAgent rejected the request';
+      throw new DigitalHumanProviderError(response.status >= 500 ? 'UNAVAILABLE' : 'INVALID_REQUEST', message, response.status >= 500);
+    }
+    const externalTaskId = hzAgentTaskId(body);
+    if (!externalTaskId) throw new DigitalHumanProviderError('EXTERNAL_FAILED', 'HZAgent did not return a task ID', false);
+    return { externalTaskId, providerId: this.providerId, status: 'QUEUED', provenance: { provider: this.providerId, requestId: request.requestId } };
+  }
+
+  async getTask(externalTaskId: string): Promise<AvatarTaskStatus> {
+    const response = await providerFetch(this.fetchImpl, new URL(`/v1/avatar-lipsync/tasks/${encodeURIComponent(externalTaskId)}`, this.baseUrl), { headers: { authorization: `Bearer ${this.options.apiKey}` } }, this.requestTimeoutMs);
+    const body = jsonObject(await response.json().catch(() => ({})));
+    if (!response.ok || (body.code !== undefined && Number(body.code) !== 200)) {
+      const message = typeof body.msg === 'string' && body.msg.trim() ? `HZAgent task query rejected: ${body.msg.trim()}` : 'HZAgent task query rejected';
+      throw new DigitalHumanProviderError(response.status >= 500 ? 'UNAVAILABLE' : 'INVALID_REQUEST', message, response.status >= 500);
+    }
+    const data = hzAgentTaskData(body);
+    const result = Array.isArray(data.result) ? data.result : [];
+    const outputUrl = result.find((value): value is string => typeof value === 'string' && /^https?:\/\//i.test(value));
+    const status = hzAgentStatus(data.status, outputUrl);
+    return { externalTaskId: String(data.task_id || data.taskId || externalTaskId), providerId: this.providerId, status, ...(outputUrl ? { outputUrl } : {}), ...(status === 'FAILED' ? { errorCode: 'HZAGENT_TASK_FAILED', errorMessage: String(data.message || body.msg || 'HZAgent task failed') } : {}), provenance: { provider: this.providerId, rawStatus: data.status } };
+  }
+}
+
 export class IndexTTS25SpeechProvider implements SpeechProvider {
   readonly providerId = 'indextts25';
   private readonly fetchImpl: typeof fetch;
@@ -161,11 +235,11 @@ export function verifyProviderMediaToken(token: string, secret: string): { proje
 
 export class SignedProviderMediaStaging implements ProviderMediaStaging {
   constructor(private readonly options: SignedProviderMediaStagingOptions) {}
-  async stageAsset(assetId: string, options: { ttlSeconds?: number; projectId?: string } = {}): Promise<{ publicUrl: string; expiresAt: string }> {
+  async stageAsset(assetId: string, options: { ttlSeconds?: number; projectId?: string; extension?: string } = {}): Promise<{ publicUrl: string; expiresAt: string }> {
     if (!isPublicHttpUrl(this.options.baseUrl)) throw new DigitalHumanProviderError('UNAVAILABLE', 'Provider media staging base URL is not public', false);
     if (!options.projectId?.trim()) throw new DigitalHumanProviderError('INVALID_REQUEST', 'Provider media staging requires a project binding', false);
     const ttlSeconds = Math.min(3600, Math.max(60, Math.floor(options.ttlSeconds || 900))); const expiresAtSeconds = Math.floor(Date.now() / 1000) + ttlSeconds;
-    const token = createProviderMediaToken(options.projectId, assetId, expiresAtSeconds, this.options.secret); const publicUrl = new URL('/api/v1/provider-media', this.options.baseUrl); publicUrl.searchParams.set('token', token);
+    const token = createProviderMediaToken(options.projectId, assetId, expiresAtSeconds, this.options.secret); const extension = options.extension?.trim().replace(/[^a-z0-9]/gi, '').toLowerCase(); const publicUrl = new URL(`/api/v1/provider-media${extension ? `.${extension}` : ''}`, this.options.baseUrl); publicUrl.searchParams.set('token', token);
     return { publicUrl: publicUrl.toString(), expiresAt: new Date(expiresAtSeconds * 1000).toISOString() };
   }
 }

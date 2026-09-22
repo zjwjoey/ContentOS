@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -82,14 +82,23 @@ function preflightFailure(reply: { code: (status: number) => { send: (body: unkn
 }
 
 export function registerDigitalHumanRoutes(app: FastifyInstance, deps: DigitalHumanRouteDependencies): void {
-  app.get('/api/v1/provider-media', async (request, reply) => {
+  const serveProviderMedia = async (request: any, reply: any) => {
     const token = (request.query as { token?: string }).token || ''; const secret = deps.mediaStagingSecret?.trim();
     if (!secret || !deps.assets || !deps.storage) return reply.code(404).send({ error: { code: 'PROVIDER_MEDIA_NOT_FOUND', message: 'Provider media is not available', details: [] } });
     const verified = verifyProviderMediaToken(token, secret); if (!verified) return reply.code(404).send({ error: { code: 'PROVIDER_MEDIA_NOT_FOUND', message: 'Provider media is not available', details: [] } });
     const asset = await deps.assets.getReadyAssetForProviderStaging(verified.projectId, verified.assetId); if (!asset || !await deps.storage.exists(asset.storageKey)) return reply.code(404).send({ error: { code: 'PROVIDER_MEDIA_NOT_FOUND', message: 'Provider media is not available', details: [] } });
     const contentType = asset.kind === 'VIDEO' ? 'video/mp4' : asset.metadata.format === 'mp3' ? 'audio/mpeg' : 'audio/wav';
-    return reply.header('cache-control', 'private, max-age=0, no-store').header('content-length', asset.byteSize).type(contentType).send(createReadStream(deps.storage.objectPath(asset.storageKey)));
-  });
+    const filePath = deps.storage.objectPath(asset.storageKey); const fileSize = statSync(filePath).size; const range = typeof request.headers?.range === 'string' ? request.headers.range : undefined;
+    const common = reply.header('cache-control', 'private, max-age=0, no-store').header('accept-ranges', 'bytes').type(contentType);
+    const file = request.method === 'HEAD' ? undefined : readFileSync(filePath);
+    if (!range) return common.header('content-length', fileSize).send(file);
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range); if (!match) return common.code(416).header('content-range', `bytes */${fileSize}`).send();
+    const start = match[1] ? Number(match[1]) : Math.max(0, fileSize - Number(match[2] || 0)); const requestedEnd = match[2] ? Number(match[2]) : fileSize - 1; const end = Math.min(fileSize - 1, requestedEnd);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start > end || start >= fileSize) return common.code(416).header('content-range', `bytes */${fileSize}`).send();
+    const length = end - start + 1; return common.code(206).header('content-range', `bytes ${start}-${end}/${fileSize}`).header('content-length', length).send(request.method === 'HEAD' ? undefined : file!.subarray(start, end + 1));
+  };
+  app.get('/api/v1/provider-media', serveProviderMedia);
+  app.get('/api/v1/provider-media.:extension', serveProviderMedia);
   app.get('/api/v1/projects/:projectId/digital-human/capabilities', async (_request, reply) => {
     if (!deps.providers) return { speech: { status: 'UNCONFIGURED' }, avatar: { status: 'UNCONFIGURED' }, mediaStaging: { status: 'UNCONFIGURED' } };
     const [speech, avatar] = await Promise.allSettled([deps.providers.speech.getCapabilities(), deps.providers.avatar.getCapabilities()]);

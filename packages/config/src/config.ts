@@ -85,7 +85,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     mediaStagingProvider: env.CONTENTOS_MEDIA_STAGING_PROVIDER || 'signed-url',
     mediaStagingBaseUrl: env.CONTENTOS_MEDIA_STAGING_BASE_URL || '',
     mediaStagingSecret: env.CONTENTOS_MEDIA_STAGING_SECRET || '',
-    digitalHumanProviderRequestTimeoutMs: integer(env, 'CONTENTOS_PROVIDER_REQUEST_TIMEOUT_MS', 30_000),
+    // Local IndexTTS can take well over 30 seconds for a long script or on its
+    // first CUDA request. Keep the request bounded, but give normal long-form
+    // speech generation enough time to finish without being cancelled by the
+    // worker's HTTP timeout.
+    digitalHumanProviderRequestTimeoutMs: integer(env, 'CONTENTOS_PROVIDER_REQUEST_TIMEOUT_MS', 180_000),
     digitalHumanProviderCapabilityTimeoutMs: integer(env, 'CONTENTOS_PROVIDER_CAPABILITY_TIMEOUT_MS', 5_000),
     digitalHumanRemoteResultTimeoutMs: integer(env, 'CONTENTOS_AVATAR_RESULT_TIMEOUT_MS', 300_000),
   };
