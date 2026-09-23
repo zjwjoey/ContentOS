@@ -27,9 +27,23 @@ test('service registry rejects unknown and safe-mode unavailable dependencies', 
 });
 
 test('runtime config is the single source for roots, ports, database and launch mode', () => {
-  const config = resolveRuntimeConfig({ CONTENTOS_APP_ROOT: 'C:\\ContentOS', CONTENTOS_RUNTIME_ROOT: 'runtime-data', STORAGE_ROOT: 'media', DATABASE_URL: 'postgresql://example', PORT: '3010', WEB_PORT: '3011', CONTENTOS_RUNTIME_CONTROL_PORT: '3019', CONTENTOS_RUNTIME_MODE: 'PACKAGED' });
-  assert.equal(config.appRoot, 'C:\\ContentOS');
+  const root = join(tmpdir(), 'contentos-runtime-config');
+  const config = resolveRuntimeConfig({ CONTENTOS_APP_ROOT: root, CONTENTOS_RUNTIME_ROOT: join(root, 'runtime-data'), STORAGE_ROOT: join(root, 'media'), DATABASE_URL: 'postgresql://example', PORT: '3010', WEB_PORT: '3011', CONTENTOS_RUNTIME_CONTROL_PORT: '3019', CONTENTOS_RUNTIME_MODE: 'PACKAGED' });
+  assert.equal(config.appRoot, root);
   assert.equal(config.apiPort, 3010); assert.equal(config.webPort, 3011); assert.equal(config.controlPort, 3019); assert.equal(config.databaseUrl, 'postgresql://example'); assert.equal(config.launchMode, 'PACKAGED');
+});
+
+test('stale lock compare-and-delete never removes a replacement lock', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-stale-race-'));
+  try {
+    const store = new RuntimeStateStore(resolveRuntimePaths({ CONTENTOS_APP_ROOT: root, CONTENTOS_RUNTIME_ROOT: join(root, 'runtime') }));
+    const state = { instanceId: 'old', hostPid: 999999, startedAt: new Date().toISOString(), controlPort: 3998, controlToken: 'token', state: 'FAILED' as const, services: [], warnings: [] };
+    await store.write(state); await store.acquire({ instanceId: 'old', hostPid: 999999, controlPort: 3998 });
+    const oldLock = await store.readLock(); assert.ok(oldLock);
+    await rm(store.lockPath, { force: true }); await store.acquire({ instanceId: 'new', hostPid: process.pid, controlPort: 3998 });
+    assert.equal(await store.claimStale(oldLock, state), false);
+    assert.equal((await store.readLock())?.instanceId, 'new');
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('restart budget enforces bounded retries and expires old events', () => {

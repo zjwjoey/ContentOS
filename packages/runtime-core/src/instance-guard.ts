@@ -19,5 +19,5 @@ export class InstanceGuard {
     if (state || lock) return { disposition: 'STALE', state, lock };
     return { disposition: 'AVAILABLE', state: null, lock: null };
   }
-  async cleanupStale(): Promise<void> { await this.store.remove(); }
+  async cleanupStale(inspection: RuntimeInstanceInspection): Promise<boolean> { return this.store.claimStale(inspection.lock, inspection.state); }
 }
