@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { RuntimeHost } from '../../apps/runtime-host/src/host.js';
-import { isPortOpen, isProcessAlive, RuntimeStateStore, resolveRuntimePaths, type DoctorReport, type ServiceDefinition } from '../../packages/runtime-core/src/index.js';
+import { isPortOpen, isProcessAlive, ProcessManager, RuntimeStateStore, resolveRuntimePaths, type DoctorReport, type ServiceDefinition } from '../../packages/runtime-core/src/index.js';
 
 const doctor: DoctorReport = { generatedAt: new Date().toISOString(), checks: [], coreStartup: 'READY' };
 const fakeDoctor = async (): Promise<DoctorReport> => doctor;
@@ -85,7 +85,10 @@ test('shutdown cancels or drains restart callbacks across 20 start/stop cycles',
   const root = await mkdtemp(join(tmpdir(), 'contentos-restart-shutdown-race-'));
   const service = definition('setInterval(()=>{},1000);');
   const host = new RuntimeHost(hostOptions(root, 3671, service));
-  const restart = host as unknown as { scheduleRestart: (definition: ServiceDefinition, delay: number, generation?: number) => void; restartTimers: Map<string, NodeJS.Timeout>; restartTasks: Set<Promise<void>> };
+  const restart = host as unknown as { scheduleRestart: (definition: ServiceDefinition, delay: number, generation?: number) => void; restartTimers: Map<string, NodeJS.Timeout>; restartTasks: Set<Promise<void>>; processes: ProcessManager };
+  const startedPids: number[] = [];
+  const originalStart = restart.processes.start.bind(restart.processes);
+  restart.processes.start = async (...args) => { const child = await originalStart(...args); if (child.pid) startedPids.push(child.pid); return child; };
   try {
     for (let iteration = 0; iteration < 20; iteration += 1) {
       await host.start();
@@ -97,6 +100,9 @@ test('shutdown cancels or drains restart callbacks across 20 start/stop cycles',
       assert.equal(restart.restartTasks.size, 0);
       assert.equal(await host.store.read(), null);
       assert.equal(await host.store.readLock(), null);
+      assert.equal(restart.processes.get('sample'), undefined);
+      assert.equal(startedPids.every((pid) => !isProcessAlive(pid)), true);
+      assert.equal(budgetCount(host), 0);
       assert.equal(host.status().services[0]?.state, 'STOPPED');
     }
   } finally { await host.stop('test').catch(() => undefined); await rm(root, { recursive: true, force: true }); }
