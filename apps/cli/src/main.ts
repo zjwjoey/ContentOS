@@ -1,10 +1,7 @@
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { resolveRuntimeConfig, runtimeConfigEnv, RuntimeStateStore, runDoctor } from '../../../packages/runtime-core/src/index.js';
 import { RuntimeClient } from '../../../packages/runtime-client/src/index.js';
 
-const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const config = resolveRuntimeConfig({ ...process.env, CONTENTOS_APP_ROOT: process.env.CONTENTOS_APP_ROOT || packageRoot });
+const config = resolveRuntimeConfig(process.env);
 const rootEnv: Record<string, string | undefined> = runtimeConfigEnv(config, process.env);
 const client = new RuntimeClient({ env: rootEnv });
 const store = new RuntimeStateStore(config);
