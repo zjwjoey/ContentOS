@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { RuntimeHost } from '../../apps/runtime-host/src/host.js';
-import { isPortOpen, RuntimeStateStore, resolveRuntimePaths, type DoctorReport, type ServiceDefinition } from '../../packages/runtime-core/src/index.js';
+import { isPortOpen, isProcessAlive, RuntimeStateStore, resolveRuntimePaths, type DoctorReport, type ServiceDefinition } from '../../packages/runtime-core/src/index.js';
 
 const doctor: DoctorReport = { generatedAt: new Date().toISOString(), checks: [], coreStartup: 'READY' };
 const fakeDoctor = async (): Promise<DoctorReport> => doctor;
@@ -45,4 +45,106 @@ test('startup Doctor failure removes state, lock and failure-owned resources', a
 test('control port conflict fails before lock/state acquisition', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-control-conflict-')); const port = 3651; const server = createServer((_request, response) => response.end('{}')); await new Promise<void>((resolveListen) => server.listen(port, '127.0.0.1', resolveListen)); const host = new RuntimeHost(hostOptions(root, port, definition('setInterval(()=>{},1000);')));
   try { await assert.rejects(() => host.start(), (error: unknown) => (error as { code?: string }).code === 'RUNTIME_CONTROL_PORT_CONFLICT'); const store = new RuntimeStateStore(resolveRuntimePaths({ CONTENTOS_APP_ROOT: process.cwd(), CONTENTOS_RUNTIME_ROOT: join(root, 'runtime') })); assert.equal(await store.read(), null); assert.equal(await store.readLock(), null); } finally { server.closeAllConnections?.(); await new Promise<void>((resolveClose) => server.close(() => resolveClose())); await host.stop('test').catch(() => undefined); await rm(root, { recursive: true, force: true }); }
+});
+
+test('shutdown invalidates an in-flight health pass before it can recreate runtime state', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-health-shutdown-race-'));
+  let blockHealth = false; let healthCalls = 0; let healthEntered!: () => void; let releaseHealth!: () => void;
+  const entered = new Promise<void>((resolveEntered) => { healthEntered = resolveEntered; });
+  const healthGate = new Promise<void>((resolveGate) => { releaseHealth = resolveGate; });
+  const service = definition('setInterval(()=>{},1000);', { healthCheck: async () => { if (blockHealth) { healthCalls += 1; healthEntered(); await healthGate; } return { state: 'READY' as const }; } });
+  const host = new RuntimeHost(hostOptions(root, 3661, service));
+  let shutdownCompleted = false; let writesAfterShutdown = 0;
+  const originalWrite = host.store.write.bind(host.store);
+  (host.store as unknown as { write: RuntimeStateStore['write'] }).write = async (state) => { if (shutdownCompleted) writesAfterShutdown += 1; await originalWrite(state); };
+  try {
+    await host.start();
+    const pid = host.status().services[0]?.pid;
+    blockHealth = true;
+    const pass = (host as unknown as { refreshHealth: () => Promise<void> }).refreshHealth();
+    await entered;
+    const overlappingPass = (host as unknown as { refreshHealth: () => Promise<void> }).refreshHealth();
+    assert.equal(healthCalls, 1);
+    const stopping = host.stop('health-race');
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+    releaseHealth();
+    await stopping;
+    shutdownCompleted = true;
+    await pass;
+    await overlappingPass;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+    assert.equal(await host.store.read(), null);
+    assert.equal(await host.store.readLock(), null);
+    assert.equal(pid ? isProcessAlive(pid) : false, false);
+    assert.equal(writesAfterShutdown, 0);
+    assert.equal((host as unknown as { healthPass?: Promise<void> }).healthPass, undefined);
+  } finally { releaseHealth(); await host.stop('test').catch(() => undefined); await rm(root, { recursive: true, force: true }); }
+});
+
+test('shutdown cancels or drains restart callbacks across 20 start/stop cycles', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-restart-shutdown-race-'));
+  const service = definition('setInterval(()=>{},1000);');
+  const host = new RuntimeHost(hostOptions(root, 3671, service));
+  const restart = host as unknown as { scheduleRestart: (definition: ServiceDefinition, delay: number, generation?: number) => void; restartTimers: Map<string, NodeJS.Timeout>; restartTasks: Set<Promise<void>> };
+  try {
+    for (let iteration = 0; iteration < 20; iteration += 1) {
+      await host.start();
+      restart.scheduleRestart(service, 0);
+      await new Promise((resolveWait) => setTimeout(resolveWait, 0));
+      await host.stop(`restart-race-${iteration}`);
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+      assert.equal(restart.restartTimers.size, 0);
+      assert.equal(restart.restartTasks.size, 0);
+      assert.equal(await host.store.read(), null);
+      assert.equal(await host.store.readLock(), null);
+      assert.equal(host.status().services[0]?.state, 'STOPPED');
+    }
+  } finally { await host.stop('test').catch(() => undefined); await rm(root, { recursive: true, force: true }); }
+});
+
+test('persist queue keeps final READY state after STARTING and READY writes overlap', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-persist-order-'));
+  const host = new RuntimeHost(hostOptions(root, 3681, definition('setInterval(()=>{},1000);')));
+  let releaseWrite!: () => void; let enteredWrite!: () => void;
+  const gate = new Promise<void>((resolveGate) => { releaseWrite = resolveGate; });
+  const entered = new Promise<void>((resolveEntered) => { enteredWrite = resolveEntered; });
+  const originalWrite = host.store.write.bind(host.store); const writtenStates: string[] = [];
+  (host.store as unknown as { write: RuntimeStateStore['write'] }).write = async (state) => {
+    writtenStates.push(state.state);
+    if (state.state === 'STARTING') { enteredWrite(); await gate; }
+    await originalWrite(state);
+  };
+  try {
+    const persist = host as unknown as { persist: (state: 'STARTING' | 'READY') => Promise<void> };
+    const starting = persist.persist('STARTING');
+    await entered;
+    const ready = persist.persist('READY');
+    releaseWrite();
+    await Promise.all([starting, ready]);
+    assert.deepEqual(writtenStates, ['STARTING', 'READY']);
+    assert.equal((await host.store.read())?.state, 'READY');
+  } finally { releaseWrite(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('old lifecycle child exit cannot mutate the next RuntimeHost lifecycle', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-old-exit-generation-'));
+  const host = new RuntimeHost(hostOptions(root, 3691, definition('setInterval(()=>{},1000);')));
+  const internals = host as unknown as { processes: { get: (id: string) => { child: NodeJS.EventEmitter } | undefined }; budgets: Map<string, { count: () => number }> };
+  try {
+    await host.start();
+    const oldChild = internals.processes.get('sample')?.child;
+    assert.ok(oldChild);
+    const oldExit = oldChild.listeners('exit').at(-1) as ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    assert.ok(oldExit);
+    await host.stop('first-lifecycle');
+    const next = await host.start();
+    const nextState = await host.store.read();
+    const budgetBefore = budgetCount(host);
+    oldExit.call(oldChild, 1, null);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 30));
+    assert.equal(host.status().instanceId, next.instanceId);
+    assert.equal(host.status().services[0]?.state, 'READY');
+    assert.equal(budgetCount(host), budgetBefore);
+    assert.equal((await host.store.read())?.instanceId, nextState?.instanceId);
+  } finally { await host.stop('test').catch(() => undefined); await rm(root, { recursive: true, force: true }); }
 });
