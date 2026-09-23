@@ -35,3 +35,15 @@ test('ProcessManager force termination handles a child process tree', async () =
     assert.equal(isProcessAlive(grandchildPid), false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('ProcessManager parses READY markers across stdout chunks and lines', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-process-ready-'));
+  try {
+    const manager = new ProcessManager(resolveRuntimePaths({ CONTENTOS_APP_ROOT: root, CONTENTOS_RUNTIME_ROOT: join(root, 'runtime') }));
+    const script = "process.stdout.write('normal log\\n{\\\"sta'); setTimeout(()=>{process.stdout.write('tus\\\":\\\"READY\\\",\\\"workerId\\\":\\\"test\\\"}\\n{\\\"status\\\":\\\"READY\\\"}\\n');},25); setInterval(()=>{},1000);";
+    await manager.start('ready', process.execPath, ['-e', script]);
+    for (let attempt = 0; attempt < 30 && !manager.isReady('ready'); attempt += 1) await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    assert.equal(manager.isReady('ready'), true);
+    await manager.stop('ready', 1_000);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

@@ -14,16 +14,17 @@ export interface ProcessExit { code: number | null; signal: NodeJS.Signals | nul
 export class ProcessManager {
   private readonly processes = new Map<string, ManagedProcess>();
   private readonly ready = new Set<string>();
+  private readonly stdoutBuffers = new Map<string, string>();
   constructor(private readonly paths: RuntimePaths) {}
   async start(id: string, command: string, args: string[], env: Record<string, string> = {}): Promise<ManagedProcess> {
     const existing = this.processes.get(id);
     if (existing && existing.child.exitCode === null && existing.child.signalCode === null) throw Object.assign(new Error(`PROCESS_ALREADY_RUNNING:${id}`), { code: 'PROCESS_ALREADY_RUNNING', serviceId: id });
     if (existing) this.processes.delete(id);
     await mkdir(this.paths.logsRoot, { recursive: true }); const logPath = join(this.paths.logsRoot, `${id}.log`); const child = spawn(command, args, { cwd: this.paths.appRoot, env: { ...process.env, ...env }, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
-    const managed: ManagedProcess = { id, ...(child.pid ? { pid: child.pid } : {}), child, startedAt: new Date().toISOString() }; this.processes.set(id, managed);
+    const managed: ManagedProcess = { id, ...(child.pid ? { pid: child.pid } : {}), child, startedAt: new Date().toISOString() }; this.processes.set(id, managed); this.stdoutBuffers.set(id, '');
     const write = (chunk: Buffer, level: string) => { void appendFile(logPath, `${new Date().toISOString()} ${level} ${chunk.toString()}`, 'utf8').catch((error) => { try { process.stderr.write(`[runtime-log:${id}] ${error instanceof Error ? error.message : String(error)}\n`); } catch { /* stderr is best effort */ } }); };
-    child.stdout?.on('data', (chunk: Buffer) => { if (chunk.toString().includes('"status":"READY"')) this.ready.add(id); write(chunk, 'INFO'); }); child.stderr?.on('data', (chunk: Buffer) => write(chunk, 'ERROR'));
-    child.once('exit', () => { this.ready.delete(id); if (this.processes.get(id)?.child === child) this.processes.delete(id); });
+    child.stdout?.on('data', (chunk: Buffer) => { const text = chunk.toString(); let buffer = `${this.stdoutBuffers.get(id) || ''}${text}`; if (buffer.length > 65_536) buffer = buffer.slice(-65_536); const lines = buffer.split(/\n/u); this.stdoutBuffers.set(id, lines.pop() || ''); for (const line of lines) { try { const payload = JSON.parse(line.trim()) as { status?: unknown }; if (payload.status === 'READY') this.ready.add(id); } catch { /* ordinary worker logs are not readiness messages */ } } write(chunk, 'INFO'); }); child.stderr?.on('data', (chunk: Buffer) => write(chunk, 'ERROR'));
+    child.once('exit', () => { this.ready.delete(id); this.stdoutBuffers.delete(id); if (this.processes.get(id)?.child === child) this.processes.delete(id); });
     return managed;
   }
   get(id: string): ManagedProcess | undefined { return this.processes.get(id); }
@@ -37,7 +38,7 @@ export class ProcessManager {
   }
   async stop(id: string, timeoutMs = 10_000): Promise<ProcessExit | undefined> {
     const managed = this.processes.get(id); if (!managed) return undefined; const child = managed.child; const pid = managed.pid;
-    if (child.exitCode !== null || child.signalCode) { this.ready.delete(id); this.processes.delete(id); return { code: child.exitCode, signal: child.signalCode }; }
+    if (child.exitCode !== null || child.signalCode) { this.ready.delete(id); this.stdoutBuffers.delete(id); this.processes.delete(id); return { code: child.exitCode, signal: child.signalCode }; }
     let exited = false; let forced = false;
     if (process.platform === 'win32') {
       // Windows has no reliable signal-based process-group semantics. Kill the
