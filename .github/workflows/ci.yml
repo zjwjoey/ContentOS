@@ -83,15 +83,17 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Migrations
         run: pnpm test:migrations 2>&1 | tee migrations-output.log
-      - name: Runtime Startup V1 gate
+      - name: Runtime unit gate
+        run: |
+          pnpm build
+          pnpm test:runtime
+      - name: Runtime integration gate
         env:
           CONTENTOS_RUNTIME_INTEGRATION: '1'
           CONTENTOS_RUNTIME_CONTROL_PORT: '3299'
           PORT: '3200'
           WEB_PORT: '3201'
-        run: |
-          pnpm test:runtime
-          pnpm test:runtime:integration
+        run: pnpm test:runtime:integration
       - name: Full test suite
         run: |
           set +e
@@ -196,9 +198,12 @@ jobs:
         with:
           version: ${{ env.PNPM_VERSION }}
       - run: pnpm install --frozen-lockfile
+      - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test:runtime
+      - name: Windows runtime lifecycle integration
+        run: pnpm exec tsx --test tests/integration/runtime-lifecycle-windows.test.ts
 
   build:
     name: Build
