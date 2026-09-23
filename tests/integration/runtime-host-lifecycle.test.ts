@@ -42,6 +42,86 @@ test('startup Doctor failure removes state, lock and failure-owned resources', a
   try { await assert.rejects(() => host.start(), (error: unknown) => (error as { code?: string }).code === 'CORE_STARTUP_FAILED'); const store = new RuntimeStateStore(resolveRuntimePaths({ CONTENTOS_APP_ROOT: process.cwd(), CONTENTOS_RUNTIME_ROOT: join(root, 'runtime') })); assert.equal(await store.read(), null); assert.equal(await store.readLock(), null); assert.equal(await isPortOpen(port), false); await access(join(root, 'runtime', 'startup-reports', `${host.instanceId}.failed.json`)); } finally { await host.stop('test').catch(() => undefined); await rm(root, { recursive: true, force: true }); }
 });
 
+test('startup cancellation by stop has one teardown owner across 10 acquired-lock races', async () => {
+  for (let iteration = 0; iteration < 10; iteration += 1) {
+    const root = await mkdtemp(join(tmpdir(), `contentos-start-stop-doctor-${iteration}-`));
+    const port = 3701 + iteration;
+    let doctorEntered!: () => void;
+    let releaseDoctor!: () => void;
+    const entered = new Promise<void>((resolveEntered) => { doctorEntered = resolveEntered; });
+    const gate = new Promise<void>((resolveGate) => { releaseDoctor = resolveGate; });
+    const blockingDoctor = async (): Promise<DoctorReport> => {
+      doctorEntered();
+      await gate;
+      return doctor;
+    };
+    const host = new RuntimeHost({ ...hostOptions(root, port, definition('setInterval(()=>{},1000);')), doctor: blockingDoctor });
+    try {
+      const starting = host.start();
+      await entered;
+      assert.equal((await host.store.read())?.state, 'STARTING');
+      const lock = await host.store.readLock();
+      assert.equal(lock?.instanceId, host.instanceId);
+      assert.equal(lock?.hostPid, process.pid);
+
+      const stopping = host.stop(`startup-doctor-race-${iteration}`);
+      releaseDoctor();
+      const [startResult, stopResult] = await Promise.allSettled([starting, stopping]);
+      assert.equal(startResult.status, 'rejected');
+      assert.equal((startResult as PromiseRejectedResult).reason?.code, 'RUNTIME_START_CANCELLED');
+      assert.equal(stopResult.status, 'fulfilled');
+      assert.equal((stopResult as PromiseFulfilledResult<{ ok: boolean }>).value.ok, true);
+
+      await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+      assert.equal(await host.store.read(), null);
+      assert.equal(await host.store.readLock(), null);
+      assert.equal(await isPortOpen(port), false);
+      assert.equal(host.status().services.every((service) => !service.pid || !isProcessAlive(service.pid)), true);
+    } finally {
+      releaseDoctor();
+      await host.stop('test').catch(() => undefined);
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('stop during blocked service readiness owns teardown and kills the started child', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'contentos-start-stop-readiness-'));
+  const port = 3711;
+  let healthEntered!: () => void;
+  let releaseHealth!: () => void;
+  const entered = new Promise<void>((resolveEntered) => { healthEntered = resolveEntered; });
+  const gate = new Promise<void>((resolveGate) => { releaseHealth = resolveGate; });
+  const service = definition('setInterval(()=>{},1000);', { healthCheck: async () => { healthEntered(); await gate; return { state: 'READY' as const }; } });
+  const host = new RuntimeHost(hostOptions(root, port, service));
+  try {
+    const starting = host.start();
+    await entered;
+    assert.equal((await host.store.read())?.state, 'STARTING');
+    const pid = host.status().services[0]?.pid;
+    assert.ok(pid);
+    assert.equal(isProcessAlive(pid), true);
+
+    const stopping = host.stop('startup-readiness-race');
+    releaseHealth();
+    const [startResult, stopResult] = await Promise.allSettled([starting, stopping]);
+    assert.equal(startResult.status, 'rejected');
+    assert.equal((startResult as PromiseRejectedResult).reason?.code, 'RUNTIME_START_CANCELLED');
+    assert.equal(stopResult.status, 'fulfilled');
+    assert.equal((stopResult as PromiseFulfilledResult<{ ok: boolean }>).value.ok, true);
+
+    await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+    assert.equal(await host.store.read(), null);
+    assert.equal(await host.store.readLock(), null);
+    assert.equal(await isPortOpen(port), false);
+    assert.equal(isProcessAlive(pid), false);
+  } finally {
+    releaseHealth();
+    await host.stop('test').catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('control port conflict fails before lock/state acquisition', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-control-conflict-')); const port = 3651; const server = createServer((_request, response) => response.end('{}')); await new Promise<void>((resolveListen) => server.listen(port, '127.0.0.1', resolveListen)); const host = new RuntimeHost(hostOptions(root, port, definition('setInterval(()=>{},1000);')));
   try { await assert.rejects(() => host.start(), (error: unknown) => (error as { code?: string }).code === 'RUNTIME_CONTROL_PORT_CONFLICT'); const store = new RuntimeStateStore(resolveRuntimePaths({ CONTENTOS_APP_ROOT: process.cwd(), CONTENTOS_RUNTIME_ROOT: join(root, 'runtime') })); assert.equal(await store.read(), null); assert.equal(await store.readLock(), null); } finally { server.closeAllConnections?.(); await new Promise<void>((resolveClose) => server.close(() => resolveClose())); await host.stop('test').catch(() => undefined); await rm(root, { recursive: true, force: true }); }

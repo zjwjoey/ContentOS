@@ -208,7 +208,19 @@ export class RuntimeHost {
       this.monitor.unref();
       return this.status();
     } catch (error) {
-      if (acquired) { await this.writeFailureReport(error, doctor, Date.now() - started); await this.cleanupStartupFailure(); }
+      const cancelledByStop = () => this.stopping && generation !== this.lifecycleGeneration;
+      if (cancelledByStop()) {
+        throw (error as { code?: string }).code === 'RUNTIME_START_CANCELLED'
+          ? error
+          : Object.assign(new Error('Runtime startup was cancelled by stop'), { code: 'RUNTIME_START_CANCELLED' });
+      }
+      if (acquired) {
+        await this.writeFailureReport(error, doctor, Date.now() - started);
+        // stop() may claim teardown ownership while the failure report is being written.
+        // In that case stopInternal is waiting for this startTask and must do the only teardown.
+        if (cancelledByStop()) throw Object.assign(new Error('Runtime startup was cancelled by stop'), { code: 'RUNTIME_START_CANCELLED' });
+        await this.cleanupStartupFailure();
+      }
       throw error;
     }
   }
