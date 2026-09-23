@@ -54,5 +54,14 @@ ports) is resolved once and propagated to every child. Optional services may be 
 blocking readiness; required services must be healthy and ready. Worker readiness is emitted as a
 `{"status":"READY"}` stdout marker and health failures are bounded by the Supervisor budget.
 
+For `PACKAGED`, keep the repository-relative runtime layout intact: the application root must
+contain `package.json`, the compiled host at `dist/apps/runtime-host/src/main.js`, and compiled
+service entries beneath `dist/`. Install the production Node dependencies beside that root, and
+retain `apps/web/node_modules/next/dist/bin/next` plus the production Next build output in
+`apps/web/.next`; the web service runs `next start` from `apps/web`. The host launcher checks that
+its compiled entry exists before spawning Node. `PACKAGED` removes the `tsx`/source-runner and
+`pnpm` startup dependency, but it is not a self-contained single-file installer: Node and the
+runtime dependencies, including Next.js, must be present in the deployment layout.
+
 The runtime gate is covered by `pnpm test:runtime` and `pnpm test:runtime:integration`; CI also
 runs the same gate on `windows-latest`.
