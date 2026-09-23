@@ -15,7 +15,7 @@ test('runtime host starts real core services, reports readiness, and shuts down'
   const env = { ...process.env, CONTENTOS_APP_ROOT: appRoot, CONTENTOS_RUNTIME_ROOT: runtimeRoot, STORAGE_ROOT: resolve(appRoot, 'storage', 'local'), DATABASE_URL: process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55433/contentos_operator_dev', PORT: '3200', WEB_PORT: '3201', CONTENTOS_RUNTIME_CONTROL_PORT: '3299' };
   const store = new RuntimeStateStore(resolveRuntimePaths(env));
   await store.write({ instanceId: 'stale', hostPid: 999999, startedAt: new Date().toISOString(), controlPort: 3299, controlToken: 'stale-token', state: 'STARTING', services: [], warnings: [] });
-  await store.acquire({ instanceId: 'stale', hostPid: 999999 });
+  await store.acquire({ instanceId: 'stale', hostPid: 999999, controlPort: 3299 });
   const host = new RuntimeHost({ env, safeMode: true });
   try {
     const status = await host.start();
