@@ -110,6 +110,15 @@ export class PostgresRuntimeManager {
     } catch { return undefined; }
   }
 
+  private async waitForPort(timeoutMs = this.startupTimeoutMs): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await isPortOpen(this.options.port, this.host)) return true;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    }
+    return isPortOpen(this.options.port, this.host);
+  }
+
   private async clearStalePid(): Promise<void> {
     const pid = await this.pid();
     if (pid && isProcessAlive(pid)) throw Object.assign(new Error(`PostgreSQL cluster is already running (pid ${pid})`), { code: 'POSTGRES_ALREADY_RUNNING', pid });
@@ -160,17 +169,15 @@ export class PostgresRuntimeManager {
     await this.initialize();
     const existingPid = await this.pid();
     if (existingPid && isProcessAlive(existingPid)) {
-      if (await isPortOpen(this.options.port, this.host)) return { dataRoot: this.options.dataRoot, resourceRoot: this.paths.root, port: this.options.port, user: this.options.user, database: this.options.database, version: await this.version(), pid: existingPid };
-      throw Object.assign(new Error(`PostgreSQL process ${existingPid} is alive but not accepting connections`), { code: 'POSTGRES_START_FAILED', pid: existingPid });
+      if (await this.waitForPort()) return { dataRoot: this.options.dataRoot, resourceRoot: this.paths.root, port: this.options.port, user: this.options.user, database: this.options.database, version: await this.version(), pid: existingPid };
+      // A crash can leave postmaster alive while it is still unwinding or
+      // before it has rebound its port. Give pg_ctl a chance to stop it, then
+      // clear only this cluster's stale PID and start the private instance.
+      await this.stop();
     }
     if (existingPid || await isPortOpen(this.options.port, this.host)) await this.clearStalePid();
     await this.runDetached(this.paths.pgCtl, ['-D', await this.nativePath(this.options.dataRoot), '-o', `-p ${this.options.port} -h ${this.host}`, '-w', 'start'], this.startupTimeoutMs);
-    const deadline = Date.now() + this.startupTimeoutMs;
-    while (Date.now() < deadline) {
-      if (await isPortOpen(this.options.port, this.host)) break;
-      await new Promise((resolveWait) => setTimeout(resolveWait, 150));
-    }
-    if (!(await isPortOpen(this.options.port, this.host))) throw Object.assign(new Error(`PostgreSQL did not open port ${this.options.port}`), { code: 'POSTGRES_START_FAILED', port: this.options.port });
+    if (!(await this.waitForPort())) throw Object.assign(new Error(`PostgreSQL did not open port ${this.options.port}`), { code: 'POSTGRES_START_FAILED', port: this.options.port });
     await this.ensureDatabase();
     const version = await this.version();
     const pid = await this.pid();

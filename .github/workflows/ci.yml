@@ -232,6 +232,10 @@ jobs:
         run: pnpm desktop:smoke
       - name: Installer runtime smoke
         run: pnpm desktop:installer-smoke
+      - name: Clean Windows project and render acceptance
+        env:
+          CONTENTOS_ACCEPTANCE_INSTALLER: artifacts/desktop/ContentOS Setup.exe
+        run: pnpm desktop:clean-acceptance
       - name: Upload Windows desktop artifacts
         uses: actions/upload-artifact@v4
         with:
