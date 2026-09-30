@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join, resolve } from 'node:path';
@@ -51,6 +51,19 @@ async function removeSmokeRoot(): Promise<void> {
     catch (error) { if ((error as { code?: string }).code !== 'EBUSY' && (error as { code?: string }).code !== 'EPERM') throw error; await new Promise((resolveWait) => setTimeout(resolveWait, 500)); }
   }
 }
+async function readSmokeDiagnostics(): Promise<Record<string, string>> {
+  const diagnostics: Record<string, string> = {};
+  for (const directory of [join(userData, 'logs'), join(userData, 'runtime', 'startup-reports')]) {
+    try {
+      for (const name of await readdir(directory)) {
+        if (!name.endsWith('.log') && !name.endsWith('.json')) continue;
+        const file = join(directory, name);
+        diagnostics[file] = (await readFile(file, 'utf8')).slice(-8000);
+      }
+    } catch { /* diagnostics are best effort */ }
+  }
+  return diagnostics;
+}
 
 try {
   child = spawn(executable, [`--user-data-dir=${userData}`], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, CONTENTOS_USER_DATA_ROOT: userData, ...(resourceRoot ? { CONTENTOS_RESOURCES_ROOT: resolve(resourceRoot) } : {}) } });
@@ -70,6 +83,7 @@ try {
   const smokeChild = child;
   await killTree(smokeChild);
   if (smokeChild && smokeChild.exitCode !== 0 && (childStdout || childStderr)) console.error(JSON.stringify({ childExitCode: smokeChild.exitCode, childStdout, childStderr }));
+  if (smokeChild?.exitCode !== 0) console.error(JSON.stringify({ runtimeDiagnostics: await readSmokeDiagnostics() }));
   if (process.env.CONTENTOS_KEEP_SMOKE_ROOT !== '1') await removeSmokeRoot();
   else console.error(`packaged smoke root preserved at ${root}`);
 }
