@@ -86,6 +86,19 @@ export class MediaIntelligenceService {
 
   async markCancelled(runId: string, error = { code: 'MEDIA_ANALYSIS_CANCELLED', message: 'Media analysis cancelled' }): Promise<void> { await this.db.query("update media_analysis_runs set status='CANCELLED', error=$2, finished_at=coalesce(finished_at,now()) where id=$1 and status not in ('SUCCEEDED','FAILED','STALE')", [runId, error]); }
 
+  async reconcileStaleRuns(): Promise<number> {
+    const result = await this.db.query(`update media_analysis_runs r
+      set status = case when j.state='CANCELLED' then 'CANCELLED' when j.state='FAILED' then 'FAILED' else 'QUEUED' end,
+          error = case when j.state='CANCELLED' then '{"code":"MEDIA_ANALYSIS_JOB_CANCELLED","message":"Media analysis job was cancelled"}'::jsonb
+                       when j.state='FAILED' then '{"code":"MEDIA_ANALYSIS_JOB_FAILED","message":"Media analysis job failed or its lease expired"}'::jsonb
+                       else '{"code":"MEDIA_ANALYSIS_JOB_REQUEUED","message":"Media analysis job was requeued after lease reconciliation"}'::jsonb end,
+          finished_at = case when j.state in ('FAILED','CANCELLED') then coalesce(r.finished_at, now()) else null end
+      from jobs j
+      where r.job_id=j.id and j.type=$1 and r.status='RUNNING' and j.state in ('QUEUED','RETRY_WAIT','FAILED','CANCELLED')
+      returning r.id`, [MEDIA_ANALYSIS]);
+    return result.rowCount || 0;
+  }
+
   async analyzeRun(runId: string, signal?: AbortSignal): Promise<MediaAnalysisRunV1> {
     const selected = await this.db.query('select r.*, a.metadata, a.storage_key, a.checksum from media_analysis_runs r join assets a on a.id = r.asset_id where r.id = $1', [runId]);
     const row = selected.rows[0] as RunRow | undefined;

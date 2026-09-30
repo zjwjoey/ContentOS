@@ -14,6 +14,7 @@ draft_content.json.dec.json
 !.env.example
 storage/local/*
 !storage/local/.gitkeep
+storage/thumbnails/
 storage/postgres-data/
 research/repos/
 *.log
