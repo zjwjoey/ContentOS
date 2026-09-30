@@ -120,7 +120,7 @@ Candidate Replacement 保留 Plan 与 Candidate 行级 `FOR UPDATE` 和 Manifest
 
 - Branch: `feature/contentos-intelligent-editing-v15`
 - Before SHA: `51b47f6ec00e431b61eda30728aad27910da9422`
-- Final SHA (branch): `3d7613b` (`docs(intelligence): record transaction closure push`)
+- Final SHA (implementation): `a67b9f3` (`fix(intelligence): close repeated replacement and plan transactions`)
 - Implementation SHA: `a67b9f3` (`fix(intelligence): close repeated replacement and plan transactions`)
 - New Commits: `a67b9f3`, `50b5ae4`
 - New Migrations: none in this round; latest Intelligence migration remains `0052_intelligent_editing_final_closure`
@@ -162,4 +162,4 @@ Candidate Replacement 保留 Plan 与 Candidate 行级 `FOR UPDATE` 和 Manifest
 - Known Limitations: real ASR endpoint still needs user configuration; Qwen Vision/Embedding adapters are configurable but real remote calls are not independently verified; Remote CI is not configured in this repository
 - Remote CI Status: `NOT CONFIGURED`
 - Final Verdict: `READY`
-- Remote Push Status: `PASS` — `origin/feature/contentos-intelligent-editing-v15` verified at `3d7613bc02232adef1209f19b0a228fbbefe992b` after direct push.
+- Remote Push Status: `PASS` — direct push verified; branch contains implementation `a67b9f3`, test closure `50b5ae4`, and the acceptance metadata commits.
