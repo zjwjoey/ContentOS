@@ -42,8 +42,8 @@ const env: Record<string, string | undefined> = {
   CONTENTOS_BUILD_TIMESTAMP: process.env.CONTENTOS_BUILD_TIMESTAMP || manifestString('generatedAt'),
   CONTENTOS_FFMPEG_VERSION: process.env.CONTENTOS_FFMPEG_VERSION || manifestValue('ffmpeg', 'version'),
   CONTENTOS_POSTGRES_VERSION: process.env.CONTENTOS_POSTGRES_VERSION || manifestValue('postgres', 'version'),
-  FFMPEG_PATH: process.env.FFMPEG_PATH || (isPackaged ? bundledFfmpegPath : (process.platform === 'win32' ? resolve(appRoot, 'node_modules', 'ffmpeg-static', 'ffmpeg.exe') : 'ffmpeg')),
-  FFPROBE_PATH: process.env.FFPROBE_PATH || (isPackaged ? bundledFfprobePath : (process.platform === 'win32' ? resolve(appRoot, 'node_modules', 'ffprobe-static', 'bin', 'win32', 'x64', 'ffprobe.exe') : 'ffprobe')),
+  FFMPEG_PATH: isPackaged ? bundledFfmpegPath : (process.env.FFMPEG_PATH || (process.platform === 'win32' ? resolve(appRoot, 'node_modules', 'ffmpeg-static', 'ffmpeg.exe') : 'ffmpeg')),
+  FFPROBE_PATH: isPackaged ? bundledFfprobePath : (process.env.FFPROBE_PATH || (process.platform === 'win32' ? resolve(appRoot, 'node_modules', 'ffprobe-static', 'bin', 'win32', 'x64', 'ffprobe.exe') : 'ffprobe')),
 };
 const runtime = new DesktopRuntimeManager(env);
 let windowRef: BrowserWindow | undefined;
