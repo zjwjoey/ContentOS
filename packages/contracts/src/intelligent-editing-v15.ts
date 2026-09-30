@@ -147,8 +147,37 @@ export interface IntelligentEditPlanV1 {
   createdAt: string;
 }
 
+export interface IntelligentEditPresetV1 {
+  schemaVersion: 'INTELLIGENT_EDIT_PRESET_V1';
+  id: string;
+  projectId: string | null;
+  name: string;
+  config: IntelligentPlannerConfigV1;
+  enabled: boolean;
+  createdAt: string;
+}
+
+export interface IntelligentEditRecommendationV1 {
+  schemaVersion: 'INTELLIGENT_EDIT_RECOMMENDATION_V1';
+  id: string;
+  projectId: string;
+  planId: string;
+  presetId: string | null;
+  profile: string;
+  confidence: number;
+  alternatives: string[];
+  limitations: string[];
+  evidence: Record<string, unknown>;
+  status: 'PROPOSED' | 'ACCEPTED' | 'DISMISSED';
+  createdAt: string;
+}
+
 export function validateIntelligentPlannerConfigV1(value: IntelligentPlannerConfigV1): void {
   if (value.schemaVersion !== 'INTELLIGENT_PLANNER_CONFIG_V1' || !nonEmpty(value.version) || !Number.isInteger(value.targetDurationMs) || value.targetDurationMs <= 0 || !Number.isInteger(value.minClipDurationMs) || value.minClipDurationMs <= 0 || !Number.isInteger(value.maxClipDurationMs) || value.maxClipDurationMs < value.minClipDurationMs || !Number.isInteger(value.maxAssetReuse) || value.maxAssetReuse <= 0 || value.diversityWeight < 0 || value.diversityWeight > 1) throw new Error('Invalid intelligent planner config');
+}
+
+export function validateIntelligentEditRecommendationV1(value: IntelligentEditRecommendationV1): void {
+  if (value.schemaVersion !== 'INTELLIGENT_EDIT_RECOMMENDATION_V1' || !nonEmpty(value.id) || !nonEmpty(value.projectId) || !nonEmpty(value.planId) || !nonEmpty(value.profile) || value.confidence < 0 || value.confidence > 1 || !['PROPOSED', 'ACCEPTED', 'DISMISSED'].includes(value.status)) throw new Error('Invalid intelligent edit recommendation');
 }
 
 function nonEmpty(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0; }

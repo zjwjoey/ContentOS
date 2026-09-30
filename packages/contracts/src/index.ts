@@ -50,6 +50,7 @@ export {
   validateMediaAnalysisShotV1,
   validateTechnicalMediaAnalysisV1,
   validateIntelligentPlannerConfigV1,
+  validateIntelligentEditRecommendationV1,
 } from './intelligent-editing-v15.js';
 export type {
   MediaAnalysisAsrSegmentV1,
@@ -67,4 +68,6 @@ export type {
   IntelligentEditPlanV1,
   IntelligentEditQualityV1,
   IntelligentPlannerConfigV1,
+  IntelligentEditPresetV1,
+  IntelligentEditRecommendationV1,
 } from './intelligent-editing-v15.js';

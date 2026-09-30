@@ -49,6 +49,8 @@ import { registerIntelligentEditingRoutes } from './intelligent-editing-routes.j
 import { MediaIntelligenceService, createFakeIntelligenceProviders } from '../../../packages/modules/intelligence/src/index.js';
 import { IntelligentPlanningService } from '../../../packages/modules/intelligence/src/index.js';
 import { registerIntelligentPlanningRoutes } from './intelligent-planning-routes.js';
+import { IntelligentDecisionService } from '../../../packages/modules/intelligence/src/index.js';
+import { registerIntelligentDecisionRoutes } from './intelligent-decision-routes.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -78,6 +80,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const jobs = new JobService(db);
   const intelligence = runtime.intelligence || new MediaIntelligenceService(db, createFakeIntelligenceProviders());
   const planning = new IntelligentPlanningService(db);
+  const decisions = new IntelligentDecisionService(db);
   const benchmark = new BenchmarkService(db, jobs);
   const assets = new AssetCatalogService(db);
   const digitalHuman = new DigitalHumanService(db, jobs, assets);
@@ -106,6 +109,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerProductionRunRoutes(app, { db, projects, productionRuns, editing: new ScriptEditingV3Service(db), jobs, video, approvals, publisher, digitalHuman });
   registerIntelligentEditingRoutes(app, { projects, jobs, intelligence });
   registerIntelligentPlanningRoutes(app, { projects, planning });
+  registerIntelligentDecisionRoutes(app, { projects, decisions });
   registerEditingWorkbenchRoutes(app, { db, localMedia, localPathAccess, quickEdit, video, jobs, assets, assetService, storage, maxUploadBytes: uploadMaxBytes, presets });
   registerScriptEditingV2Routes(app, { db, jobs, localPathAccess, video, assets, presets, storage });
   registerScriptEditingV3Routes(app, { db, jobs, video, assets: assetService, localMedia, localPathAccess, storage });
