@@ -70,7 +70,7 @@ export class PostgresRuntimeManager {
   }
 
   private async nativePath(file: string): Promise<string> {
-    if (process.platform !== 'win32' || !file.includes('\\')) return file;
+    if (process.platform !== 'win32' || !file.includes('\\') || /^[\x00-\x7F]*$/u.test(file)) return file;
     try {
       const command = `for %I in ("${file.replaceAll('"', '""')}") do @echo %~sI`;
       const result = await execFileAsync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', command], { timeout: 5_000, windowsHide: true, windowsVerbatimArguments: true, env: process.env });

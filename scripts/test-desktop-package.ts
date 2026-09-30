@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join, resolve } from 'node:path';
@@ -13,9 +13,12 @@ const executable = resolve(process.env.CONTENTOS_SMOKE_EXECUTABLE || 'artifacts/
 await access(executable);
 const root = await mkdtemp(join(tmpdir(), 'contentos-desktop-package-smoke-'));
 const userData = join(root, 'user-data');
+await mkdir(userData, { recursive: true });
 const statePath = join(userData, 'runtime', 'state', 'runtime.json');
 const resourceRoot = process.env.CONTENTOS_SMOKE_RESOURCES_ROOT;
 let child: ChildProcess | undefined;
+let childStdout = '';
+let childStderr = '';
 
 async function readState(): Promise<SmokeState | undefined> {
   try { return JSON.parse(await readFile(statePath, 'utf8')) as SmokeState; } catch { return undefined; }
@@ -50,7 +53,9 @@ async function removeSmokeRoot(): Promise<void> {
 }
 
 try {
-  child = spawn(executable, [`--user-data-dir=${userData}`], { stdio: 'ignore', windowsHide: true, env: { ...process.env, ...(resourceRoot ? { CONTENTOS_RESOURCES_ROOT: resolve(resourceRoot) } : {}) } });
+  child = spawn(executable, [`--user-data-dir=${userData}`], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, CONTENTOS_USER_DATA_ROOT: userData, ...(resourceRoot ? { CONTENTOS_RESOURCES_ROOT: resolve(resourceRoot) } : {}) } });
+  child.stdout?.on('data', (chunk: Buffer) => { childStdout += chunk.toString(); });
+  child.stderr?.on('data', (chunk: Buffer) => { childStderr += chunk.toString(); });
   const readyState = await waitFor(readState, (value) => value.state === 'READY' || value.state === 'READY_WITH_WARNINGS');
   const response = await fetch(`http://127.0.0.1:${readyState.controlPort}/runtime/status`);
   if (!response.ok) throw new Error(`runtime status returned HTTP ${response.status}`);
@@ -62,6 +67,9 @@ try {
   await waitForStateRemoval();
   console.log(JSON.stringify({ ok: true, executable, state: readyState.state, launchMode: status.launchMode, databaseMode: status.databaseMode, runtimeVersion: status.runtimeVersion, postgresVersion: status.postgresVersion, ffmpegVersion: status.ffmpegVersion, buildTimestamp: status.buildTimestamp, services: serviceStates, ports: status.services.filter((service) => service.port).map((service) => `${service.id}:${service.port}`) }));
 } finally {
-  await killTree(child);
-  await removeSmokeRoot();
+  const smokeChild = child;
+  await killTree(smokeChild);
+  if (smokeChild && smokeChild.exitCode !== 0 && (childStdout || childStderr)) console.error(JSON.stringify({ childExitCode: smokeChild.exitCode, childStdout, childStderr }));
+  if (process.env.CONTENTOS_KEEP_SMOKE_ROOT !== '1') await removeSmokeRoot();
+  else console.error(`packaged smoke root preserved at ${root}`);
 }
