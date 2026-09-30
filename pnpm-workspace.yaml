@@ -5,3 +5,8 @@ packages:
   - packages/modules/*
 minimumReleaseAgeExclude:
   - electron@44.5.0
+onlyBuiltDependencies:
+  - '@embedded-postgres/windows-x64'
+  - electron-winstaller
+  - esbuild
+  - ffmpeg-static
