@@ -31,6 +31,7 @@
 - `cb5ba8a` — `feat(intelligence): wire render and configurable AI adapters`
 - `f05a0a8` — `fix(intelligence): finalize v1.5 closure recovery and wiring`
 - `182709c` — `test(intelligence): add cancellation gold and browser closure gates`
+- `05defd8` — `docs(intelligence): finalize closure evidence`
 
 ## 3. Database migrations
 
@@ -103,4 +104,4 @@
 - Web Changes: intelligence page displays analysis status, shots/keyframes, search scores, planner candidates, alternatives, manifest/render references and quality evidence; Web production build passed
 - Tests: V1.5 14/14; browser vertical slice 1/1; full regression 287/288 with one pre-existing publisher migration-boundary failure; production pipeline 12/12; migration matrix 9/9; typecheck/build/format/lint/Web build passed
 - Known Limitations: real ASR endpoint still needs user configuration; one unrelated existing publisher migration test is not green when the full suite shares one schema
-- Remote Push Status: PASS — `origin/feature/contentos-intelligent-editing-v15` equals `182709c9ca2e2f4ea007a5375ccf9213fda3f19a`
+- Remote Push Status: PASS — implementation commit `182709c9ca2e2f4ea007a5375ccf9213fda3f19a` and handoff documentation commit `05defd8c3aeafad8369c7d20f2a1860d8794235a` were pushed; final branch verification is recorded in the handoff.
