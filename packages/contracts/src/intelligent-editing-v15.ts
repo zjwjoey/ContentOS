@@ -106,6 +106,51 @@ export interface MediaAnalysisSearchResultV1 {
   tags: string[];
 }
 
+export interface IntelligentPlannerConfigV1 {
+  schemaVersion: 'INTELLIGENT_PLANNER_CONFIG_V1';
+  version: string;
+  targetDurationMs: number;
+  minClipDurationMs: number;
+  maxClipDurationMs: number;
+  maxAssetReuse: number;
+  diversityWeight: number;
+}
+
+export interface IntelligentEditCandidateV1 {
+  id: string;
+  sentenceId: string;
+  assetId: string;
+  shotId: string | null;
+  score: number;
+  selected: boolean;
+  reasons: string[];
+  features: { semantic: number; duration: number; quality: number; diversity: number; repetition: number };
+}
+
+export interface IntelligentEditQualityV1 {
+  coverage: number;
+  distinctAssetCount: number;
+  repeatedAssetRatio: number;
+  adjacentDuplicateCount: number;
+  passed: boolean;
+  issues: string[];
+}
+
+export interface IntelligentEditPlanV1 {
+  schemaVersion: 'INTELLIGENT_EDIT_PLAN_V1';
+  id: string;
+  projectId: string;
+  config: IntelligentPlannerConfigV1;
+  manifest: import('./edit-manifest.js').EditManifestV0;
+  candidates: IntelligentEditCandidateV1[];
+  quality: IntelligentEditQualityV1;
+  createdAt: string;
+}
+
+export function validateIntelligentPlannerConfigV1(value: IntelligentPlannerConfigV1): void {
+  if (value.schemaVersion !== 'INTELLIGENT_PLANNER_CONFIG_V1' || !nonEmpty(value.version) || !Number.isInteger(value.targetDurationMs) || value.targetDurationMs <= 0 || !Number.isInteger(value.minClipDurationMs) || value.minClipDurationMs <= 0 || !Number.isInteger(value.maxClipDurationMs) || value.maxClipDurationMs < value.minClipDurationMs || !Number.isInteger(value.maxAssetReuse) || value.maxAssetReuse <= 0 || value.diversityWeight < 0 || value.diversityWeight > 1) throw new Error('Invalid intelligent planner config');
+}
+
 function nonEmpty(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0; }
 function finiteNonNegative(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value) && value >= 0; }
 
