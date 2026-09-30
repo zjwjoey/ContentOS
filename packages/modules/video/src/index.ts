@@ -39,7 +39,7 @@ export { QwenVisualAnalysisProvider } from './visual-analysis.js';
 export type { VisualAnalysisProvider } from './visual-analysis.js';
 export { QwenVisualQueryProvider, RuleVisualQueryProvider, createVisualQueryProvider } from './visual-query.js';
 export type { VisualQueryProvider } from './visual-query.js';
-export { InMemoryMaterialSemanticIndex, QwenEmbeddingProvider } from './semantic-index.js';
+export { InMemoryMaterialSemanticIndex, QwenEmbeddingProvider, cosineSimilarity, hybridSemanticScore, semanticTokens } from './semantic-index.js';
 export type { EmbeddingProvider, MaterialSemanticIndex, MaterialSemanticSearchResult } from './semantic-index.js';
 export { VideoEditPresetService } from './preset-service.js';
 export type { VideoEditPreset, VideoEditPresetInput, PresetMode } from './preset-service.js';

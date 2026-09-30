@@ -46,9 +46,16 @@ export {
   INTELLIGENT_EDITING_V15_ANALYSIS_VERSION,
   INTELLIGENT_EDITING_V15_RUN_SCHEMA,
   validateMediaAnalysisAsrSegmentV1,
+  validateMediaAnalysisEmbeddingV1,
+  validateMediaAnalysisKeyframeV1,
   validateMediaAnalysisRunV1,
   validateMediaAnalysisShotV1,
+  validateMediaAnalysisVisionResultV1,
   validateTechnicalMediaAnalysisV1,
+  validateIntelligentEditCandidateV1,
+  validateIntelligentEditPlanV1,
+  validateIntelligentEditPresetV1,
+  validateEditingDecisionEventV1,
   validateIntelligentPlannerConfigV1,
   validateIntelligentEditRecommendationV1,
 } from './intelligent-editing-v15.js';
@@ -70,4 +77,6 @@ export type {
   IntelligentPlannerConfigV1,
   IntelligentEditPresetV1,
   IntelligentEditRecommendationV1,
+  EditingDecisionEventType,
+  EditingDecisionEventV1,
 } from './intelligent-editing-v15.js';

@@ -53,6 +53,17 @@ export async function generateRepresentativeFrames(inputPath: string, outputDire
   return frames;
 }
 
+export async function generateShotKeyframe(inputPath: string, outputPath: string, sourceInMs: number, sourceOutMs: number, ffmpegPath: string, signal?: AbortSignal): Promise<void> {
+  if (!Number.isFinite(sourceInMs) || !Number.isFinite(sourceOutMs) || sourceInMs < 0 || sourceOutMs <= sourceInMs) throw new Error('SHOT_KEYFRAME_RANGE_INVALID');
+  await mkdir(dirname(outputPath), { recursive: true });
+  const timestampMs = Math.max(sourceInMs, Math.min(sourceOutMs - 1, Math.round((sourceInMs + sourceOutMs) / 2)));
+  const tempOutput = `${outputPath}.${randomUUID()}.part.jpg`;
+  try {
+    await run(ffmpegPath, ['-y', '-ss', String(timestampMs / 1000), '-i', inputPath, '-frames:v', '1', '-vf', 'scale=640:-2:force_original_aspect_ratio=decrease', '-q:v', '4', tempOutput], signal);
+    await rename(tempOutput, outputPath);
+  } catch (error) { await rm(tempOutput, { force: true }); throw error; }
+}
+
 function run(binary: string, args: string[], signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
   const execute = (executable: string): Promise<{ stdout: string; stderr: string }> => new Promise((resolve, reject) => {
     signal?.throwIfAborted();
