@@ -42,3 +42,24 @@ export type {
 } from './digital-human.js';
 export { validateAvatarGenerationRequest, validateSpeechGenerationRequest } from './digital-human.js';
 export * from './production-run.js';
+export {
+  INTELLIGENT_EDITING_V15_ANALYSIS_VERSION,
+  INTELLIGENT_EDITING_V15_RUN_SCHEMA,
+  validateMediaAnalysisAsrSegmentV1,
+  validateMediaAnalysisRunV1,
+  validateMediaAnalysisShotV1,
+  validateTechnicalMediaAnalysisV1,
+} from './intelligent-editing-v15.js';
+export type {
+  MediaAnalysisAsrSegmentV1,
+  MediaAnalysisCapability,
+  MediaAnalysisEmbeddingV1,
+  MediaAnalysisKeyframeV1,
+  MediaAnalysisProviderMode,
+  MediaAnalysisRunStatus,
+  MediaAnalysisRunV1,
+  MediaAnalysisSearchResultV1,
+  MediaAnalysisShotV1,
+  MediaAnalysisVisionResultV1,
+  TechnicalMediaAnalysisV1,
+} from './intelligent-editing-v15.js';
