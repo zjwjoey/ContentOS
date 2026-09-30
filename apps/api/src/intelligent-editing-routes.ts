@@ -11,6 +11,7 @@ const createAnalysisInput = z.object({
   providerMode: z.enum(['FAKE', 'REAL']).optional(),
   idempotencyKey: z.string().trim().min(1).max(300).optional(),
 }).strict();
+const searchInput = z.object({ q: z.string().max(2_000).default(''), limit: z.coerce.number().int().min(1).max(100).default(20) }).strict();
 
 export function registerIntelligentEditingRoutes(app: FastifyInstance, dependencies: { projects: ProjectService; jobs: JobService; intelligence: MediaIntelligenceService }): void {
   app.post('/api/v1/projects/:projectId/intelligence/analyses', async (request, reply) => {
@@ -36,9 +37,11 @@ export function registerIntelligentEditingRoutes(app: FastifyInstance, dependenc
     try { return await dependencies.intelligence.results(params.projectId, params.runId); }
     catch (error) { const message = error instanceof Error ? error.message : 'Media analysis not found'; return reply.code(message.includes('NOT_FOUND') ? 404 : 422).send({ error: { code: message, message, details: [] } }); }
   });
-  app.get('/api/v1/projects/:projectId/intelligence/search', async (request) => {
+  app.get('/api/v1/projects/:projectId/intelligence/search', async (request, reply) => {
     const params = request.params as { projectId: string };
-    const query = request.query as { q?: string; limit?: string };
-    return { items: await dependencies.intelligence.search(params.projectId, query.q || '', Number(query.limit || 20)) };
+    if (!(await dependencies.projects.get(params.projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    const parsed = searchInput.safeParse(request.query || {});
+    if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid intelligence search query', details: parsed.error.issues } });
+    return { items: await dependencies.intelligence.search(params.projectId, parsed.data.q, parsed.data.limit) };
   });
 }

@@ -3,25 +3,18 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createDatabase } from '../../packages/database/src/client.js';
 import { ProjectService } from '../../packages/modules/project/src/index.js';
-import { IntelligentDecisionService, IntelligentPlanningService } from '../../packages/modules/intelligence/src/index.js';
+import { IntelligentDecisionService } from '../../packages/modules/intelligence/src/index.js';
 
 const databaseUrl = process.env.CONTENTOS_INTELLIGENCE_TEST_DATABASE_URL;
 
-test('intelligent decisions keep preset and recommendation evidence reviewable', { skip: !databaseUrl }, async () => {
-  const db = await createDatabase(databaseUrl!);
-  const suffix = randomUUID();
+test('decision evidence records a shot replacement and RecommendationBuilder uses it', { skip: !databaseUrl }, async () => {
+  const db = await createDatabase(databaseUrl!); const suffix = randomUUID();
   try {
-    const project = await new ProjectService(db).create(`Decision isolated ${suffix}`);
-    const assetId = `decision-asset-${suffix}`;
-    await db.query('insert into assets (id,project_id,kind,checksum,byte_size,storage_key,lifecycle,metadata) values ($1,$2,$3,$4,$5,$6,$7,$8)', [assetId, project.id, 'VIDEO', `sha256:decision-${suffix}`, 100, `objects/${assetId}.mp4`, 'READY', { durationMs: 1_000 }]);
-    await db.query('insert into project_assets(project_id,asset_id,role) values ($1,$2,$3)', [project.id, assetId, 'SOURCE']);
-    const config = { schemaVersion: 'INTELLIGENT_PLANNER_CONFIG_V1' as const, version: 'decision-v1', targetDurationMs: 1_000, minClipDurationMs: 1_000, maxClipDurationMs: 1_000, maxAssetReuse: 1, diversityWeight: .8 };
-    const plan = await new IntelligentPlanningService(db).createPlan({ projectId: project.id, assetIds: [assetId], sentences: [{ id: 's1', text: '素材', durationMs: 1_000 }], config });
-    const decisions = new IntelligentDecisionService(db);
-    const preset = await decisions.createPreset({ projectId: project.id, name: 'Decision preset', config });
-    const recommendation = await decisions.createRecommendation({ projectId: project.id, planId: plan.id, presetId: preset.id, profile: '短视频商品展示', confidence: .72, alternatives: ['更高多样性'], limitations: ['Fake provider 无真实视觉置信度'], evidence: { quality: plan.quality, plannerVersion: config.version } });
-    assert.equal(recommendation.status, 'PROPOSED');
-    assert.equal((await decisions.listPresets(project.id)).length, 1);
-    assert.equal((await decisions.listRecommendations(project.id, plan.id))[0]?.evidence.plannerVersion, config.version);
+    const project = await new ProjectService(db).create(`Decision isolated ${suffix}`); const planId = `decision-plan-${suffix}`; const candidateA = `candidate-a-${suffix}`; const candidateB = `candidate-b-${suffix}`;
+    const manifest = { schemaVersion: 'EDIT_MANIFEST_V0', projectId: project.id, seed: 1, canvas: { width: 1080, height: 1920, aspectRatio: '9:16', fps: 30 }, timeline: [{ assetId: `asset-${suffix}`, sourcePath: 'missing.mp4', sourceInMs: 0, sourceOutMs: 1_000, durationMs: 1_000, transition: 'cut' }], audio: { volume: 1 }, output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' } };
+    await db.query('insert into intelligent_edit_plans (id,project_id,status,config,source_analysis_run_ids,manifest,quality) values ($1,$2,$3,$4,$5,$6,$7)', [planId, project.id, 'READY', { schemaVersion: 'INTELLIGENT_PLANNER_CONFIG_V1', version: 'test', targetDurationMs: 1000, minClipDurationMs: 1000, maxClipDurationMs: 1000, maxAssetReuse: 1, diversityWeight: .8 }, [], manifest, { coverage: 1, repeatedAssetRatio: .9, issues: ['HIGH_ASSET_REPETITION'] }]);
+    const assetId = `asset-${suffix}`; await db.query('insert into assets (id,project_id,kind,checksum,byte_size,storage_key,lifecycle,metadata) values ($1,$2,$3,$4,$5,$6,$7,$8)', [assetId, project.id, 'VIDEO', `sha256:${suffix}`, 100, `objects/${suffix}.mp4`, 'READY', {}]);
+    await db.query('insert into intelligent_edit_candidates (id,plan_id,sentence_id,asset_id,score,selected,reasons,features) values ($1,$2,$3,$4,$5,$6,$7,$8),($9,$2,$3,$4,$10,$11,$12,$13)', [candidateA, planId, 's1', assetId, .8, true, JSON.stringify(['semantic']), JSON.stringify({ semantic: .8, duration: 1, quality: .5, diversity: 1, repetition: 1 }), candidateB, .7, false, JSON.stringify(['alternative']), JSON.stringify({ semantic: .7, duration: 1, quality: .5, diversity: 1, repetition: 1 })]);
+    const decisions = new IntelligentDecisionService(db); const event = await decisions.createDecisionEvent({ projectId: project.id, planId, sentenceId: 's1', eventType: 'SHOT_REPLACED', previousCandidateId: candidateA, nextCandidateId: candidateB, evidence: { reason: 'manual alternative selection' } }); assert.equal(event.eventType, 'SHOT_REPLACED'); const recommendation = await decisions.buildRecommendation(project.id, planId); assert.equal(recommendation.profile, 'DIVERSITY_FIRST'); assert.ok(recommendation.evidence.decisionEventCount === 1); assert.ok((await decisions.listDecisionEvents(project.id, planId)).length === 1);
   } finally { await db.end(); }
 });

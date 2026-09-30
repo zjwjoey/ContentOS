@@ -49,7 +49,7 @@ export class FakeShotDetectionProvider implements ShotDetectionProvider {
 
 export class FfmpegShotDetectionProvider implements ShotDetectionProvider {
   constructor(private readonly ffmpegPath = 'ffmpeg') {}
-  async detect(input: { sourcePath?: string; durationMs: number; signal?: AbortSignal }): Promise<Array<Pick<MediaAnalysisShotV1, 'sourceInMs' | 'sourceOutMs' | 'confidence' | 'detectionVersion'>>> {
+  async detect(input: { assetId?: string; runId?: string; sourcePath?: string; durationMs: number; signal?: AbortSignal }): Promise<Array<Pick<MediaAnalysisShotV1, 'sourceInMs' | 'sourceOutMs' | 'confidence' | 'detectionVersion'>>> {
     if (!input.sourcePath) throw Object.assign(new Error('REAL_SHOT_SOURCE_PATH_REQUIRED'), { code: 'REAL_SHOT_SOURCE_PATH_REQUIRED', retryable: false });
     const shots: DetectedShot[] = await detectShotsV1({ sourcePath: input.sourcePath, durationMs: input.durationMs, ffmpegPath: this.ffmpegPath, ...(input.signal ? { signal: input.signal } : {}) });
     return shots.map((shot) => ({ sourceInMs: shot.sourceInMs, sourceOutMs: shot.sourceOutMs, confidence: shot.confidence, detectionVersion: 'shot-detection-v1' }));
