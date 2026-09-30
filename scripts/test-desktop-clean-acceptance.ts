@@ -200,6 +200,21 @@ async function clusterCount(): Promise<number> {
   return count;
 }
 
+async function waitForNoNewProcesses(baselineContentOs: Set<string>, baselinePostgres: Set<string>, timeoutMs = 30_000): Promise<{ contentOs: string[]; postgres: string[] }> {
+  const deadline = Date.now() + timeoutMs;
+  let contentOs: string[] = [];
+  let postgres: string[] = [];
+  while (Date.now() < deadline) {
+    const currentContentOs = await processIds('ContentOS.exe');
+    const currentPostgres = await processIds('postgres.exe');
+    contentOs = [...currentContentOs].filter((pid) => !baselineContentOs.has(pid));
+    postgres = [...currentPostgres].filter((pid) => !baselinePostgres.has(pid));
+    if (contentOs.length === 0 && postgres.length === 0) return { contentOs, postgres };
+    await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+  }
+  return { contentOs, postgres };
+}
+
 let result: AcceptanceResult | undefined;
 const baselineContentOs = await processIds('ContentOS.exe');
 const baselinePostgres = await processIds('postgres.exe');
@@ -236,10 +251,7 @@ try {
     if ((await readFile(join(postgresDataRoot, 'PG_VERSION'), 'utf8')) !== pgVersion) throw new Error('PostgreSQL cluster version changed across restart');
   }
   await stopApp();
-  const currentContentOs = await processIds('ContentOS.exe');
-  const currentPostgres = await processIds('postgres.exe');
-  const newContentOs = [...currentContentOs].filter((pid) => !baselineContentOs.has(pid));
-  const newPostgres = [...currentPostgres].filter((pid) => !baselinePostgres.has(pid));
+  const { contentOs: newContentOs, postgres: newPostgres } = await waitForNoNewProcesses(baselineContentOs, baselinePostgres);
   if (newContentOs.length > 0 || newPostgres.length > 0) throw new Error(`Orphan processes remain: ContentOS.exe=${newContentOs.join(',') || 'none'}, postgres.exe=${newPostgres.join(',') || 'none'}`);
   if (await clusterCount() !== 1) throw new Error(`Expected one PostgreSQL cluster, found ${await clusterCount()}`);
   result = { projectId: first.projectId, sourceAssetId, firstOutputAssetId: first.outputAssetId, secondOutputAssetId: second.outputAssetId, apiPort: Number(servicePorts.api), webPort: Number(servicePorts.web), controlPort: running.state.controlPort, databasePort: Number(servicePorts.database), ...(running.status.postgresVersion ? { postgresVersion: running.status.postgresVersion } : {}), ...(running.status.ffmpegVersion ? { ffmpegVersion: running.status.ffmpegVersion } : {}), outputBytes: second.outputBytes, outputDuration: second.outputDuration };
