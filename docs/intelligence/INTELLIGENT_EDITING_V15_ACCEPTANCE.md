@@ -37,7 +37,7 @@
 - `f05a0a8` — `fix(intelligence): finalize v1.5 closure recovery and wiring`
 - `182709c` — `test(intelligence): add cancellation gold and browser closure gates`
 - `05defd8` — `docs(intelligence): finalize closure evidence`
-- pending — `feat(intelligence): complete final closure invariants`
+- `3f1458f` — `feat(intelligence): complete v1.5 final closure`
 
 ## 3. Database migrations
 
@@ -96,8 +96,8 @@
 
 - Branch: `feature/contentos-intelligent-editing-v15`
 - Base SHA: `7338c9266e685d26975c928349ee13d1a589b86d`
-- Final SHA (implementation): `TBD_AFTER_FINAL_COMMIT`
-- New Commits: `6428e41`, `cf5e87b`, `8a76e24`, `9aff1dd`, `cb5ba8a`, `f05a0a8`, `182709c`, `final-closure-implementation`
+- Final SHA (implementation): `3f1458f0e53389d42cdebb0ecbe37249feade59a`
+- New Commits: `6428e41`, `cf5e87b`, `8a76e24`, `9aff1dd`, `cb5ba8a`, `f05a0a8`, `182709c`, `3f1458f`
 - New Migrations: `0050_intelligent_editing_core_closure`, `0051_intelligent_edit_render_reference`, `0052_intelligent_editing_final_closure`; up/down and full-chain matrix passed
 - Database Runtime Model: PASS — one PostgreSQL database via `DATABASE_URL`; schema/search_path isolation is test-only
 - Worker/API DB Consistency: PASS — API-created `MEDIA_ANALYSIS` Job was consumed and completed by Worker against the same database
@@ -123,4 +123,4 @@
 - Tests: V1.5 16/16; browser vertical slice 1/1; full regression 288/288; production pipeline 12/12; auto-edit-v1 28/28; auto-edit-v15 20/20; script-edit-v3 33/33; migration matrix 9/9; typecheck/build/format/lint/Web build passed
 - Known Limitations: real ASR endpoint still needs user configuration; Qwen Vision/Embedding adapters are configurable but real remote calls are not independently verified; Remote CI is not configured in this repository
 - Remote CI Status: `NOT CONFIGURED`
-- Remote Push Status: `PENDING_FINAL_PUSH`
+- Remote Push Status: `PENDING_FINAL_PUSH` — implementation SHA is recorded above; final branch tip will be verified after this documentation update.
