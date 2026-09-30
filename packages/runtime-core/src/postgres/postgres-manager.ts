@@ -75,7 +75,7 @@ export class PostgresRuntimeManager {
       const command = `for %I in ("${file.replaceAll('"', '""')}") do @echo %~sI`;
       const result = await execFileAsync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', command], { timeout: 5_000, windowsHide: true, windowsVerbatimArguments: true, env: process.env });
       const shortPath = String(result.stdout).trim().split(/\r?\n/u).map((value) => value.trim()).find(Boolean);
-      return shortPath || file;
+      return shortPath && !shortPath.includes('\uFFFD') ? shortPath : file;
     } catch { return file; }
   }
 

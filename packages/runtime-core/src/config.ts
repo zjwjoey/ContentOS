@@ -27,7 +27,7 @@ export function resolveRuntimeConfig(env: Record<string, string | undefined> = p
   const databaseName = env.CONTENTOS_DATABASE_NAME?.trim() || 'contentos';
   return {
     ...paths,
-    databaseUrl: env.DATABASE_URL?.trim() || (databaseMode === 'EMBEDDED' ? `postgresql://${encodeURIComponent(databaseUser)}:${encodeURIComponent(databasePassword)}@127.0.0.1:${databasePort}/${encodeURIComponent(databaseName)}` : DEFAULT_DATABASE_URL),
+    databaseUrl: databaseMode === 'EMBEDDED' ? `postgresql://${encodeURIComponent(databaseUser)}:${encodeURIComponent(databasePassword)}@127.0.0.1:${databasePort}/${encodeURIComponent(databaseName)}` : (env.DATABASE_URL?.trim() || DEFAULT_DATABASE_URL),
     databaseMode,
     databasePort,
     databaseUser,
