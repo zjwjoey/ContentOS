@@ -6,3 +6,5 @@ export { evaluateIntelligentManifest, planIntelligentEdit } from './intelligent-
 export type { IntelligentPlannerAsset, IntelligentPlannerInput, IntelligentPlannerResult, IntelligentPlannerSentence } from './intelligent-planner.js';
 export { IntelligentPlanningService } from './intelligent-planning-service.js';
 export type { CreateIntelligentPlanInput } from './intelligent-planning-service.js';
+export { IntelligentDecisionService } from './decision-service.js';
+export type { CreatePresetInput, CreateRecommendationInput } from './decision-service.js';
