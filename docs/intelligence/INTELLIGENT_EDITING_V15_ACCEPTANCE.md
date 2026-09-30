@@ -161,4 +161,4 @@ Candidate Replacement 保留 Plan 与 Candidate 行级 `FOR UPDATE` 和 Manifest
 - Known Limitations: real ASR endpoint still needs user configuration; Qwen Vision/Embedding adapters are configurable but real remote calls are not independently verified; Remote CI is not configured in this repository
 - Remote CI Status: `NOT CONFIGURED`
 - Final Verdict: `READY`
-- Remote Push Status: `PENDING` — will be updated after this round's push verification.
+- Remote Push Status: `PASS` — `origin/feature/contentos-intelligent-editing-v15` verified at `4a8ca7fb80073f0ea31f3bff558bc8ec8c2c9d6a` after direct push.
