@@ -14,9 +14,9 @@ This document records current evidence only. `V1_ACCEPTED` requires a clean Wind
 | Bundled FFmpeg/FFprobe | TESTED_ON_DEV_MACHINE | staged resources, version/encoder/checksum doctor passed |
 | Runtime resource manifest | TESTED_ON_DEV_MACHINE | `apps/desktop/resources/runtime-manifest.json` generated and SHA256-verified |
 | Reproducible packaging pipeline | PACKAGED | `desktop:clean -> desktop:build -> apps/web build -> desktop:doctor -> electron-builder` |
-| Windows installer | PACKAGED | `artifacts/desktop/ContentOS Setup.exe`, 379775153 bytes, SHA256 `009F25D8A588B3A26D2993FB7AE77E4DE55686640318F0B5C8287C1F5C862950` |
-| Windows portable executable | PACKAGED | `artifacts/desktop/ContentOS.exe`, 379545376 bytes, SHA256 `191594DC806E59732F588C8BE31EBDCE94002BA4EAA96D638C80392AB34897B1` |
-| Packaged runtime smoke | PACKAGED_SMOKE_VERIFIED | Local ASCII packaged smoke and CI Run #86 (`36694132685`) reached `READY_WITH_WARNINGS`; packaged `EMBEDDED` DB, migration, API, Web and workers READY; authenticated stop released services and PostgreSQL |
+| Windows installer | PACKAGED | CI Run #90 (`36700650858`) uploaded `ContentOS Setup.exe` in artifact `contentos-desktop-windows-25edd0daf9115bc724b3c1d79a5b86531e244f6e` |
+| Windows portable executable | PACKAGED | CI Run #90 (`36700650858`) uploaded `ContentOS.exe` in artifact `contentos-desktop-windows-25edd0daf9115bc724b3c1d79a5b86531e244f6e` |
+| Packaged runtime smoke | PACKAGED_SMOKE_VERIFIED | CI Run #90 reached `READY_WITH_WARNINGS` for unpacked packaged, portable, and installed artifacts; packaged `EMBEDDED` DB, migration, API, Web and workers READY; authenticated stop released services and PostgreSQL |
 | Persistence after reopen | TESTED_ON_DEV_MACHINE | Second packaged launch reused PG_VERSION 18 with unchanged timestamp and migration READY |
 | Port conflict recovery | TESTED_ON_DEV_MACHINE | Occupied 3000/3001/3002/55433; selected API 3003, Web 3004, Control 3005, DB 55434 |
 | Migration matrix | TESTED_ON_DEV_MACHINE | 9/9 passed against an isolated bundled PostgreSQL 18.4 instance |
@@ -25,9 +25,9 @@ This document records current evidence only. `V1_ACCEPTED` requires a clean Wind
 | Digital Human | TESTED_ON_DEV_MACHINE | 64/64 passed, including real FFmpeg output validation |
 | Full regression | TESTED_ON_DEV_MACHINE | 288/288 passed, 0 failed, 0 cancelled, 0 skipped |
 | Clean Windows acceptance | NOT TESTED | Requires a clean Windows profile/machine with no developer tools |
-| Final packaged manifest | TESTED_ON_DEV_MACHINE | `runtime-manifest.json` records commit `25517c76be5ebc59e06b462e8745833cd1685f9c`, PostgreSQL 18.4, FFmpeg 6.1.1, FFprobe 4.0.2, and SHA256 values |
-| Windows packaging CI | PASS | Run #86 (`36694132685`) passed all jobs, including Windows packaging/smoke and Browser/render acceptance; artifact digest `sha256:a4e2bf43c771953e1e32992734c8300b4a38e36ac866d7e7407a5ec35a1e1987` |
-| Remote branch | PUSHED | `git push origin feature/contentos-desktop-v1` succeeded; local HEAD and `origin/feature/contentos-desktop-v1` are `25517c76be5ebc59e06b462e8745833cd1685f9c` |
+| Final packaged manifest | TESTED_ON_DEV_MACHINE | Run #90 generated the current `runtime-manifest.json` for commit `25edd0daf9115bc724b3c1d79a5b86531e244f6e`, PostgreSQL 18.4, FFmpeg 6.1.1, FFprobe 4.0.2, and SHA256 values |
+| Windows packaging CI | PASS | Run #90 (`36700650858`) passed Quality, Windows Runtime Startup V1, Database/tests, Build, Desktop Windows package/smoke, and Browser/render acceptance; artifact archive digest `sha256:ec35c4f2ad320eedf3255630db63532e384ba4f888460b5ea5177ffca61a6739` |
+| Remote branch | PUSHED | `git push origin feature/contentos-desktop-v1` succeeded; local HEAD and `origin/feature/contentos-desktop-v1` are `25edd0daf9115bc724b3c1d79a5b86531e244f6e` |
 
 The final report must distinguish:
 
