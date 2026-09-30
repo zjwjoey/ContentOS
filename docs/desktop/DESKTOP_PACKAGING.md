@@ -20,8 +20,9 @@ package manifest; Runtime Host uses those paths for its migration gate and `next
 2. `desktop:build` compiles TypeScript and the renderer assets.
 3. `desktop:package` produces both installer and portable targets when the configured
    Windows packager is available.
-4. A smoke test starts the packaged app, verifies the Runtime identity and readiness,
-   opens the local Web URL, then shuts down cleanly.
+4. `pnpm desktop:smoke` starts the packaged app, verifies the Runtime identity and
+   required service readiness, then calls the authenticated stop endpoint and
+   cleans the isolated user-data root.
 
 If a Windows packager is unavailable on the development machine, the result is
 `IMPLEMENTED` and `TESTED_ON_DEV_MACHINE` only; it must not be reported as
