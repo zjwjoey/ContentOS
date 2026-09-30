@@ -2,7 +2,7 @@
 
 状态：`COMPLETED — READY FOR MERGE REVIEW`
 
-本轮基线：`7338c9266e685d26975c928349ee13d1a589b86d`
+本轮基线：`4a03544a754ac7eaf27a725f7f994ac42f88cbe2`
 
 目标分支：`feature/contentos-intelligent-editing-v15`
 
@@ -126,8 +126,8 @@
 
 ## 8. 当前验收状态
 
-`P0/P1/P2 CORE CLOSURE COMPLETE`，并完成 F0–F5 Final Closure。真实 FFmpeg fixture、Semantic Gold、Planner Gold、失败/取消/重试矩阵、同库 API→Worker gate、Candidate replacement revision、隔离 Worker/API/Web/Video Worker 浏览器垂直切片均已通过。全仓库回归在独立 schema 中为 `288/288`，另行通过 production/auto-edit/script-edit gates。
+`P0/P1/P2 CORE CLOSURE COMPLETE`，并完成 F0–F5 Final Closure 及 Candidate Replacement Transactional Integrity Closure。真实 FFmpeg fixture、Semantic Gold、Planner Gold、失败/取消/重试矩阵、同库 API→Worker gate、Candidate replacement revision、同事务回滚/并发/重复请求、隔离 Worker/API/Web/Video Worker 浏览器垂直切片均已通过。全仓库回归在独立 schema 中为 `289/289`，另行通过 production/auto-edit/script-edit gates。
 
-当前状态：`REMOTE BRANCH READY FOR MERGE REVIEW`
+当前状态：`REMOTE BRANCH READY FOR FINAL MERGE REVIEW`
 
 本轮禁止 merge main。
