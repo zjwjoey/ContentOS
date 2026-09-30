@@ -65,16 +65,24 @@ test('Video planning rejects a Job whose payload names another project', async (
 test('Project Video jobs and renders carry the deterministic project workspace scope', async () => {
   const createInputs: Array<{ workspaceId?: string | null }> = [];
   const statements: string[] = [];
-  const db = {
+  const client = {
     query: async (statement: string) => {
       statements.push(statement);
       if (statement.includes('select revision, project_id')) return { rows: [{ revision: 2, project_id: 'project-scope', manifest: { projectId: 'project-scope' }, manifest_digest: null }] };
+      return { rows: [] };
+    },
+    release: () => undefined,
+  };
+  const db = {
+    query: async (statement: string) => {
+      statements.push(statement);
       if (statement.includes('select r.id as render_id')) return { rows: [] };
       return { rows: [] };
     },
+    connect: async () => client,
   };
-  const jobs = { create: async (input: { workspaceId?: string | null }) => { createInputs.push(input); return { id: 'job-1', workspaceId: input.workspaceId } as never; } };
-  const service = new VideoService(db as never, { create: jobs.create } as never);
+  const jobs = { create: async (input: { workspaceId?: string | null }) => { createInputs.push(input); return { id: 'job-1', workspaceId: input.workspaceId } as never; }, createIdempotentWithExecutor: async (_executor: unknown, input: { workspaceId?: string | null }) => { createInputs.push(input); return { id: 'job-1', workspaceId: input.workspaceId } as never; } };
+  const service = new VideoService(db as never, jobs as never);
   await service.createManifestRenderJob('project-scope', 'manifest-scope');
   assert.ok(statements.some((statement) => statement.includes('insert into video_workspaces')));
   assert.deepEqual(createInputs.map((input) => input.workspaceId), ['workspace-project-project-scope']);

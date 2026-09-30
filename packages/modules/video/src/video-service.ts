@@ -5,7 +5,7 @@ import type { Pool } from 'pg';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import type { AssetCatalogService } from '../../asset/src/index.js';
 import type { LocalPathAccessService } from '../../local-path/src/index.js';
-import { JobService, type JobAttemptScope, type JobRecord } from '../../job/src/index.js';
+import { JobService, type JobAttemptScope, type JobQueryExecutor, type JobRecord } from '../../job/src/index.js';
 import { buildStoryboardVideoManifest, buildVideoManifest, type PlannerAsset } from './planner.js';
 import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
 import { digestEditManifest } from './quick-edit.js';
@@ -46,25 +46,24 @@ export class VideoService {
   }
 
   async createManifestRevision(projectId: string, manifest: EditManifestV0, options: { createdBy?: string; idempotencyKey?: string; forceNewRevision?: boolean } = {}): Promise<{ manifestId: string; revision: number }> {
+    return this.withTransaction((executor) => this.createManifestRevisionWithExecutor(executor, projectId, manifest, options));
+  }
+
+  async createManifestRevisionWithExecutor(executor: JobQueryExecutor, projectId: string, manifest: EditManifestV0, options: { createdBy?: string; idempotencyKey?: string; forceNewRevision?: boolean } = {}): Promise<{ manifestId: string; revision: number }> {
     if (manifest.projectId !== projectId || manifest.workspaceId) throw new Error('VIDEO_MANIFEST_PROJECT_SCOPE_INVALID');
     validateEditManifest(manifest);
-    await this.ensureProjectWorkspace(projectId);
-    const client = await this.db.connect();
-    try {
-      await client.query('begin');
-      await client.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:video-manifest:${projectId}`]);
-      const planId = manifest.metadata?.intelligentPlanId;
-      if (planId && !options.forceNewRevision) {
-        const existing = await client.query<{ id: string; revision: number }>("select id,revision from edit_manifests where project_id=$1 and manifest->'metadata'->>'intelligentPlanId'=$2 order by revision desc limit 1", [projectId, planId]);
-        if (existing.rows[0]) { await client.query('commit'); return { manifestId: String(existing.rows[0].id), revision: Number(existing.rows[0].revision) }; }
-      }
-      await client.query("update edit_manifests set status='SUPERSEDED' where project_id=$1 and status='PERSISTED'", [projectId]);
-      const revision = Number((await client.query<{ revision: number }>('select coalesce(max(revision),0)+1 as revision from edit_manifests where project_id=$1', [projectId])).rows[0]?.revision || 1);
-      const manifestId = `manifest-${randomUUID()}`;
-      await client.query('insert into edit_manifests (id,project_id,workspace_id,revision,schema_version,manifest,manifest_digest,status,created_by,idempotency_key) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [manifestId, projectId, projectWorkspaceId(projectId), revision, 'EDIT_MANIFEST_V0', manifest, digestEditManifest(manifest), 'PERSISTED', options.createdBy || 'intelligent-planner', options.idempotencyKey || null]);
-      await client.query('commit');
-      return { manifestId, revision };
-    } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
+    await executor.query("insert into video_workspaces (id, type, project_id) values ($1, 'PROJECT', $2) on conflict (project_id) do nothing", [projectWorkspaceId(projectId), projectId]);
+    await executor.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:video-manifest:${projectId}`]);
+    const planId = manifest.metadata?.intelligentPlanId;
+    if (planId && !options.forceNewRevision) {
+      const existing = await executor.query<{ id: string; revision: number }>("select id,revision from edit_manifests where project_id=$1 and manifest->'metadata'->>'intelligentPlanId'=$2 order by revision desc limit 1", [projectId, planId]);
+      if (existing.rows[0]) return { manifestId: String(existing.rows[0].id), revision: Number(existing.rows[0].revision) };
+    }
+    await executor.query("update edit_manifests set status='SUPERSEDED' where project_id=$1 and status='PERSISTED'", [projectId]);
+    const revision = Number((await executor.query<{ revision: number }>('select coalesce(max(revision),0)+1 as revision from edit_manifests where project_id=$1', [projectId])).rows[0]?.revision || 1);
+    const manifestId = `manifest-${randomUUID()}`;
+    await executor.query('insert into edit_manifests (id,project_id,workspace_id,revision,schema_version,manifest,manifest_digest,status,created_by,idempotency_key) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [manifestId, projectId, projectWorkspaceId(projectId), revision, 'EDIT_MANIFEST_V0', manifest, digestEditManifest(manifest), 'PERSISTED', options.createdBy || 'intelligent-planner', options.idempotencyKey || null]);
+    return { manifestId, revision };
   }
 
   async createJob(input: CreateVideoJobInput): Promise<JobRecord> {
@@ -77,19 +76,33 @@ export class VideoService {
   }
 
   async createManifestRenderJob(projectId: string, manifestId: string): Promise<JobRecord> {
-    await this.ensureProjectWorkspace(projectId);
-    const manifest = await this.db.query<{ revision: number; project_id: string; manifest: EditManifestV0; manifest_digest: string | null }>('select revision, project_id, manifest, manifest_digest from edit_manifests where id = $1 and project_id = $2', [manifestId, projectId]);
+    return this.withTransaction((executor) => this.createManifestRenderJobWithExecutor(executor, projectId, manifestId));
+  }
+
+  async createManifestRenderJobWithExecutor(executor: JobQueryExecutor, projectId: string, manifestId: string): Promise<JobRecord> {
+    await executor.query("insert into video_workspaces (id, type, project_id) values ($1, 'PROJECT', $2) on conflict (project_id) do nothing", [projectWorkspaceId(projectId), projectId]);
+    const manifest = await executor.query<{ revision: number; project_id: string; manifest: EditManifestV0; manifest_digest: string | null }>('select revision, project_id, manifest, manifest_digest from edit_manifests where id = $1 and project_id = $2', [manifestId, projectId]);
     const row = manifest.rows[0];
     if (!row) throw new Error('VIDEO_MANIFEST_NOT_FOUND');
     const manifestRevision = Number(row.revision);
     const manifestDigest = digestEditManifest(row.manifest);
     if (row.manifest_digest && row.manifest_digest !== manifestDigest) throw new Error('VIDEO_MANIFEST_DIGEST_CONFLICT');
-    if (!row.manifest_digest) await this.db.query('update edit_manifests set manifest_digest = $2 where id = $1 and manifest_digest is null', [manifestId, manifestDigest]);
+    if (!row.manifest_digest) await executor.query('update edit_manifests set manifest_digest = $2 where id = $1 and manifest_digest is null', [manifestId, manifestDigest]);
     const idempotencyKey = `video-render:manifest:${projectId}:${manifestId}:v${manifestRevision}`;
-    const id = `job-${randomUUID()}`;
-    const payload = { projectId, manifestId, manifestRevision, manifestDigest } as unknown as VideoJobPayload;
-    try { return await this.jobs.create({ id, projectId, workspaceId: projectWorkspaceId(projectId), type: 'VIDEO_RENDER', payload, idempotencyKey, maxAttempts: 3 }); }
-    catch (error) { if ((error as { code?: string }).code === '23505') { const existing = await this.jobs.getByIdempotencyKey(idempotencyKey); if (existing) return existing; } throw error; }
+    return this.jobs.createIdempotentWithExecutor(executor, { id: `job-${randomUUID()}`, projectId, workspaceId: projectWorkspaceId(projectId), type: 'VIDEO_RENDER', payload: { projectId, manifestId, manifestRevision, manifestDigest } as VideoJobPayload, idempotencyKey, maxAttempts: 3 });
+  }
+
+  private async withTransaction<T>(action: (executor: JobQueryExecutor) => Promise<T>): Promise<T> {
+    const client = await this.db.connect();
+    try {
+      await client.query('begin');
+      const result = await action(client);
+      await client.query('commit');
+      return result;
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally { client.release(); }
   }
 
   async createManifestRenderJobForWorkspace(workspaceId: string, manifestId: string, idempotencySuffix?: string, renderOptions: Pick<VideoJobPayload, 'outputPath' | 'outputRoot'> = {}): Promise<JobRecord> {
