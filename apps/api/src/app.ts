@@ -51,6 +51,7 @@ import { IntelligentPlanningService } from '../../../packages/modules/intelligen
 import { registerIntelligentPlanningRoutes } from './intelligent-planning-routes.js';
 import { IntelligentDecisionService } from '../../../packages/modules/intelligence/src/index.js';
 import { registerIntelligentDecisionRoutes } from './intelligent-decision-routes.js';
+import type { EmbeddingProvider } from '../../../packages/modules/intelligence/src/providers.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -62,7 +63,7 @@ function directorPlan(projectId: string, input: z.infer<typeof directorInput>): 
   return { schemaVersion: 'DIRECTOR_PLAN_V0', projectId, seed: input.seed, brief: input.brief, storyboard: input.storyboard, provenance: { author: input.provenance.author, source: input.provenance.source, ...(input.provenance.promptVersion ? { promptVersion: input.provenance.promptVersion } : {}), ...(input.provenance.modelProfile ? { modelProfile: input.provenance.modelProfile } : {}) } };
 }
 
-export interface ApiRuntimeDependencies { db: Pool; storage?: LocalStorageProvider; uploadMaxBytes?: number; allowFakePublisherControls?: boolean; localPathAccess?: LocalPathAccessService; nativePathPicker?: import('../../../packages/modules/local-path/src/index.js').NativePathPicker; digitalHumanProviders?: RuntimeDigitalHumanProviders; intelligence?: MediaIntelligenceService; }
+export interface ApiRuntimeDependencies { db: Pool; storage?: LocalStorageProvider; uploadMaxBytes?: number; allowFakePublisherControls?: boolean; localPathAccess?: LocalPathAccessService; nativePathPicker?: import('../../../packages/modules/local-path/src/index.js').NativePathPicker; digitalHumanProviders?: RuntimeDigitalHumanProviders; intelligence?: MediaIntelligenceService; intelligenceEmbeddingProvider?: EmbeddingProvider; }
 
 export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<FastifyInstance> {
   const db = 'query' in input ? input : input.db;
@@ -89,7 +90,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const nativePathPicker = runtime.nativePathPicker || (process.platform === 'win32' ? new WindowsNativePathPicker() : new UnsupportedNativePathPicker());
   const localMedia = new LocalMediaSourceService({ db, thumbnailRoot: `${storage.root}/thumbnails`, pathAccess: localPathAccess });
   const video = new VideoService(db, storage, jobs, assets, localPathAccess);
-  const planning = new IntelligentPlanningService(db, { storage, video });
+  const planning = new IntelligentPlanningService(db, { storage, video, ...(runtime.intelligenceEmbeddingProvider ? { embeddingProvider: runtime.intelligenceEmbeddingProvider } : {}) });
   const videoFromDirector = new DirectorVideoService(directorV1, video, director);
   const quickEdit = new VideoAdjustmentService(db, assets, localMedia);
   const standaloneQuickEdit = new StandaloneQuickEditService(db, assets, quickEdit, video);

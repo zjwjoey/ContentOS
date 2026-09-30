@@ -34,6 +34,7 @@ export class MediaIntelligenceWorkerRuntime extends WorkerRuntime {
       if (typeof payload.runId === 'string') await this.dependencies.intelligence.markCancelled(payload.runId, { code: 'MEDIA_ANALYSIS_LEASE_CANCELLED', message: 'Media analysis lease expired after cancellation request' });
       return true;
     });
+    await this.dependencies.intelligence.reconcileStaleRuns();
   }
   async consume(): Promise<void> {
     const runnable = await this.dependencies.jobs.listRunnable([MEDIA_ANALYSIS], this.options.concurrency);

@@ -26,7 +26,7 @@ export class IntelligentPlanningService {
       const row = asset.rows[0] as Record<string, unknown> | undefined;
       if (!row) throw new Error('INTELLIGENT_PLANNER_ASSET_NOT_FOUND');
       const analysis = await this.db.query(`select s.id as shot_id,s.source_in_ms,s.source_out_ms,s.confidence,s.detection_version,r.id as run_id,a.storage_key,a.metadata,v.summary,v.tags,v.normalized,e.vector
-        from media_analysis_shots s join media_analysis_runs r on r.id=s.run_id and r.project_id=$1 and r.asset_id=$2 and r.status='SUCCEEDED'
+        from media_analysis_shots s join (select distinct on (asset_id) id,project_id,asset_id,status,source_checksum,created_at from media_analysis_runs where project_id=$1 and asset_id=$2 and status='SUCCEEDED' order by asset_id,created_at desc,id desc) r on r.id=s.run_id
         join assets a on a.id=r.asset_id and (r.source_checksum is null or r.source_checksum=a.checksum)
         left join media_analysis_vision_results v on v.run_id=r.id and v.shot_id=s.id
         left join media_analysis_embeddings e on e.run_id=r.id and e.content_type='VISION' and e.content_id=v.id
