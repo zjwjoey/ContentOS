@@ -13,6 +13,7 @@
 | Windows portable executable | PACKAGED | `artifacts/desktop/ContentOS.exe` |
 | Packaged runtime smoke | TESTED_ON_DEV_MACHINE | Runtime `READY_WITH_WARNINGS`; all services READY in `desktop-smoke-runtime-v4` |
 | Clean Windows acceptance | NOT TESTED | Requires a clean Windows profile/machine |
+| Remote branch | IMPLEMENTED | `origin/feature/contentos-desktop-v1` at `a46ac6d` |
 
 The final report must distinguish:
 

@@ -4,7 +4,7 @@
 
 - [x] Create isolated Desktop branch/worktree from Runtime Startup V1.
 - [x] Record topology, protected boundaries, runtime reuse, data layout, and packaging constraints.
-- [ ] Confirm remote branch ancestry before publishing; current network fetch is not yet reliable.
+- [x] Confirm remote branch ancestry before publishing; Desktop branch is based on Runtime Startup V1 and remote main remains unchanged.
 
 ## Phase 1 — contracts and shell
 
@@ -24,5 +24,5 @@
 
 - [x] Run targeted runtime and desktop tests.
 - [x] Run build/doctor/package gates available on the development machine.
-- [ ] Commit in reviewable slices and push `feature/contentos-desktop-v1`.
+- [x] Commit in reviewable slices and push `feature/contentos-desktop-v1`.
 - [ ] Report exact artifact paths and evidence; do not merge into `main` in this task.
