@@ -123,4 +123,4 @@
 - Tests: V1.5 16/16; browser vertical slice 1/1; full regression 288/288; production pipeline 12/12; auto-edit-v1 28/28; auto-edit-v15 20/20; script-edit-v3 33/33; migration matrix 9/9; typecheck/build/format/lint/Web build passed
 - Known Limitations: real ASR endpoint still needs user configuration; Qwen Vision/Embedding adapters are configurable but real remote calls are not independently verified; Remote CI is not configured in this repository
 - Remote CI Status: `NOT CONFIGURED`
-- Remote Push Status: `PENDING_FINAL_PUSH` — implementation SHA is recorded above; final branch tip will be verified after this documentation update.
+- Remote Push Status: `PASS` — the remote branch was verified after the final push; implementation `3f1458f0e53389d42cdebb0ecbe37249feade59a` and the final documentation metadata are present on `origin/feature/contentos-intelligent-editing-v15`.
