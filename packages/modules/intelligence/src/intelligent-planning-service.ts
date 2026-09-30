@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import { FakeEmbeddingProvider, type EmbeddingProvider } from './providers.js';
+import type { JobQueryExecutor } from '../../job/src/index.js';
 import { validateEditManifest, type EditManifestV0, type IntelligentEditPlanV1, type IntelligentPlannerConfigV1 } from '../../../contracts/src/index.js';
 import { evaluateIntelligentManifest, planIntelligentEdit, type IntelligentPlannerSentence, type IntelligentPlannerShot } from './intelligent-planner.js';
 import type { VideoService } from '../../video/src/index.js';
@@ -14,6 +15,7 @@ function record(value: unknown): Record<string, unknown> { return value && typeo
 function tags(value: unknown): string[] { return Array.isArray(value) ? value.flatMap((item) => item && typeof item === 'object' && typeof (item as { tag?: unknown }).tag === 'string' ? [String((item as { tag: string }).tag)] : typeof item === 'string' ? [item] : []) : []; }
 function sourcePath(storage: LocalStorageProvider | undefined, key: string): string { return storage ? storage.objectPath(key) : key; }
 function vector(value: unknown): number[] | undefined { const parsed = Array.isArray(value) ? value.map(Number) : []; return parsed.length && parsed.every(Number.isFinite) ? parsed : undefined; }
+const candidateReplacementInFlight = new Set<string>();
 
 export class IntelligentPlanningService {
   private readonly embeddingProvider: EmbeddingProvider;
@@ -45,35 +47,44 @@ export class IntelligentPlanningService {
     const sentenceEmbeddings = await Promise.all(input.sentences.map((sentence) => this.embeddingProvider.embed({ text: sentence.text, modelVersion: 'planner-query-v1' })));
     const sentences = input.sentences.map((sentence, index) => ({ ...sentence, ...(sentenceEmbeddings[index]?.vector ? { embedding: sentenceEmbeddings[index]!.vector } : {}) }));
     const plan = planIntelligentEdit({ id: input.id || `intelligent-plan-${randomUUID()}`, projectId: input.projectId, ...(input.seed === undefined ? {} : { seed: input.seed }), sentences, shots, config: input.config, sourceAnalysisRunIds: [...sourceRuns], analysisVersion: this.options.analysisVersion || 'intelligent-editing-v15-core-closure-1' });
-    let manifestId: string | null = null; let renderJobId: string | null = null;
-    if (this.options.video) {
-      ({ manifestId } = await this.options.video.createManifestRevision(input.projectId, plan.manifest, { createdBy: 'intelligent-planner-v1', idempotencyKey: `intelligent-plan:${plan.id}` }));
-      renderJobId = (await this.options.video.createManifestRenderJob(input.projectId, manifestId)).id;
-    }
-    await this.db.query('insert into intelligent_edit_plans (id,project_id,status,config,source_analysis_run_ids,manifest,quality,manifest_id,video_revision_id,render_job_id,planner_version,analysis_version,revision) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)', [plan.id, plan.projectId, 'READY', JSON.stringify(plan.config), JSON.stringify([...sourceRuns]), JSON.stringify(plan.manifest), JSON.stringify(plan.quality), manifestId, manifestId, renderJobId, plan.plannerVersion || input.config.version, plan.analysisVersion || null, 1]);
-    for (const candidate of plan.candidates) await this.db.query('insert into intelligent_edit_candidates (id,plan_id,sentence_id,asset_id,shot_id,source_in_ms,source_out_ms,score,selected,reasons,features) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [candidate.id, plan.id, candidate.sentenceId, candidate.assetId, candidate.shotId, candidate.sourceInMs ?? null, candidate.sourceOutMs ?? null, candidate.score, candidate.selected, JSON.stringify(candidate.reasons), JSON.stringify(candidate.features)]);
-    await this.db.query('insert into intelligent_edit_evaluations (id,plan_id,evaluator_version,quality) values ($1,$2,$3,$4)', [`evaluation-${plan.id}`, plan.id, 'intelligent-evaluator-v2-shot-level', JSON.stringify(plan.quality)]);
+    const manifestRecord = await this.withTransaction(async (executor) => {
+      let manifestId: string | null = null; let renderJobId: string | null = null;
+      if (this.options.video) {
+        const persistedManifest = await this.options.video.createManifestRevisionWithExecutor(executor, input.projectId, plan.manifest, { createdBy: 'intelligent-planner-v1', idempotencyKey: `intelligent-plan:${plan.id}` });
+        manifestId = persistedManifest.manifestId;
+        renderJobId = (await this.options.video.createManifestRenderJobWithExecutor(executor, input.projectId, manifestId)).id;
+      }
+      await executor.query('insert into intelligent_edit_plans (id,project_id,status,config,source_analysis_run_ids,manifest,quality,manifest_id,video_revision_id,render_job_id,planner_version,analysis_version,revision) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)', [plan.id, plan.projectId, 'READY', JSON.stringify(plan.config), JSON.stringify([...sourceRuns]), JSON.stringify(plan.manifest), JSON.stringify(plan.quality), manifestId, manifestId, renderJobId, plan.plannerVersion || input.config.version, plan.analysisVersion || null, 1]);
+      for (const candidate of plan.candidates) await executor.query('insert into intelligent_edit_candidates (id,plan_id,sentence_id,asset_id,shot_id,source_in_ms,source_out_ms,score,selected,reasons,features) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [candidate.id, plan.id, candidate.sentenceId, candidate.assetId, candidate.shotId, candidate.sourceInMs ?? null, candidate.sourceOutMs ?? null, candidate.score, candidate.selected, JSON.stringify(candidate.reasons), JSON.stringify(candidate.features)]);
+      await executor.query('insert into intelligent_edit_evaluations (id,plan_id,evaluator_version,quality) values ($1,$2,$3,$4)', [`evaluation-${plan.id}`, plan.id, 'intelligent-evaluator-v2-shot-level', JSON.stringify(plan.quality)]);
+      return { manifestId, renderJobId };
+    });
+    const { manifestId, renderJobId } = manifestRecord;
     return { ...plan, manifestId, videoRevisionId: manifestId, renderJobId, revision: 1 };
   }
 
   async applyCandidateReplacement(input: ApplyCandidateReplacementInput): Promise<CandidateSelectionResult> {
     if (!this.options.video) throw new Error('INTELLIGENT_REPLACEMENT_VIDEO_SERVICE_REQUIRED');
-    const client = await this.db.connect();
+    const inFlightKey = `${input.projectId}:${input.planId}:${input.sentenceId}`;
+    if (candidateReplacementInFlight.has(inFlightKey)) throw new Error('INTELLIGENT_CANDIDATE_SELECTION_CONFLICT');
+    candidateReplacementInFlight.add(inFlightKey);
     try {
-      await client.query('begin');
-      const planResult = await client.query<Record<string, unknown>>('select * from intelligent_edit_plans where id=$1 and project_id=$2 for update', [input.planId, input.projectId]);
-      const plan = planResult.rows[0];
-      if (!plan) throw new Error('INTELLIGENT_PLAN_NOT_FOUND');
-      const candidateResult = await client.query<Record<string, unknown>>('select * from intelligent_edit_candidates where plan_id=$1 and sentence_id=$2 order by selected desc, score desc, id for update', [input.planId, input.sentenceId]);
-      const candidates = candidateResult.rows;
-      const previous = candidates.find((candidate) => Boolean(candidate.selected));
-      const next = candidates.find((candidate) => String(candidate.id) === input.candidateId);
-      if (!previous || !next) throw new Error('INTELLIGENT_CANDIDATE_NOT_FOUND');
-      if (String(next.sentence_id) !== input.sentenceId) throw new Error('INTELLIGENT_CANDIDATE_SENTENCE_MISMATCH');
-      if (String(previous.id) === String(next.id)) throw new Error('INTELLIGENT_CANDIDATE_ALREADY_SELECTED');
-      if (Boolean(next.selected)) throw new Error('INTELLIGENT_CANDIDATE_ALREADY_SELECTED');
-      const priorReplacement = await client.query<{ id: string }>("select id from editing_decision_events where plan_id=$1 and sentence_id=$2 and event_type='SHOT_REPLACED' limit 1", [input.planId, input.sentenceId]);
-      if (priorReplacement.rows[0]) throw new Error('INTELLIGENT_CANDIDATE_SELECTION_CONFLICT');
+      const client = await this.db.connect();
+      try {
+        await client.query('begin');
+        const lockResult = await client.query<{ locked: boolean }>('select pg_try_advisory_xact_lock(hashtext($1)) as locked', [`contentos:intelligent-candidate-replacement:${input.planId}:${input.sentenceId}`]);
+        if (!lockResult.rows[0]?.locked) throw new Error('INTELLIGENT_CANDIDATE_SELECTION_CONFLICT');
+        const planResult = await client.query<Record<string, unknown>>('select * from intelligent_edit_plans where id=$1 and project_id=$2 for update', [input.planId, input.projectId]);
+        const plan = planResult.rows[0];
+        if (!plan) throw new Error('INTELLIGENT_PLAN_NOT_FOUND');
+        const candidateResult = await client.query<Record<string, unknown>>('select * from intelligent_edit_candidates where plan_id=$1 and sentence_id=$2 order by selected desc, score desc, id for update', [input.planId, input.sentenceId]);
+        const candidates = candidateResult.rows;
+        const previous = candidates.find((candidate) => Boolean(candidate.selected));
+        const next = candidates.find((candidate) => String(candidate.id) === input.candidateId);
+        if (!previous || !next) throw new Error('INTELLIGENT_CANDIDATE_NOT_FOUND');
+        if (String(next.sentence_id) !== input.sentenceId) throw new Error('INTELLIGENT_CANDIDATE_SENTENCE_MISMATCH');
+        if (String(previous.id) === String(next.id)) throw new Error('INTELLIGENT_CANDIDATE_ALREADY_SELECTED');
+        if (Boolean(next.selected)) throw new Error('INTELLIGENT_CANDIDATE_ALREADY_SELECTED');
       const manifest = structuredClone(plan.manifest as EditManifestV0);
       const timelineIndex = manifest.timeline.findIndex((clip) => clip.sentenceId === input.sentenceId);
       if (timelineIndex < 0) throw new Error('INTELLIGENT_SENTENCE_NOT_IN_MANIFEST');
@@ -100,9 +111,23 @@ export class IntelligentPlanningService {
       await client.query('update intelligent_edit_candidates set selected=true where id=$1 and plan_id=$2 and sentence_id=$3', [input.candidateId, input.planId, input.sentenceId]);
       await client.query('update intelligent_edit_plans set manifest=$2,quality=$3,manifest_id=$4,video_revision_id=$4,render_job_id=$5,revision=$6,status=\'READY\' where id=$1 and project_id=$7', [input.planId, JSON.stringify(manifest), JSON.stringify(quality), manifestRecord.manifestId, renderJob.id, nextPlanRevision, input.projectId]);
       await client.query('insert into editing_decision_events (id,project_id,plan_id,sentence_id,event_type,previous_candidate_id,next_candidate_id,previous_shot_id,next_shot_id,evidence) values ($1,$2,$3,$4,\'SHOT_REPLACED\',$5,$6,$7,$8,$9)', [decisionEventId, input.projectId, input.planId, input.sentenceId, previous.id, next.id, previous.shot_id || null, next.shot_id || null, JSON.stringify({ source: 'IntelligentPlanningService', planRevision: nextPlanRevision, manifestRevision: manifestRecord.revision, candidateAssetId: next.asset_id })]);
+        await client.query('commit');
+        return { planId: input.planId, revision: nextPlanRevision, manifestId: manifestRecord.manifestId, manifestRevision: manifestRecord.revision, renderJobId: renderJob.id, selectedCandidateId: input.candidateId, decisionEventId, manifest, quality };
+      } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
+    } finally { candidateReplacementInFlight.delete(inFlightKey); }
+  }
+
+  private async withTransaction<T>(action: (executor: JobQueryExecutor) => Promise<T>): Promise<T> {
+    const client = await this.db.connect();
+    try {
+      await client.query('begin');
+      const result = await action(client);
       await client.query('commit');
-      return { planId: input.planId, revision: nextPlanRevision, manifestId: manifestRecord.manifestId, manifestRevision: manifestRecord.revision, renderJobId: renderJob.id, selectedCandidateId: input.candidateId, decisionEventId, manifest, quality };
-    } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
+      return result;
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally { client.release(); }
   }
 
   async getPlan(projectId: string, planId: string): Promise<IntelligentEditPlanV1 | null> {
