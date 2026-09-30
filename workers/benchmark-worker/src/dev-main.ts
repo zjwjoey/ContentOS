@@ -16,4 +16,4 @@ async function start(): Promise<void> {
   const close = async () => { if (stopped) return; stopped = true; clearInterval(timer); await db.end(); process.exit(0); };
   process.once('SIGINT', () => { void close(); }); process.once('SIGTERM', () => { void close(); });
 }
-if (process.argv[1]?.endsWith('dev-main.ts')) await start();
+if (process.argv[1]?.endsWith('dev-main.ts') || process.argv[1]?.endsWith('dev-main.js')) await start();

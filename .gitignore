@@ -4,6 +4,7 @@ test-results/
 playwright-report/
 .worktrees/
 dist/
+artifacts/
 tools/jianying-draft-helper/bin/
 tools/jianying-draft-helper/runtime-fixtures/
 tools/jianying-draft-helper/decrypted-temp/

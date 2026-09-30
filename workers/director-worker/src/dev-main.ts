@@ -74,4 +74,4 @@ async function startLocalWorker(): Promise<void> {
   process.once('SIGTERM', () => { void close('SIGTERM'); });
 }
 
-if (process.argv[1]?.endsWith('dev-main.ts')) await startLocalWorker();
+if (process.argv[1]?.endsWith('dev-main.ts') || process.argv[1]?.endsWith('dev-main.js')) await startLocalWorker();

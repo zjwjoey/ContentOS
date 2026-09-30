@@ -1,0 +1,28 @@
+appId: com.contentos.desktop
+productName: ContentOS
+asar: false
+directories:
+  output: artifacts/desktop
+  buildResources: apps/desktop/build-resources
+files:
+  - dist/**
+  - package.json
+  - migrations/**
+  - apps/web/package.json
+  - apps/web/.next/**
+  - apps/web/public/**
+  - node_modules/**
+extraMetadata:
+  main: dist/apps/desktop/src/main/main.js
+win:
+  target:
+    - nsis
+    - portable
+  artifactName: ${productName} ${version} ${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ContentOS Setup.${ext}
+portable:
+  artifactName: ContentOS.exe
