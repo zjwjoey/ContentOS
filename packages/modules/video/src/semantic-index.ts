@@ -12,7 +12,7 @@ export interface MaterialSemanticIndex {
   search(input: { snapshotId: string; queries: string[]; queryVectors?: number[][]; limit: number }): MaterialSemanticSearchResult[];
 }
 
-function tokens(value: string): Set<string> {
+export function semanticTokens(value: string): Set<string> {
   const words = value.normalize('NFKC').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   for (const word of [...words]) if (/^[\u3400-\u9fff]+$/u.test(word)) for (let size = 2; size <= Math.min(4, word.length); size += 1) for (let start = 0; start + size <= word.length; start += 1) words.push(word.slice(start, start + size));
   return new Set(words);
@@ -20,7 +20,7 @@ function tokens(value: string): Set<string> {
 
 type Document = { assetId: string; text: string; tokens: Set<string>; vector?: number[] };
 
-function cosine(left: number[], right: number[]): number {
+export function cosineSimilarity(left: number[], right: number[]): number {
   if (!left.length || left.length !== right.length) return 0;
   let dot = 0;
   let leftNorm = 0;
@@ -34,6 +34,13 @@ function cosine(left: number[], right: number[]): number {
   return Math.max(0, Math.min(1, (dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm)) + 1) / 2));
 }
 
+export function hybridSemanticScore(input: { lexicalScore: number; semanticScore: number; semanticWeight?: number; lexicalWeight?: number }): number {
+  const semanticWeight = input.semanticWeight ?? 0.7;
+  const lexicalWeight = input.lexicalWeight ?? 0.3;
+  if (!Number.isFinite(semanticWeight) || !Number.isFinite(lexicalWeight) || semanticWeight < 0 || lexicalWeight < 0 || semanticWeight + lexicalWeight <= 0) throw new Error('SEMANTIC_WEIGHTS_INVALID');
+  return (semanticWeight * input.semanticScore + lexicalWeight * input.lexicalScore) / (semanticWeight + lexicalWeight);
+}
+
 export class InMemoryMaterialSemanticIndex implements MaterialSemanticIndex {
   private readonly documents = new Map<string, Map<string, Document>>();
 
@@ -42,7 +49,7 @@ export class InMemoryMaterialSemanticIndex implements MaterialSemanticIndex {
     for (const item of input.items) {
       const profile = input.profiles?.get(item.assetId);
       const text = `${item.fileName} ${item.tags.join(' ')} ${profile?.summary || ''} ${(profile?.tags || []).map((tag) => tag.tag).join(' ')}`;
-      const document: Document = { assetId: item.assetId, text, tokens: tokens(text) };
+      const document: Document = { assetId: item.assetId, text, tokens: semanticTokens(text) };
       const vector = input.embeddings?.get(item.assetId);
       if (vector) document.vector = vector;
       documents.set(item.assetId, document);
@@ -53,12 +60,12 @@ export class InMemoryMaterialSemanticIndex implements MaterialSemanticIndex {
   search(input: { snapshotId: string; queries: string[]; queryVectors?: number[][]; limit: number }): MaterialSemanticSearchResult[] {
     const documents = this.documents.get(input.snapshotId);
     if (!documents) return [];
-    const queryTokens = new Set(input.queries.flatMap((query) => [...tokens(query)]));
+    const queryTokens = new Set(input.queries.flatMap((query) => [...semanticTokens(query)]));
     return [...documents.values()].map((document) => {
       const matched = [...queryTokens].filter((token) => document.tokens.has(token));
       const lexicalScore = queryTokens.size ? matched.length / queryTokens.size : 0;
-      const vectorScore = document.vector && input.queryVectors?.length ? Math.max(...input.queryVectors.map((vector) => cosine(document.vector!, vector))) : undefined;
-      return { assetId: document.assetId, score: vectorScore === undefined ? lexicalScore : Math.max(vectorScore, lexicalScore), matchingQueries: input.queries.filter((query) => [...tokens(query)].some((token) => document.tokens.has(token))) };
+      const vectorScore = document.vector && input.queryVectors?.length ? Math.max(...input.queryVectors.map((vector) => cosineSimilarity(document.vector!, vector))) : undefined;
+      return { assetId: document.assetId, score: vectorScore === undefined ? lexicalScore : hybridSemanticScore({ lexicalScore, semanticScore: vectorScore }), matchingQueries: input.queries.filter((query) => [...semanticTokens(query)].some((token) => document.tokens.has(token))) };
     }).sort((a, b) => b.score - a.score || a.assetId.localeCompare(b.assetId)).slice(0, Math.max(1, input.limit));
   }
 }

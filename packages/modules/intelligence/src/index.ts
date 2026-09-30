@@ -1,7 +1,7 @@
 export { MediaIntelligenceService, MEDIA_ANALYSIS } from './media-intelligence-service.js';
 export type { CreateMediaAnalysisInput, MediaIntelligenceServiceOptions } from './media-intelligence-service.js';
-export { FakeAsrProvider, FakeEmbeddingProvider, FakeTechnicalMediaProvider, FakeVisionProvider, createFakeIntelligenceProviders } from './providers.js';
-export type { AsrProvider, EmbeddingProvider, IntelligenceProviders, TechnicalMediaProvider, VisionProvider } from './providers.js';
+export { FakeAsrProvider, FakeEmbeddingProvider, FakeTechnicalMediaProvider, FakeVisionProvider, FakeShotDetectionProvider, FfprobeTechnicalMediaProvider, FfmpegShotDetectionProvider, createFakeIntelligenceProviders, createIntelligenceProviders } from './providers.js';
+export type { AsrProvider, EmbeddingProvider, IntelligenceProviderConfig, IntelligenceProviders, ShotDetectionProvider, TechnicalMediaProvider, VisionProvider } from './providers.js';
 export { evaluateIntelligentManifest, planIntelligentEdit } from './intelligent-planner.js';
 export type { IntelligentPlannerAsset, IntelligentPlannerInput, IntelligentPlannerResult, IntelligentPlannerSentence } from './intelligent-planner.js';
 export { IntelligentPlanningService } from './intelligent-planning-service.js';

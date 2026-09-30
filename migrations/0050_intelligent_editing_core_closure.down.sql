@@ -1,0 +1,17 @@
+drop table if exists editing_decision_events;
+drop index if exists intelligent_edit_plans_manifest_idx;
+alter table intelligent_edit_plans drop column if exists analysis_version, drop column if exists planner_version, drop column if exists video_revision_id, drop column if exists manifest_id;
+drop index if exists intelligent_edit_candidates_shot_idx;
+alter table intelligent_edit_candidates drop constraint if exists intelligent_edit_candidates_source_range_check;
+alter table intelligent_edit_candidates drop column if exists source_out_ms, drop column if exists source_in_ms, drop column if exists shot_id;
+drop index if exists media_analysis_embeddings_shot_idx;
+alter table media_analysis_embeddings drop column if exists input_digest, drop column if exists shot_id;
+drop index if exists media_analysis_vision_run_shot_idx;
+alter table media_analysis_vision_results drop column if exists normalized;
+drop index if exists media_analysis_asr_run_segment_idx;
+alter table media_analysis_asr_segments drop constraint if exists media_analysis_asr_segments_segment_index_check;
+alter table media_analysis_asr_segments drop column if exists segment_index;
+alter table media_analysis_keyframes drop column if exists error;
+alter table media_analysis_runs drop constraint if exists media_analysis_runs_status_check;
+alter table media_analysis_runs add constraint media_analysis_runs_status_check check (status in ('QUEUED','RUNNING','SUCCEEDED','FAILED','CANCELLED'));
+alter table media_analysis_runs drop column if exists pipeline_version, drop column if exists source_checksum;

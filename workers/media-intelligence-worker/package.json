@@ -1,5 +1,9 @@
 {
   "name": "@contentos/media-intelligence-worker",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "start": "tsx src/main.ts"
+  }
 }
