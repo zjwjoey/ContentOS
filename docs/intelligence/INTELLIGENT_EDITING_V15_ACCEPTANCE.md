@@ -30,7 +30,7 @@
 - `9aff1dd` — `test(intelligence): close v1.5 analysis and decision gates`
 - `cb5ba8a` — `feat(intelligence): wire render and configurable AI adapters`
 - `f05a0a8` — `fix(intelligence): finalize v1.5 closure recovery and wiring`
-- `c1cbb7c` — `test(intelligence): add cancellation gold and browser closure gates`
+- `182709c` — `test(intelligence): add cancellation gold and browser closure gates`
 
 ## 3. Database migrations
 
@@ -86,8 +86,8 @@
 
 - Branch: `feature/contentos-intelligent-editing-v15`
 - Base SHA: `7338c9266e685d26975c928349ee13d1a589b86d`
-- Final SHA: `f05a0a82c8ea002c4713a5ef1615e5a1e07aea3f`
-- New Commits: `6428e41`, `cf5e87b`, `8a76e24`, `9aff1dd`, `cb5ba8a`, `f05a0a8`
+- Final SHA: `182709c9ca2e2f4ea007a5375ccf9213fda3f19a`
+- New Commits: `6428e41`, `cf5e87b`, `8a76e24`, `9aff1dd`, `cb5ba8a`, `f05a0a8`, `182709c`
 - New Migrations: `0050_intelligent_editing_core_closure`, `0051_intelligent_edit_render_reference`; up/down and full-chain matrix passed
 - Worker Closure: PASS — executable entrypoint, polling, claim, heartbeat through JobRunner, lease reconciliation, stale-run recovery, cancellation, restart and graceful shutdown
 - Shot Detection: PASS — existing FFmpeg scene detector reused through provider adapter; no production uniform-shot fallback
@@ -103,4 +103,4 @@
 - Web Changes: intelligence page displays analysis status, shots/keyframes, search scores, planner candidates, alternatives, manifest/render references and quality evidence; Web production build passed
 - Tests: V1.5 14/14; browser vertical slice 1/1; full regression 287/288 with one pre-existing publisher migration-boundary failure; production pipeline 12/12; migration matrix 9/9; typecheck/build/format/lint/Web build passed
 - Known Limitations: real ASR endpoint still needs user configuration; one unrelated existing publisher migration test is not green when the full suite shares one schema
-- Remote Push Status: PASS — `origin/feature/contentos-intelligent-editing-v15` equals `f05a0a82c8ea002c4713a5ef1615e5a1e07aea3f`
+- Remote Push Status: PASS — `origin/feature/contentos-intelligent-editing-v15` equals `182709c9ca2e2f4ea007a5375ccf9213fda3f19a`
