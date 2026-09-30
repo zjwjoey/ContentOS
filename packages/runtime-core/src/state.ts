@@ -35,7 +35,7 @@ export class RuntimeStateStore {
       const temporary = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
       try {
         await writeFile(temporary, content, 'utf8');
-        await rename(temporary, this.path);
+        await replaceWithRetry(temporary, this.path);
       } finally {
         await rm(temporary, { force: true }).catch(() => undefined);
       }
@@ -200,6 +200,20 @@ export class RuntimeStateStore {
     await rename(path, claimed);
     return claimed;
   }
+}
+
+async function replaceWithRetry(source: string, destination: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      await rename(source, destination);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY') throw error;
+      await sleep(100);
+    }
+  }
+  await rename(source, destination);
 }
 
 function sameIdentity(left: { instanceId?: unknown; hostPid?: unknown; controlPort?: unknown }, right: { instanceId?: unknown; hostPid?: unknown; controlPort?: unknown }): boolean {
