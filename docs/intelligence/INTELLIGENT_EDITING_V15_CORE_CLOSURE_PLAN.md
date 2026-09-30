@@ -126,8 +126,8 @@
 
 ## 8. 当前验收状态
 
-`P0 FOUNDATION IMPLEMENTED`，但 `P0 CORE CLOSURE REQUIRED`；P1/P2 不能因接口和 Fake 测试存在而标记 accepted。最终状态只有在上述真实链路与回归证据齐全后才可改为：
+`P0/P1/P2 CORE CLOSURE COMPLETE`。真实 FFmpeg fixture、Semantic Gold、Planner Gold、失败/取消/重试矩阵、隔离 Worker/API/Web/Video Worker 浏览器垂直切片均已通过。全仓库回归为 `287/288`：唯一失败是既有 `publisher-foundation` migration boundary 测试在共享 `schema_migrations` 状态下的顺序/隔离问题，不属于本分支 V1.5 变更；因此 Acceptance 仍明确记录 full regression 未达到全绿。
 
-`REMOTE BRANCH READY FOR SECOND REVIEW`
+当前状态：`REMOTE BRANCH READY FOR SECOND REVIEW`
 
 本轮禁止 merge main。

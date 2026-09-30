@@ -1,6 +1,6 @@
 # ContentOS Intelligent Editing V1.5 Architecture
 
-状态：Phase 0 审计基线（2026-09-30）
+状态：Core Closure 实现完成，待第二轮人工审查（2026-09-30）
 
 - 基线：`origin/main` / `c8d0dd4725fac12feb5d9f0b5d9a04ac337fc0b6`
 - 分支：`feature/contentos-intelligent-editing-v15`
@@ -14,7 +14,7 @@ V1.5 将 ContentOS 的“素材可理解、可检索、可解释地编排”为�
 1. 对已存在的 `Asset` 建立可重试、可观测、可复用的媒体分析运行；
 2. 将技术探测、镜头切分、关键帧、ASR、视觉标签和 Embedding 统一为带 provenance 的结果；
 3. 为智能剪辑提供候选片段、排序分数、选择理由、多样性/重复率约束和质量评估；
-4. 最终继续输出并校验既有 `EDIT_MANIFEST_V0`，不重写 Video Render 或已有 planner；
+4. 最终继续输出并校验既有 `EDIT_MANIFEST_V0`，通过现有 VideoService revision、Render Job 和 Video Worker 进入既有渲染链；不重写 Video Render 或已有 planner；
 5. 为 AI provider 预留端口，Fake provider 默认可运行，真实 provider 只有在显式配置时启用。
 
 本阶段不包含 Electron/Desktop V1 改造、不包含真实商业 provider 凭据、不改变现有 Random/Storyboard/Script planner 的默认行为，也不把新智能规划强行接入旧渲染链路。
@@ -120,7 +120,7 @@ V1.5 仅使用独立环境变量，不读取 Desktop 专用运行时目录：
 - DB：`contentos_intelligence_dev` / `contentos_intelligence_test`；
 - storage：`storage/intelligence-local`；
 - temp/keyframes/cache/embedding：`storage/intelligence-temp`、`storage/intelligence-keyframes`、`storage/intelligence-cache`、`storage/intelligence-embeddings`；
-- worker id/concurrency：`media-intelligence-worker-v15`、单独的 `MEDIA_INTELLIGENCE_WORKER_CONCURRENCY`；
+- worker id/concurrency：`media-intelligence-worker-v15`、单独的 `CONTENTOS_INTELLIGENCE_WORKER_CONCURRENCY`；
 - AI：`CONTENTOS_INTELLIGENCE_*` 配置，真实 provider 默认关闭；
 - 测试：独立数据库 URL、独立 storage root、独立 artifact root。
 
@@ -136,4 +136,3 @@ V1.5 仅使用独立环境变量，不读取 Desktop 专用运行时目录：
 - 大媒体分析不可在 API 进程内执行，必须进入 durable Job；
 - 所有查询按 project/workspace/asset ownership 过滤，不能通过 assetId 旁路访问；
 - 运行失败 `76b4d59` 属于旧运行上下文，不能作为 V1.5 基线；本分支以当前远端 `c8d0dd4` 为唯一基线。
-
