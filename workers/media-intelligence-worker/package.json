@@ -1,0 +1,5 @@
+{
+  "name": "@contentos/media-intelligence-worker",
+  "private": true,
+  "type": "module"
+}

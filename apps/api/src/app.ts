@@ -45,6 +45,8 @@ import { DigitalHumanService, createRuntimeDigitalHumanProviders, type RuntimeDi
 import { registerDigitalHumanRoutes } from './digital-human-routes.js';
 import { ProductionRunService } from '../../../packages/modules/production-run/src/index.js';
 import { registerProductionRunRoutes } from './production-run-routes.js';
+import { registerIntelligentEditingRoutes } from './intelligent-editing-routes.js';
+import { MediaIntelligenceService, createFakeIntelligenceProviders } from '../../../packages/modules/intelligence/src/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -56,7 +58,7 @@ function directorPlan(projectId: string, input: z.infer<typeof directorInput>): 
   return { schemaVersion: 'DIRECTOR_PLAN_V0', projectId, seed: input.seed, brief: input.brief, storyboard: input.storyboard, provenance: { author: input.provenance.author, source: input.provenance.source, ...(input.provenance.promptVersion ? { promptVersion: input.provenance.promptVersion } : {}), ...(input.provenance.modelProfile ? { modelProfile: input.provenance.modelProfile } : {}) } };
 }
 
-export interface ApiRuntimeDependencies { db: Pool; storage?: LocalStorageProvider; uploadMaxBytes?: number; allowFakePublisherControls?: boolean; localPathAccess?: LocalPathAccessService; nativePathPicker?: import('../../../packages/modules/local-path/src/index.js').NativePathPicker; digitalHumanProviders?: RuntimeDigitalHumanProviders; }
+export interface ApiRuntimeDependencies { db: Pool; storage?: LocalStorageProvider; uploadMaxBytes?: number; allowFakePublisherControls?: boolean; localPathAccess?: LocalPathAccessService; nativePathPicker?: import('../../../packages/modules/local-path/src/index.js').NativePathPicker; digitalHumanProviders?: RuntimeDigitalHumanProviders; intelligence?: MediaIntelligenceService; }
 
 export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<FastifyInstance> {
   const db = 'query' in input ? input : input.db;
@@ -72,6 +74,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const directorV1 = new DirectorV1Service(db);
   const directorRead = new DirectorProjectReadService(directorV1, director);
   const jobs = new JobService(db);
+  const intelligence = runtime.intelligence || new MediaIntelligenceService(db, createFakeIntelligenceProviders());
   const benchmark = new BenchmarkService(db, jobs);
   const assets = new AssetCatalogService(db);
   const digitalHuman = new DigitalHumanService(db, jobs, assets);
@@ -98,6 +101,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   registerLocalPathRoutes(app, { access: localPathAccess, picker: nativePathPicker });
   registerDigitalHumanRoutes(app, { digitalHuman, projects, jobs, providers: runtime.digitalHumanProviders || createRuntimeDigitalHumanProviders(), quickEdit, video, assets, assetService, storage, mediaStagingSecret: process.env.CONTENTOS_MEDIA_STAGING_SECRET });
   registerProductionRunRoutes(app, { db, projects, productionRuns, editing: new ScriptEditingV3Service(db), jobs, video, approvals, publisher, digitalHuman });
+  registerIntelligentEditingRoutes(app, { projects, jobs, intelligence });
   registerEditingWorkbenchRoutes(app, { db, localMedia, localPathAccess, quickEdit, video, jobs, assets, assetService, storage, maxUploadBytes: uploadMaxBytes, presets });
   registerScriptEditingV2Routes(app, { db, jobs, localPathAccess, video, assets, presets, storage });
   registerScriptEditingV3Routes(app, { db, jobs, video, assets: assetService, localMedia, localPathAccess, storage });
