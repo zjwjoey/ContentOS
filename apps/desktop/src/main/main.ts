@@ -9,7 +9,9 @@ import type { DesktopRuntimeSnapshot } from '../../../../packages/desktop-contra
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const isPackaged = app.isPackaged || process.env.CONTENTOS_DESKTOP_MODE === 'PACKAGED';
 const appRoot = isPackaged ? app.getAppPath() : resolve(currentDir, '../../../../../');
-const userDataRoot = app.getPath('userData');
+const configuredUserDataRoot = process.env.CONTENTOS_USER_DATA_ROOT?.trim();
+if (configuredUserDataRoot) app.setPath('userData', configuredUserDataRoot);
+const userDataRoot = configuredUserDataRoot || app.getPath('userData');
 const databasePassword = createHash('sha256').update(userDataRoot).digest('hex').slice(0, 32);
 const resourcesRoot = process.env.CONTENTOS_RESOURCES_ROOT || (isPackaged ? resolve(process.resourcesPath, 'resources') : resolve(appRoot, 'apps', 'desktop', 'resources'));
 const bundledFfmpegPath = resolve(resourcesRoot, 'ffmpeg', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
