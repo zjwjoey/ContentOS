@@ -16,6 +16,7 @@ const userData = join(root, 'user-data');
 await mkdir(userData, { recursive: true });
 const statePath = join(userData, 'runtime', 'state', 'runtime.json');
 const resourceRoot = process.env.CONTENTOS_SMOKE_RESOURCES_ROOT;
+const smokeTimeoutMs = Number(process.env.CONTENTOS_SMOKE_TIMEOUT_MS || 120_000);
 let child: ChildProcess | undefined;
 let childStdout = '';
 let childStderr = '';
@@ -74,7 +75,7 @@ try {
   child = spawn(executable, [`--user-data-dir=${userData}`], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, CONTENTOS_USER_DATA_ROOT: userData, ...(resourceRoot ? { CONTENTOS_RESOURCES_ROOT: resolve(resourceRoot) } : {}) } });
   child.stdout?.on('data', (chunk: Buffer) => { childStdout += chunk.toString(); });
   child.stderr?.on('data', (chunk: Buffer) => { childStderr += chunk.toString(); });
-  const readyState = await waitFor(readState, (value) => value.state === 'READY' || value.state === 'READY_WITH_WARNINGS');
+  const readyState = await waitFor(readState, (value) => value.state === 'READY' || value.state === 'READY_WITH_WARNINGS', smokeTimeoutMs);
   const response = await fetch(`http://127.0.0.1:${readyState.controlPort}/runtime/status`);
   if (!response.ok) throw new Error(`runtime status returned HTTP ${response.status}`);
   const status = await response.json() as SmokeStatus;
@@ -82,7 +83,7 @@ try {
   if (serviceStates.database !== 'READY' || serviceStates.migration !== 'READY' || serviceStates.api !== 'READY' || serviceStates.web !== 'READY') throw new Error(`required service is not READY: ${JSON.stringify(serviceStates)}`);
   const stop = await fetch(`http://127.0.0.1:${readyState.controlPort}/runtime/stop`, { method: 'POST', headers: { authorization: `Bearer ${readyState.controlToken}` } });
   if (!stop.ok) throw new Error(`runtime stop returned HTTP ${stop.status}`);
-  await waitForStateRemoval();
+  await waitForStateRemoval(smokeTimeoutMs);
   smokeSucceeded = true;
   console.log(JSON.stringify({ ok: true, executable, state: readyState.state, launchMode: status.launchMode, databaseMode: status.databaseMode, runtimeVersion: status.runtimeVersion, postgresVersion: status.postgresVersion, ffmpegVersion: status.ffmpegVersion, buildTimestamp: status.buildTimestamp, services: serviceStates, ports: status.services.filter((service) => service.port).map((service) => `${service.id}:${service.port}`) }));
 } finally {

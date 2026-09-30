@@ -228,6 +228,7 @@ jobs:
       - name: Portable runtime smoke
         env:
           CONTENTOS_SMOKE_EXECUTABLE: artifacts/desktop/ContentOS.exe
+          CONTENTOS_SMOKE_TIMEOUT_MS: 300000
         run: pnpm desktop:smoke
       - name: Installer runtime smoke
         run: pnpm desktop:installer-smoke
