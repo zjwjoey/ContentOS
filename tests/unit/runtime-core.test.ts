@@ -33,6 +33,11 @@ test('runtime config is the single source for roots, ports, database and launch 
   assert.equal(config.apiPort, 3010); assert.equal(config.webPort, 3011); assert.equal(config.controlPort, 3019); assert.equal(config.databaseUrl, 'postgresql://example'); assert.equal(config.launchMode, 'PACKAGED');
 });
 
+test('embedded database mode ignores inherited external database URLs', () => {
+  const config = resolveRuntimeConfig({ CONTENTOS_DATABASE_MODE: 'EMBEDDED', CONTENTOS_DATABASE_PORT: '55433', CONTENTOS_DATABASE_USER: 'contentos', CONTENTOS_DATABASE_PASSWORD: 'local-secret', CONTENTOS_DATABASE_NAME: 'contentos', DATABASE_URL: 'postgresql://ci-user:ci-password@127.0.0.1:5432/ci' });
+  assert.equal(config.databaseUrl, 'postgresql://contentos:local-secret@127.0.0.1:55433/contentos');
+});
+
 test('stale lock compare-and-delete never removes a replacement lock', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-stale-race-'));
   try {

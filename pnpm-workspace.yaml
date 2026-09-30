@@ -3,10 +3,10 @@ packages:
   - workers/*
   - packages/*
   - packages/modules/*
+allowBuilds:
+  '@embedded-postgres/windows-x64': true
+  electron-winstaller: true
+  esbuild: true
+  ffmpeg-static: true
 minimumReleaseAgeExclude:
   - electron@44.5.0
-onlyBuiltDependencies:
-  - '@embedded-postgres/windows-x64'
-  - electron-winstaller
-  - esbuild
-  - ffmpeg-static
