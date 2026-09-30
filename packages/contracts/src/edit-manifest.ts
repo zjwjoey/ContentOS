@@ -82,6 +82,8 @@ export interface EditManifestV0 {
     editorialRevision?: number;
     templateId?: string;
     plannerVersion?: string;
+    intelligentPlanId?: string;
+    analysisVersion?: string;
     materialPoolSnapshotId?: string;
     v3SessionId?: string;
     v3Revision?: number;
