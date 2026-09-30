@@ -12,7 +12,8 @@ if (process.platform !== 'win32') throw new Error('desktop packaged smoke curren
 const executable = resolve(process.env.CONTENTOS_SMOKE_EXECUTABLE || 'artifacts/desktop/win-unpacked/ContentOS.exe');
 await access(executable);
 const root = await mkdtemp(join(tmpdir(), 'contentos-desktop-package-smoke-'));
-const userData = join(root, 'user-data');
+const externalUserData = process.env.CONTENTOS_SMOKE_USER_DATA_ROOT ? resolve(process.env.CONTENTOS_SMOKE_USER_DATA_ROOT) : undefined;
+const userData = externalUserData || join(root, 'user-data');
 await mkdir(userData, { recursive: true });
 const statePath = join(userData, 'runtime', 'state', 'runtime.json');
 const resourceRoot = process.env.CONTENTOS_SMOKE_RESOURCES_ROOT;
