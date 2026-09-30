@@ -26,8 +26,8 @@ This document records current evidence only. `V1_ACCEPTED` requires a clean Wind
 | Full regression | TESTED_ON_DEV_MACHINE | 288/288 passed, 0 failed, 0 cancelled, 0 skipped |
 | Clean Windows acceptance | NOT TESTED | Requires a clean Windows profile/machine with no developer tools |
 | Final packaged manifest | TESTED_ON_DEV_MACHINE | `runtime-manifest.json` records commit `8be5c38c63eb9fbd6f4d7c8f96059a9443c56a83`, PostgreSQL 18.4, FFmpeg 6.1.1, FFprobe 4.0.2, and SHA256 values |
-| Windows packaging CI | CONFIGURED | `.github/workflows/ci.yml` now triggers on `feature/contentos-desktop-v1`, builds both Windows artifacts, runs `desktop:smoke`, and uploads installer/portable/manifest artifacts |
-| Remote branch | PUSHED | `git push origin feature/contentos-desktop-v1` succeeded; direct `git fetch origin` verified local HEAD equals `origin/feature/contentos-desktop-v1` at `b92c54e5430d7668e71bd33bf51da091954eeb0d` |
+| Windows packaging CI | IN_PROGRESS | `.github/workflows/ci.yml` now triggers on `feature/contentos-desktop-v1`, builds both Windows artifacts, runs `desktop:smoke`, and uploads installer/portable/manifest artifacts; latest run is pending after the pnpm configuration fix |
+| Remote branch | PUSHED | `git push origin feature/contentos-desktop-v1` succeeded; direct `git fetch origin` verified local HEAD equals `origin/feature/contentos-desktop-v1` at `ae1bd79c434ba7dfb42a3038cfc58199c568f45e` |
 
 The final report must distinguish:
 
