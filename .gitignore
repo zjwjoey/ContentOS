@@ -5,6 +5,9 @@ playwright-report/
 .worktrees/
 dist/
 artifacts/
+apps/desktop/resources/postgres/
+apps/desktop/resources/ffmpeg/
+apps/desktop/resources/runtime-manifest.json
 tools/jianying-draft-helper/bin/
 tools/jianying-draft-helper/runtime-fixtures/
 tools/jianying-draft-helper/decrypted-temp/
@@ -15,6 +18,7 @@ draft_content.json.dec.json
 !.env.example
 storage/local/*
 !storage/local/.gitkeep
+storage/thumbnails/*
 storage/postgres-data/
 runtime/
 research/repos/

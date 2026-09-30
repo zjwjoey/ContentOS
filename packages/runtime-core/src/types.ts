@@ -1,6 +1,6 @@
 export type ServiceState = 'STOPPED' | 'STARTING' | 'READY' | 'DEGRADED' | 'FAILED' | 'STOPPING';
 export type RuntimeState = 'STARTING' | 'READY' | 'READY_WITH_WARNINGS' | 'DEGRADED' | 'FAILED' | 'STOPPING' | 'STOPPED';
-export type ServiceKind = 'PROCESS' | 'EXTERNAL' | 'TASK';
+export type ServiceKind = 'PROCESS' | 'MANAGED' | 'EXTERNAL' | 'TASK';
 export type RestartClass = 'TRANSIENT' | 'PERMANENT';
 export interface RuntimeIdentity { protocol: 'contentos-runtime'; protocolVersion: 1; instanceId: string; hostPid: number; }
 
@@ -44,7 +44,7 @@ export interface ServiceStatus {
   startedAt?: string;
   updatedAt: string;
 }
-export interface RuntimeStatus { instanceId: string; hostPid: number; state: RuntimeState; startedAt: string; uptimeMs: number; controlPort: number; services: ServiceStatus[]; warnings: string[]; }
+export interface RuntimeStatus { instanceId: string; hostPid: number; state: RuntimeState; startedAt: string; uptimeMs: number; controlPort: number; runtimeVersion?: string; launchMode?: 'DEVELOPMENT' | 'PACKAGED'; appRoot?: string; userDataRoot?: string; databaseMode?: 'EXTERNAL' | 'EMBEDDED'; postgresPort?: number; apiPort?: number; webPort?: number; ffmpegVersion?: string; postgresVersion?: string; buildTimestamp?: string; services: ServiceStatus[]; warnings: string[]; }
 export interface DoctorCheck { id: string; scope: 'CORE' | 'OPTIONAL'; status: 'PASS' | 'WARN' | 'FAIL'; message: string; details?: Record<string, unknown>; }
 export interface DoctorReport { generatedAt: string; checks: DoctorCheck[]; coreStartup: 'READY' | 'NOT_READY'; }
 export interface RuntimeLog { timestamp: string; serviceId: string; level: 'INFO' | 'WARN' | 'ERROR'; event: string; message: string; }
