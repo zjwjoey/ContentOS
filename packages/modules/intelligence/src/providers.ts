@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { probeMedia } from '../../../infrastructure/ffmpeg/src/index.js';
 import { detectShotsV1, type DetectedShot } from '../../video/src/shot-detection.js';
+import { QwenEmbeddingProvider, QwenVisualAnalysisProvider } from '../../video/src/index.js';
+import { join, resolve } from 'node:path';
 import type { MediaAnalysisAsrSegmentV1, MediaAnalysisShotV1, MediaAnalysisVisionResultV1, TechnicalMediaAnalysisV1 } from '../../../contracts/src/index.js';
 
 export interface TechnicalMediaProvider {
@@ -18,7 +20,7 @@ export interface VisionProvider {
 export interface EmbeddingProvider {
   embed(input: { text: string; modelVersion: string; signal?: AbortSignal }): Promise<{ vector: number[]; provider: string; modelVersion: string }>;
 }
-export interface IntelligenceProviderConfig { ffmpegPath?: string; ffprobePath?: string; realProvidersEnabled: boolean; asrProvider?: string; visionProvider?: string; embeddingProvider?: string; }
+export interface IntelligenceProviderConfig { ffmpegPath?: string; ffprobePath?: string; keyframeRoot?: string; realProvidersEnabled: boolean; asrProvider?: string; visionProvider?: string; embeddingProvider?: string; }
 export interface IntelligenceProviders { technical: TechnicalMediaProvider; shots: ShotDetectionProvider; asr: AsrProvider; vision: VisionProvider; embedding: EmbeddingProvider; mode: 'FAKE' | 'REAL'; }
 
 function numberMetadata(metadata: Record<string, unknown>, key: string, fallback: number): number { const value = metadata[key]; return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback; }
@@ -81,6 +83,21 @@ class UnconfiguredRealVisionProvider implements VisionProvider {
   async analyze(): Promise<Array<Omit<MediaAnalysisVisionResultV1, 'id' | 'runId' | 'assetId'>>> { throw Object.assign(new Error('REAL_VISION_PROVIDER_NOT_CONFIGURED'), { code: 'REAL_VISION_PROVIDER_NOT_CONFIGURED', retryable: false }); }
 }
 
+class QwenShotVisionProvider implements VisionProvider {
+  private readonly provider = new QwenVisualAnalysisProvider();
+  constructor(private readonly keyframeRoot: string) {}
+  async analyze(input: { assetId: string; runId: string; shots: MediaAnalysisShotV1[]; metadata: Record<string, unknown>; signal?: AbortSignal }): Promise<Array<Omit<MediaAnalysisVisionResultV1, 'id' | 'runId' | 'assetId'>>> {
+    const results: Array<Omit<MediaAnalysisVisionResultV1, 'id' | 'runId' | 'assetId'>> = [];
+    for (const shot of input.shots) {
+      input.signal?.throwIfAborted();
+      const framePath = join(resolve(this.keyframeRoot), input.runId, `${shot.id}.jpg`);
+      const profile = await this.provider.analyzeAssetFrames({ assetId: `${input.assetId}:${shot.id}`, framePaths: [framePath], frameTimestampsMs: [Math.floor((shot.sourceInMs + shot.sourceOutMs) / 2)], ...(input.signal ? { signal: input.signal } : {}) });
+      results.push({ shotId: shot.id, summary: profile.summary, tags: profile.tags.map((tag) => ({ tag: tag.tag, confidence: tag.confidence, evidenceTimestampsMs: tag.timestampsMs })), objects: profile.tags.map((tag) => tag.tag), actions: [], location: null, shotType: 'unknown', cameraMotion: 'unknown', peopleCount: null, qualitySignals: {}, provider: profile.modelProvider, modelVersion: profile.modelVersion, promptVersion: profile.promptVersion });
+    }
+    return results;
+  }
+}
+
 export class FakeEmbeddingProvider implements EmbeddingProvider {
   async embed(input: { text: string; modelVersion: string }): Promise<{ vector: number[]; provider: string; modelVersion: string }> {
     const digest = createHash('sha256').update(input.text).digest();
@@ -93,11 +110,21 @@ class UnconfiguredRealEmbeddingProvider implements EmbeddingProvider {
   async embed(): Promise<{ vector: number[]; provider: string; modelVersion: string }> { throw Object.assign(new Error('REAL_EMBEDDING_PROVIDER_NOT_CONFIGURED'), { code: 'REAL_EMBEDDING_PROVIDER_NOT_CONFIGURED', retryable: false }); }
 }
 
+class QwenShotEmbeddingProvider implements EmbeddingProvider {
+  private readonly provider = new QwenEmbeddingProvider();
+  async embed(input: { text: string; modelVersion: string; signal?: AbortSignal }): Promise<{ vector: number[]; provider: string; modelVersion: string }> {
+    const result = await this.provider.embed({ texts: [input.text], model: input.modelVersion, ...(input.signal ? { signal: input.signal } : {}) });
+    return { vector: result.vectors[0] || [], provider: result.provider, modelVersion: result.model };
+  }
+}
+
 export function createFakeIntelligenceProviders(): IntelligenceProviders {
   return { technical: new FakeTechnicalMediaProvider(), shots: new FakeShotDetectionProvider(), asr: new FakeAsrProvider(), vision: new FakeVisionProvider(), embedding: new FakeEmbeddingProvider(), mode: 'FAKE' };
 }
 
 export function createIntelligenceProviders(config: IntelligenceProviderConfig): IntelligenceProviders {
   if (!config.realProvidersEnabled) return createFakeIntelligenceProviders();
-  return { technical: new FfprobeTechnicalMediaProvider(config.ffprobePath), shots: new FfmpegShotDetectionProvider(config.ffmpegPath), asr: new UnconfiguredRealAsrProvider(), vision: new UnconfiguredRealVisionProvider(), embedding: new UnconfiguredRealEmbeddingProvider(), mode: 'REAL' };
+  const vision = config.visionProvider === 'qwen' && config.keyframeRoot ? new QwenShotVisionProvider(config.keyframeRoot) : new UnconfiguredRealVisionProvider();
+  const embedding = config.embeddingProvider === 'qwen' ? new QwenShotEmbeddingProvider() : new UnconfiguredRealEmbeddingProvider();
+  return { technical: new FfprobeTechnicalMediaProvider(config.ffprobePath), shots: new FfmpegShotDetectionProvider(config.ffmpegPath), asr: new UnconfiguredRealAsrProvider(), vision, embedding, mode: 'REAL' };
 }

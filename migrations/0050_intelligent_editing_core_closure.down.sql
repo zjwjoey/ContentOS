@@ -13,5 +13,6 @@ alter table media_analysis_asr_segments drop constraint if exists media_analysis
 alter table media_analysis_asr_segments drop column if exists segment_index;
 alter table media_analysis_keyframes drop column if exists error;
 alter table media_analysis_runs drop constraint if exists media_analysis_runs_status_check;
+update media_analysis_runs set status='FAILED' where status in ('PARTIAL','STALE');
 alter table media_analysis_runs add constraint media_analysis_runs_status_check check (status in ('QUEUED','RUNNING','SUCCEEDED','FAILED','CANCELLED'));
 alter table media_analysis_runs drop column if exists pipeline_version, drop column if exists source_checksum;
