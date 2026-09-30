@@ -3,3 +3,5 @@ packages:
   - workers/*
   - packages/*
   - packages/modules/*
+minimumReleaseAgeExclude:
+  - electron@44.5.0

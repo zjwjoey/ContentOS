@@ -191,7 +191,7 @@ export function createVideoWorker(options?: VideoWorkerOptions): WorkerRuntime {
   return runtime;
 }
 
-if (basename(process.argv[1] ?? '') === 'main.ts') {
+if (['main.ts', 'main.js'].includes(basename(process.argv[1] ?? ''))) {
   const config = loadConfig();
   const db = await createDatabase(config.databaseUrl);
   const storage = new LocalStorageProvider(config.storageRoot);

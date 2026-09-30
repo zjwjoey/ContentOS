@@ -30,7 +30,7 @@ export function createAssetWorker(options?: AssetWorkerOptions): WorkerRuntime {
   return runtime;
 }
 
-if (basename(process.argv[1] ?? '') === 'main.ts') {
+if (['main.ts', 'main.js'].includes(basename(process.argv[1] ?? ''))) {
   const config = loadConfig(); const db = await createDatabase(config.databaseUrl); const storage = new LocalStorageProvider(config.storageRoot); const jobs = new JobService(db); const imports = new AssetImportService(db); const assets = new AssetService(db, storage, (path) => probeMedia(path, config.ffprobePath)); const worker = createAssetWorker({ db, storage, assets, imports, jobs, ffprobePath: config.ffprobePath, concurrency: config.assetWorkerConcurrency });
   const stop = async (signal: string): Promise<void> => { await worker.shutdown(signal); await db.end(); }; process.once('SIGINT', () => void stop('SIGINT')); process.once('SIGTERM', () => void stop('SIGTERM')); await worker.start(); console.log(JSON.stringify(worker.health()));
 }

@@ -59,4 +59,4 @@ export async function startLocalWorker(): Promise<void> {
   const close = async (signal: string) => { await runner.stop(signal); await db.end(); }; process.once('SIGINT', () => { void close('SIGINT'); }); process.once('SIGTERM', () => { void close('SIGTERM'); });
 }
 
-if (process.argv[1]?.endsWith('dev-main.ts')) await startLocalWorker();
+if (process.argv[1]?.endsWith('dev-main.ts') || process.argv[1]?.endsWith('dev-main.js')) await startLocalWorker();

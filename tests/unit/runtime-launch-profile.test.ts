@@ -23,6 +23,12 @@ test('packaged Runtime Host launch uses the built host entry without tsx', async
   assert.ok(!launch.args.some((arg) => arg.endsWith('apps/runtime-host/src/main.ts')));
 });
 
+test('Electron Runtime launch uses the Electron binary in Node mode', async () => {
+  const launch = await resolveRuntimeHostLaunch({ env: { CONTENTOS_APP_ROOT: process.cwd(), CONTENTOS_RUNTIME_MODE: 'PACKAGED', CONTENTOS_ELECTRON_RUNTIME: '1' } });
+  assert.equal(launch.command, process.execPath);
+  assert.equal(launch.env.ELECTRON_RUN_AS_NODE, '1');
+});
+
 test('compiled PACKAGED launch discovers repository root without CONTENTOS_APP_ROOT', async () => {
   const appRootBefore = process.env.CONTENTOS_APP_ROOT;
   delete process.env.CONTENTOS_APP_ROOT;
