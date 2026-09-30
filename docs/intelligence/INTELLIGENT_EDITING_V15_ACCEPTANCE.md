@@ -1,6 +1,6 @@
 # ContentOS Intelligent Editing V1.5 Acceptance
 
-状态：`READY FOR FINAL MERGE REVIEW`
+状态：`TRANSACTION CONSISTENCY CLOSED`
 验收时间：2026-09-30  
 基线：`origin/main` / `c8d0dd4725fac12feb5d9f0b5d9a04ac337fc0b6`  
 分支：`feature/contentos-intelligent-editing-v15`  
@@ -18,6 +18,7 @@
 | F3 Quality Integrity | PASS | shotType/cameraMotion 真实写入 Manifest matching；unknown 不增加 diversity，duration fit 对比 requested duration |
 | F4 Decision Evidence | PASS | Decision API 服务端从 Candidate 推导 shot；SHOT_REPLACED 状态约束和 Recommendation provenance 已覆盖 |
 | Transactional Replacement Integrity | PASS | Manifest、VIDEO_RENDER Job、Candidate selection、Plan revision、Decision Event 共用一个 PostgreSQL transaction；回滚、并发和重复请求测试通过 |
+| Atomic Plan Persistence | PASS | createPlan 将 Manifest、VIDEO_RENDER Job、Plan、全部 Candidate、Evaluation 收束到一个 PostgreSQL transaction；成功与 5 个故障注入回滚点均通过 |
 | P1 Planner / Manifest / Render | PASS | analysis → shot-level planner → existing Video manifest revision → render job → Video Worker → 1080x1920 H.264/AAC MP4 vertical slice 通过 |
 | P2 Evidence / Recommendation | PASS | `SHOT_REPLACED` decision event 可持久化，RecommendationBuilder 基于 plan quality + events 生成可审查证据 |
 | Desktop independence | PRESERVED | 本分支未修改 `apps/desktop`，新增代码无 Desktop import |
@@ -41,6 +42,8 @@
 - `3f1458f` — `feat(intelligence): complete v1.5 final closure`
 - `d0bcc72` — `fix(video): support shared replacement transactions`
 - `e2e3134` — `fix(intelligence): make candidate replacement atomic`
+- `a67b9f3` — `fix(intelligence): close repeated replacement and plan transactions`
+- `50b5ae4` — `test(intelligence): cover replacement history and plan rollback`
 
 ## 3. Database migrations
 
@@ -63,7 +66,7 @@
 
 已验证：
 
-- `corepack pnpm test:intelligent-editing-v15`：21/21 passed；含同库 API→Worker DB consistency、真实 FFmpeg shot detection、真实 JPEG keyframe、analysis/planner/replacement/render vertical slice、transaction rollback/concurrency/duplicate-request matrix、failure/retry/cancel matrix、fingerprint gold、Semantic Gold、Planner Gold、decision evidence、Worker polling/restart/cancel；使用隔离 schema。
+- `corepack pnpm test:intelligent-editing-v15`：28/28 passed；含同库 API→Worker DB consistency、真实 FFmpeg shot detection、真实 JPEG keyframe、analysis/planner/replacement/render vertical slice、重复 A→B→C 历史、transaction rollback/concurrency/duplicate-request matrix、createPlan 五个故障注入回滚点、failure/retry/cancel matrix、fingerprint gold、Semantic Gold、Planner Gold、decision evidence、Worker polling/restart/cancel；使用隔离 schema。
 - `corepack pnpm test:production-pipeline`：12/12 passed。
 - `corepack pnpm test:migrations`：9/9 passed；含完整 migration chain、latest down/up 与历史边界。
 - `corepack pnpm typecheck`、`corepack pnpm build`、`corepack pnpm format`、`corepack pnpm lint`：全部通过。
@@ -101,6 +104,10 @@
 - 并发替换：1 个成功、1 个 selection conflict，最终仅 1 个 selected Candidate；
 - 重复请求：`INTELLIGENT_CANDIDATE_ALREADY_SELECTED`，Plan revision 和 Job 数量不增加。
 
+`createPlan()` 的事务边界现在是：事务外完成 asset/analysis 查询、ASR 读取、embedding 和 planner 计算；事务内完成 Manifest、Render Job、Plan、全部 Candidate 和 Evaluation 持久化，任一点失败都会 rollback。已覆盖 Manifest、Render Job、Plan、第二个 Candidate（部分批次）和 Evaluation 五个故障点；每个故障点均无残留 Manifest/Job/Plan/Candidate/Evaluation。
+
+Candidate Replacement 保留 Plan 与 Candidate 行级 `FOR UPDATE` 和 Manifest advisory lock；同进程相同 project/plan/sentence 的 in-flight guard 防止真正并发 B/C 双成功，数据库锁继续作为跨进程一致性边界。已验证 A→B→C 可连续替换，最终 revision=3、selected=C、保留 2 条 `SHOT_REPLACED` 历史事件。
+
 ## 7. Run failure note
 
 用户看到的 `run failed 76b4d59` 不属于本分支的基线；该 SHA 是旧运行上下文。V1.5 实际以 fetch 后确认的 `c8d0dd4725fac12feb5d9f0b5d9a04ac337fc0b6` 为基线，旧提示不会被复制为新实现结论。
@@ -112,18 +119,18 @@
 ## 9. Final handoff report
 
 - Branch: `feature/contentos-intelligent-editing-v15`
-- Base SHA: `4a03544a754ac7eaf27a725f7f994ac42f88cbe2`
-- Final SHA (implementation): `e2e3134` (`fix(intelligence): make candidate replacement atomic`)
-- New Commits: `d0bcc72`, `e2e3134`
-- New Migrations: `0050_intelligent_editing_core_closure`, `0051_intelligent_edit_render_reference`, `0052_intelligent_editing_final_closure`; up/down and full-chain matrix passed
+- Before SHA: `51b47f6ec00e431b61eda30728aad27910da9422`
+- Final SHA (implementation): `a67b9f3` (`fix(intelligence): close repeated replacement and plan transactions`)
+- New Commits: `a67b9f3`, `50b5ae4`
+- New Migrations: none in this round; latest Intelligence migration remains `0052_intelligent_editing_final_closure`
 - Database Runtime Model: PASS — one PostgreSQL database via `DATABASE_URL`; schema/search_path isolation is test-only
 - Worker/API DB Consistency: PASS — API-created `MEDIA_ANALYSIS` Job was consumed and completed by Worker against the same database
 - Candidate Replacement Flow: PASS — server-side Candidate ownership/state validation, replacement apply service, and durable decision event
-- Transaction Design: PASS — public VideoService wrappers own standalone BEGIN/COMMIT; replacement passes one shared executor through Manifest and Job creation
+- Transaction Design: PASS — createPlan computes/reads outside the transaction and persists Manifest, Job, Plan, Candidates and Evaluation inside one BEGIN/COMMIT; replacement passes one shared executor through Manifest and Job creation
 - VideoService Changes: PASS — `createManifestRevisionWithExecutor()` and `createManifestRenderJobWithExecutor()` reuse the caller transaction while public APIs remain unchanged
 - JobService Changes: PASS — executor-aware create and idempotent create reuse the existing `jobs` table; no pg-boss semantic changes
 - Candidate Replacement Transaction: PASS — Plan/Candidate locks, Manifest, Job, selection, Plan revision and Decision Event share one transaction
-- Rollback Test Results: PASS — 3 injected failure points leave no orphan Manifest/Job and preserve Plan/Candidate/Decision state
+- Rollback Test Results: PASS — replacement rollback matrix plus 5 createPlan injected failure points leave no orphan Manifest/Job/Plan/Candidate/Evaluation and preserve prior state
 - Concurrent Replacement Result: PASS — exactly one success and one conflict; exactly one selected Candidate remains
 - Duplicate Request Result: PASS — second selection returns `INTELLIGENT_CANDIDATE_ALREADY_SELECTED` without a new revision
 - Manifest Integrity: PASS — failed transactions leave no new Manifest; success creates one new immutable revision
@@ -147,9 +154,11 @@
 - Render Vertical Slice: PASS — real analysis to Video Worker/FFmpeg render produced 1080x1920 MP4
 - Decision Evidence: PASS — `SHOT_REPLACED` event and RecommendationBuilder evidence are durable and project-scoped
 - Web Changes: intelligence page displays analysis status, shots/keyframes, search scores, planner candidates, alternatives, manifest/render references and quality evidence; Web production build passed
-- Regression Results: V1.5 21/21; browser vertical slice 1/1; full regression 289/289; production pipeline 12/12; auto-edit-v1 28/28; auto-edit-v15 20/20; script-edit-v3 33/33; migration matrix 9/9; typecheck/build/format/lint/Web build passed
+- Regression Results: V1.5 28/28; browser vertical slice 1/1; full regression 289/289; production pipeline 12/12; auto-edit-v1 28/28; auto-edit-v15 20/20; script-edit-v3 33/33; migration matrix 9/9; typecheck/build/format/lint/Web build passed
+- Changed Files: `packages/modules/intelligence/src/intelligent-planning-service.ts`; `tests/integration/intelligent-replacement-transaction-v15.test.ts`; `tests/integration/intelligent-plan-transaction-v15.test.ts`; `package.json`; this acceptance record
 - Migration Changes: none in this transactional closure; `0052_intelligent_editing_final_closure.sql` remains the latest Intelligence migration
 - Desktop Independence: PASS — `apps/desktop` diff remains empty; no Desktop code was modified
 - Known Limitations: real ASR endpoint still needs user configuration; Qwen Vision/Embedding adapters are configurable but real remote calls are not independently verified; Remote CI is not configured in this repository
 - Remote CI Status: `NOT CONFIGURED`
-- Remote Push Status: `PASS` — the remote branch was verified after the closure push; implementation commits `d0bcc72` and `e2e3134` plus the acceptance metadata are present on `origin/feature/contentos-intelligent-editing-v15`.
+- Final Verdict: `READY`
+- Remote Push Status: `PENDING` — will be updated after this round's push verification.
