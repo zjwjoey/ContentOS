@@ -8,3 +8,5 @@ export * from './doctor.js';
 export * from './supervisor.js';
 export * from './config.js';
 export * from './instance-guard.js';
+export * from './postgres/postgres-manager.js';
+export * from './postgres/postgres-paths.js';

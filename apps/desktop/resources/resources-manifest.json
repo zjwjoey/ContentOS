@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "platform": "win32-x64",
+  "electron": { "version": "44.5.0" },
+  "node": { "mode": "electron-run-as-node" },
+  "postgres": {
+    "provider": "@embedded-postgres/windows-x64",
+    "packageVersion": "18.4.0-beta.17",
+    "version": "18.4",
+    "relativeRoot": "postgres",
+    "binRelativeRoot": "postgres/bin",
+    "libRelativeRoot": "postgres/lib",
+    "shareRelativeRoot": "postgres/share",
+    "source": "embedded-postgres upstream Windows x64 package; database creation uses the bundled pg client"
+  },
+  "ffmpeg": { "provider": "ffmpeg-static", "packageVersion": "5.3.0", "version": "6.1.1", "relativePath": "ffmpeg/ffmpeg.exe", "source": "ffmpeg-static package; Windows x64 binary from the pinned upstream build" },
+  "ffprobe": { "provider": "ffprobe-static", "packageVersion": "3.1.0", "version": "4.0.2", "relativePath": "ffmpeg/ffprobe.exe", "source": "ffprobe-static package; Windows x64 binary from the pinned upstream build" }
+}

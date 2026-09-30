@@ -2,10 +2,12 @@ import { access, mkdir, writeFile, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import { isPortOpen } from './port.js';
 import type { DoctorCheck, DoctorReport } from './types.js';
 import type { RuntimePaths } from './paths.js';
 import pg from 'pg';
+import { assertPostgresResources, resolvePostgresResourcePaths } from './postgres/postgres-paths.js';
 const run = promisify(execFile);
 
 export async function runDoctor(paths: RuntimePaths, env: Record<string, string | undefined> = process.env): Promise<DoctorReport> {
@@ -13,9 +15,13 @@ export async function runDoctor(paths: RuntimePaths, env: Record<string, string 
   await check('node', 'CORE', async () => { const major = Number(process.versions.node.split('.')[0]); if (major < 22) throw new Error(`Node ${process.version}，需要 >=22`); return process.version; });
   await check('pnpm', 'CORE', async () => { if (env.CONTENTOS_RUNTIME_MODE === 'PACKAGED') return 'PACKAGED 模式不要求 pnpm'; const result = process.platform === 'win32' ? await run(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'pnpm --version'], { timeout: 5000 }) : await run('pnpm', ['--version'], { timeout: 5000 }); return `pnpm ${String(result.stdout).trim()}`; });
   await check('database-config', 'CORE', async () => { if (!env.DATABASE_URL) throw new Error('DATABASE_URL 未配置'); return 'DATABASE_URL 已配置'; });
-  await check('database', 'CORE', async () => { if (!env.DATABASE_URL) throw new Error('DATABASE_URL 未配置'); const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 1, connectionTimeoutMillis: 3000 }); try { await pool.query('select 1'); return 'PostgreSQL 可连接'; } finally { await pool.end(); } });
+  await check('packaged-resources', 'CORE', async () => { if (env.CONTENTOS_RUNTIME_MODE !== 'PACKAGED') return '开发模式不要求 staged runtime resources'; await assertPostgresResources(resolvePostgresResourcePaths(paths.resourcesRoot)); await access(resolve(paths.resourcesRoot, 'runtime-manifest.json')); return `Packaged runtime resources ready: ${paths.resourcesRoot}`; });
+  await check('database', 'CORE', async () => { if (env.CONTENTOS_DATABASE_MODE === 'EMBEDDED') return 'Embedded PostgreSQL 将由 Runtime Host 启动'; if (!env.DATABASE_URL) throw new Error('DATABASE_URL 未配置'); const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 1, connectionTimeoutMillis: 3000 }); try { await pool.query('select 1'); return 'PostgreSQL 可连接'; } finally { await pool.end(); } });
   await check('storage', 'CORE', async () => { await mkdir(paths.storageRoot, { recursive: true }); await access(paths.storageRoot); return paths.storageRoot; });
   await check('runtime-root', 'CORE', async () => { await mkdir(paths.runtimeRoot, { recursive: true }); await access(paths.runtimeRoot); return paths.runtimeRoot; });
+  await check('database-root', 'CORE', async () => { await mkdir(paths.databaseRoot, { recursive: true }); await access(paths.databaseRoot); return paths.databaseRoot; });
+  await check('cache-root', 'CORE', async () => { await mkdir(paths.cacheRoot, { recursive: true }); await access(paths.cacheRoot); return paths.cacheRoot; });
+  await check('temp-root', 'CORE', async () => { await mkdir(paths.tempRoot, { recursive: true }); await access(paths.tempRoot); return paths.tempRoot; });
   await check('temp', 'CORE', async () => { const file = `${tmpdir()}/contentos-doctor-${process.pid}-${Date.now()}.tmp`; await writeFile(file, 'ok', 'utf8'); await rm(file, { force: true }); return tmpdir(); });
   await check('ffmpeg', 'CORE', async () => { await run(env.FFMPEG_PATH || 'ffmpeg', ['-version'], { timeout: 5000 }); return 'ffmpeg 可用'; });
   await check('ffprobe', 'CORE', async () => { await run(env.FFPROBE_PATH || 'ffprobe', ['-version'], { timeout: 5000 }); return 'ffprobe 可用'; });

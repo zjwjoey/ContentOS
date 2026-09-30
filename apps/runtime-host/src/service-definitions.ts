@@ -1,15 +1,20 @@
 import { createDatabase, migrateUp } from '../../../packages/database/src/index.js';
-import { access } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import type { ServiceDefinition } from '../../../packages/runtime-core/src/index.js';
+import { PostgresRuntimeManager, type ServiceDefinition } from '../../../packages/runtime-core/src/index.js';
 
 export interface RuntimeServicesOptions { appRoot: string; env: Record<string, string | undefined>; safeMode: boolean; config?: import('../../../packages/runtime-core/src/index.js').RuntimeConfig; }
 const tsx = (appRoot: string) => resolve(appRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const processService = (id: string, label: string, entry: string, options: RuntimeServicesOptions, dependsOn: string[], required: boolean, readiness: 'PROCESS' | 'STDOUT_JSON_READY' = 'STDOUT_JSON_READY'): ServiceDefinition => { const packaged = options.config?.launchMode === 'PACKAGED'; const sourceEntry = resolve(options.appRoot, entry); const builtEntry = resolve(options.appRoot, 'dist', entry.replace(/\.ts$/u, '.js')); return { id, label, kind: 'PROCESS', required, dependsOn, startupTimeoutMs: 45_000, shutdownTimeoutMs: 10_000, restartClass: 'TRANSIENT', restartPolicy: { enabled: true, maxRestarts: 3, windowMs: 60_000, backoffMs: [1_000, 3_000, 10_000] }, command: process.execPath, args: packaged ? [builtEntry] : [tsx(options.appRoot), sourceEntry], env: { NODE_ENV: packaged ? 'production' : 'development' }, readiness }; };
 
 export function createServiceDefinitions(options: RuntimeServicesOptions): ServiceDefinition[] {
-  const env = options.env; const databaseUrl = options.config?.databaseUrl || env.DATABASE_URL || '';
-  const db: ServiceDefinition = { id: 'database', label: 'Database', kind: 'EXTERNAL', required: true, dependsOn: [], startupTimeoutMs: 20_000, shutdownTimeoutMs: 1_000, restartPolicy: { enabled: false, maxRestarts: 0, windowMs: 60_000, backoffMs: [] }, healthCheck: async () => { const pool = await createDatabase(databaseUrl); try { await pool.query('select 1'); return { state: 'READY', message: 'PostgreSQL reachable' }; } finally { await pool.end(); } } };
+  const env = options.env; const config = options.config; const databaseUrl = config?.databaseUrl || env.DATABASE_URL || '';
+  const embedded = env.CONTENTOS_DATABASE_MODE === 'EMBEDDED';
+  const databasePort = config?.databasePort || Number(env.CONTENTOS_DATABASE_PORT || 55433);
+  const databaseUser = config?.databaseUser || env.CONTENTOS_DATABASE_USER || 'contentos';
+  const databasePassword = config?.databasePassword || env.CONTENTOS_DATABASE_PASSWORD || 'contentos-local';
+  const databaseName = config?.databaseName || env.CONTENTOS_DATABASE_NAME || 'contentos';
+  const postgres = embedded ? new PostgresRuntimeManager({ dataRoot: config?.databaseRoot || resolve(options.appRoot, 'runtime', 'postgres'), resourcesRoot: config?.resourcesRoot || resolve(options.appRoot, 'resources'), port: databasePort, user: databaseUser, password: databasePassword, database: databaseName }) : undefined;
+  const db: ServiceDefinition = { id: 'database', label: embedded ? 'Bundled PostgreSQL' : 'Database', kind: embedded ? 'MANAGED' : 'EXTERNAL', required: true, dependsOn: [], startupTimeoutMs: 60_000, shutdownTimeoutMs: 15_000, restartPolicy: { enabled: false, maxRestarts: 0, windowMs: 60_000, backoffMs: [] }, ...(postgres ? { port: databasePort, start: async () => { await postgres.start(); }, stop: async () => { await postgres.stop(); } } : {}), healthCheck: async () => { if (postgres) { const managerHealth = await postgres.healthCheck(); if (managerHealth.state === 'FAILED') return managerHealth; } const pool = await createDatabase(databaseUrl); try { return { state: 'READY', message: embedded ? `Bundled PostgreSQL reachable (${await postgres!.version()})` : 'PostgreSQL reachable' }; } finally { await pool.end(); } } };
   const migration: ServiceDefinition = { id: 'migration', label: 'Schema Migration', kind: 'TASK', required: true, dependsOn: ['database'], startupTimeoutMs: 60_000, shutdownTimeoutMs: 1_000, restartPolicy: { enabled: false, maxRestarts: 0, windowMs: 60_000, backoffMs: [] }, start: async () => { const pool = await createDatabase(databaseUrl); try { await migrateUp(pool); } finally { await pool.end(); } }, healthCheck: async () => ({ state: 'READY', message: 'Schema ready' }) };
   const apiPort = options.config?.apiPort || Number(env.PORT || 3000); const webPort = options.config?.webPort || Number(env.WEB_PORT || 3001);
   const api: ServiceDefinition = { ...processService('api', 'API', 'apps/api/src/main.ts', options, ['database', 'migration'], true, 'PROCESS'), port: apiPort, healthCheck: async () => { const response = await fetch(`http://127.0.0.1:${apiPort}/ready`); return response.ok ? { state: 'READY', message: 'API readiness ready' } : { state: 'FAILED', message: `HTTP ${response.status}` }; } };

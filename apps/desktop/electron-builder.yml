@@ -12,6 +12,9 @@ files:
   - apps/web/.next/**
   - apps/web/public/**
   - node_modules/**
+extraResources:
+  - from: apps/desktop/resources
+    to: resources
 extraMetadata:
   main: dist/apps/desktop/src/main/main.js
 win:
