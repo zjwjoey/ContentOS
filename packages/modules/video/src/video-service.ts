@@ -45,6 +45,28 @@ export class VideoService {
     await this.db.query("insert into video_workspaces (id, type, project_id) values ($1, 'PROJECT', $2) on conflict (project_id) do nothing", [projectWorkspaceId(projectId), projectId]);
   }
 
+  async createManifestRevision(projectId: string, manifest: EditManifestV0, options: { createdBy?: string; idempotencyKey?: string } = {}): Promise<{ manifestId: string; revision: number }> {
+    if (manifest.projectId !== projectId || manifest.workspaceId) throw new Error('VIDEO_MANIFEST_PROJECT_SCOPE_INVALID');
+    validateEditManifest(manifest);
+    await this.ensureProjectWorkspace(projectId);
+    const client = await this.db.connect();
+    try {
+      await client.query('begin');
+      await client.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:video-manifest:${projectId}`]);
+      const planId = manifest.metadata?.intelligentPlanId;
+      if (planId) {
+        const existing = await client.query<{ id: string; revision: number }>("select id,revision from edit_manifests where project_id=$1 and manifest->'metadata'->>'intelligentPlanId'=$2 order by revision desc limit 1", [projectId, planId]);
+        if (existing.rows[0]) { await client.query('commit'); return { manifestId: String(existing.rows[0].id), revision: Number(existing.rows[0].revision) }; }
+      }
+      await client.query("update edit_manifests set status='SUPERSEDED' where project_id=$1 and status='PERSISTED'", [projectId]);
+      const revision = Number((await client.query<{ revision: number }>('select coalesce(max(revision),0)+1 as revision from edit_manifests where project_id=$1', [projectId])).rows[0]?.revision || 1);
+      const manifestId = `manifest-${randomUUID()}`;
+      await client.query('insert into edit_manifests (id,project_id,workspace_id,revision,schema_version,manifest,manifest_digest,status,created_by,idempotency_key) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [manifestId, projectId, projectWorkspaceId(projectId), revision, 'EDIT_MANIFEST_V0', manifest, digestEditManifest(manifest), 'PERSISTED', options.createdBy || 'intelligent-planner', options.idempotencyKey || null]);
+      await client.query('commit');
+      return { manifestId, revision };
+    } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
+  }
+
   async createJob(input: CreateVideoJobInput): Promise<JobRecord> {
     if (input.videoAssetIds.length === 0) throw new Error('At least one video asset is required');
     await this.ensureProjectWorkspace(input.projectId);

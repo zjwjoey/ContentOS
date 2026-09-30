@@ -79,7 +79,6 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const directorRead = new DirectorProjectReadService(directorV1, director);
   const jobs = new JobService(db);
   const intelligence = runtime.intelligence || new MediaIntelligenceService(db, createFakeIntelligenceProviders());
-  const planning = new IntelligentPlanningService(db);
   const decisions = new IntelligentDecisionService(db);
   const benchmark = new BenchmarkService(db, jobs);
   const assets = new AssetCatalogService(db);
@@ -90,6 +89,7 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
   const nativePathPicker = runtime.nativePathPicker || (process.platform === 'win32' ? new WindowsNativePathPicker() : new UnsupportedNativePathPicker());
   const localMedia = new LocalMediaSourceService({ db, thumbnailRoot: `${storage.root}/thumbnails`, pathAccess: localPathAccess });
   const video = new VideoService(db, storage, jobs, assets, localPathAccess);
+  const planning = new IntelligentPlanningService(db, { storage, video });
   const videoFromDirector = new DirectorVideoService(directorV1, video, director);
   const quickEdit = new VideoAdjustmentService(db, assets, localMedia);
   const standaloneQuickEdit = new StandaloneQuickEditService(db, assets, quickEdit, video);

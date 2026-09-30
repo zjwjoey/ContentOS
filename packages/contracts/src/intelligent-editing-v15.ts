@@ -170,6 +170,7 @@ export interface IntelligentEditPlanV1 {
   quality: IntelligentEditQualityV1;
   manifestId?: string | null;
   videoRevisionId?: string | null;
+  renderJobId?: string | null;
   sourceAnalysisRunIds?: string[];
   plannerVersion?: string;
   analysisVersion?: string | null;
