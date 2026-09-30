@@ -152,4 +152,4 @@
 - Desktop Independence: PASS — `apps/desktop` diff remains empty; no Desktop code was modified
 - Known Limitations: real ASR endpoint still needs user configuration; Qwen Vision/Embedding adapters are configurable but real remote calls are not independently verified; Remote CI is not configured in this repository
 - Remote CI Status: `NOT CONFIGURED`
-- Remote Push Status: `PENDING_FINAL_PUSH` — implementation commits are local and the final documentation metadata will be verified after this update is pushed.
+- Remote Push Status: `PASS` — the remote branch was verified after the closure push; implementation commits `d0bcc72` and `e2e3134` plus the acceptance metadata are present on `origin/feature/contentos-intelligent-editing-v15`.
