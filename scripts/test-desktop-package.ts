@@ -19,6 +19,7 @@ const resourceRoot = process.env.CONTENTOS_SMOKE_RESOURCES_ROOT;
 let child: ChildProcess | undefined;
 let childStdout = '';
 let childStderr = '';
+let forcedKill = false;
 
 async function readState(): Promise<SmokeState | undefined> {
   try { return JSON.parse(await readFile(statePath, 'utf8')) as SmokeState; } catch { return undefined; }
@@ -42,6 +43,9 @@ async function waitForStateRemoval(timeoutMs = 120_000): Promise<void> {
 }
 async function killTree(processToKill: ChildProcess | undefined): Promise<void> {
   if (!processToKill?.pid) return;
+  for (let attempt = 0; attempt < 40 && processToKill.exitCode === null; attempt += 1) await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  if (processToKill.exitCode !== null) return;
+  forcedKill = true;
   await execFileAsync('taskkill', ['/PID', String(processToKill.pid), '/T', '/F'], { windowsHide: true, timeout: 15_000 }).catch(() => undefined);
   for (let attempt = 0; attempt < 40 && processToKill.exitCode === null; attempt += 1) await new Promise((resolveWait) => setTimeout(resolveWait, 250));
 }
@@ -82,8 +86,8 @@ try {
 } finally {
   const smokeChild = child;
   await killTree(smokeChild);
-  if (smokeChild && smokeChild.exitCode !== 0 && (childStdout || childStderr)) console.error(JSON.stringify({ childExitCode: smokeChild.exitCode, childStdout, childStderr }));
-  if (smokeChild?.exitCode !== 0) console.error(JSON.stringify({ runtimeDiagnostics: await readSmokeDiagnostics() }));
+  if (smokeChild && smokeChild.exitCode !== 0 && !forcedKill && (childStdout || childStderr)) console.error(JSON.stringify({ childExitCode: smokeChild.exitCode, childStdout, childStderr }));
+  if (smokeChild?.exitCode !== 0 && !forcedKill) console.error(JSON.stringify({ runtimeDiagnostics: await readSmokeDiagnostics() }));
   if (process.env.CONTENTOS_KEEP_SMOKE_ROOT !== '1') await removeSmokeRoot();
   else console.error(`packaged smoke root preserved at ${root}`);
 }

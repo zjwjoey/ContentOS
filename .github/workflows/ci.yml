@@ -225,6 +225,12 @@ jobs:
         run: pnpm desktop:package
       - name: Packaged runtime smoke
         run: pnpm desktop:smoke
+      - name: Portable runtime smoke
+        env:
+          CONTENTOS_SMOKE_EXECUTABLE: artifacts/desktop/ContentOS.exe
+        run: pnpm desktop:smoke
+      - name: Installer runtime smoke
+        run: pnpm desktop:installer-smoke
       - name: Upload Windows desktop artifacts
         uses: actions/upload-artifact@v4
         with:
