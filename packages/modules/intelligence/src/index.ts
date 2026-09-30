@@ -7,4 +7,4 @@ export type { IntelligentPlannerAsset, IntelligentPlannerInput, IntelligentPlann
 export { IntelligentPlanningService } from './intelligent-planning-service.js';
 export type { CreateIntelligentPlanInput } from './intelligent-planning-service.js';
 export { IntelligentDecisionService } from './decision-service.js';
-export type { CreatePresetInput, CreateRecommendationInput } from './decision-service.js';
+export type { CreateDecisionEventInput, CreatePresetInput, CreateRecommendationInput } from './decision-service.js';
