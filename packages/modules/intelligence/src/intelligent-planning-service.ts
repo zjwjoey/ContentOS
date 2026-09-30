@@ -72,6 +72,8 @@ export class IntelligentPlanningService {
       if (String(next.sentence_id) !== input.sentenceId) throw new Error('INTELLIGENT_CANDIDATE_SENTENCE_MISMATCH');
       if (String(previous.id) === String(next.id)) throw new Error('INTELLIGENT_CANDIDATE_ALREADY_SELECTED');
       if (Boolean(next.selected)) throw new Error('INTELLIGENT_CANDIDATE_ALREADY_SELECTED');
+      const priorReplacement = await client.query<{ id: string }>("select id from editing_decision_events where plan_id=$1 and sentence_id=$2 and event_type='SHOT_REPLACED' limit 1", [input.planId, input.sentenceId]);
+      if (priorReplacement.rows[0]) throw new Error('INTELLIGENT_CANDIDATE_SELECTION_CONFLICT');
       const manifest = structuredClone(plan.manifest as EditManifestV0);
       const timelineIndex = manifest.timeline.findIndex((clip) => clip.sentenceId === input.sentenceId);
       if (timelineIndex < 0) throw new Error('INTELLIGENT_SENTENCE_NOT_IN_MANIFEST');
@@ -91,8 +93,8 @@ export class IntelligentPlanningService {
       validateEditManifest(manifest);
       const quality = evaluateIntelligentManifest(manifest, plan.config as IntelligentPlannerConfigV1);
       const nextPlanRevision = Number(plan.revision || 1) + 1;
-      const manifestRecord = await this.options.video.createManifestRevision(input.projectId, manifest, { createdBy: 'intelligent-candidate-replacement', idempotencyKey: `intelligent-plan:${input.planId}:revision:${nextPlanRevision}:candidate:${input.candidateId}`, forceNewRevision: true });
-      const renderJob = await this.options.video.createManifestRenderJob(input.projectId, manifestRecord.manifestId);
+      const manifestRecord = await this.options.video.createManifestRevisionWithExecutor(client, input.projectId, manifest, { createdBy: 'intelligent-candidate-replacement', idempotencyKey: `intelligent-plan:${input.planId}:revision:${nextPlanRevision}:candidate:${input.candidateId}`, forceNewRevision: true });
+      const renderJob = await this.options.video.createManifestRenderJobWithExecutor(client, input.projectId, manifestRecord.manifestId);
       const decisionEventId = `decision-${randomUUID()}`;
       await client.query('update intelligent_edit_candidates set selected=false where plan_id=$1 and sentence_id=$2', [input.planId, input.sentenceId]);
       await client.query('update intelligent_edit_candidates set selected=true where id=$1 and plan_id=$2 and sentence_id=$3', [input.candidateId, input.planId, input.sentenceId]);
