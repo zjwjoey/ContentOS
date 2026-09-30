@@ -148,3 +148,23 @@ test('duplicate replacement request returns already-selected without a second re
     assert.deepEqual(await snapshot(state.db, state.planId), before);
   } finally { await state.db.end(); }
 });
+
+test('repeated replacements preserve history and allow A to B to C', { skip: !databaseUrl }, async () => {
+  const state = await fixture();
+  try {
+    await state.planning.applyCandidateReplacement({ projectId: state.projectId, planId: state.planId, sentenceId: 's1', candidateId: state.candidateIds.alternative });
+    const second = await state.planning.applyCandidateReplacement({ projectId: state.projectId, planId: state.planId, sentenceId: 's1', candidateId: state.candidateIds.concurrent });
+    assert.equal(second.revision, 3);
+    const after = await snapshot(state.db, state.planId);
+    assert.deepEqual(after.selected, [state.candidateIds.concurrent]);
+    assert.equal(after.revision, 3);
+    assert.equal(after.manifests, 3);
+    assert.equal(after.renderJobs, 3);
+    assert.equal(after.decisions, 2);
+    const events = await state.db.query<{ previous_candidate_id: string; next_candidate_id: string }>('select previous_candidate_id,next_candidate_id from editing_decision_events where plan_id=$1 order by created_at,id', [state.planId]);
+    assert.deepEqual(events.rows, [
+      { previous_candidate_id: state.candidateIds.initial, next_candidate_id: state.candidateIds.alternative },
+      { previous_candidate_id: state.candidateIds.alternative, next_candidate_id: state.candidateIds.concurrent },
+    ]);
+  } finally { await state.db.end(); }
+});
