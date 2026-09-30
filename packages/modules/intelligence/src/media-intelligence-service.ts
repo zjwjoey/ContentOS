@@ -131,6 +131,7 @@ export class MediaIntelligenceService {
       if (capability(run.capabilities, 'KEYFRAMES')) await this.generateKeyframes(run, shots, source, signal);
       if (capability(run.capabilities, 'ASR')) {
         const segments = await this.providers.asr.transcribe({ assetId: run.assetId, runId, durationMs: technical.durationMs, metadata, ...(signal ? { signal } : {}) });
+        signal?.throwIfAborted();
         for (const [index, item] of segments.entries()) {
           signal?.throwIfAborted();
           const segmentIndex = item.segmentIndex ?? index;
@@ -142,6 +143,7 @@ export class MediaIntelligenceService {
       }
       if (capability(run.capabilities, 'VISION')) {
         const visionItems = await this.providers.vision.analyze({ assetId: run.assetId, runId, shots, metadata, ...(signal ? { signal } : {}) });
+        signal?.throwIfAborted();
         for (const [index, item] of visionItems.entries()) {
           signal?.throwIfAborted();
           const shotId = item.shotId || shots[index]?.id || null;

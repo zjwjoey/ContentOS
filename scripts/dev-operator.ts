@@ -80,6 +80,7 @@ if (direct) {
   launchDirect('@contentos/director-worker', 'workers/director-worker/src/dev-main.ts', { ...commonEnv, PORT: process.env.DIRECTOR_WORKER_PORT ?? '3010' });
   launchDirect('@contentos/asset-worker', 'workers/asset-worker/src/main.ts', { ...commonEnv, PORT: process.env.ASSET_WORKER_PORT ?? '3012' });
   launchDirect('@contentos/worker-video', 'workers/video-worker/src/main.ts', { ...commonEnv, PORT: process.env.VIDEO_WORKER_PORT ?? '3015' });
+  launchDirect('@contentos/media-intelligence-worker', 'workers/media-intelligence-worker/src/main.ts', { ...commonEnv, CONTENTOS_INTELLIGENCE_DATABASE_URL: commonEnv.DATABASE_URL, CONTENTOS_INTELLIGENCE_STORAGE_ROOT: commonEnv.STORAGE_ROOT, CONTENTOS_INTELLIGENCE_KEYFRAME_ROOT: resolve(commonEnv.STORAGE_ROOT!, 'intelligence-keyframes'), CONTENTOS_INTELLIGENCE_TEMP_ROOT: resolve(commonEnv.STORAGE_ROOT!, 'intelligence-temp'), CONTENTOS_INTELLIGENCE_CACHE_ROOT: resolve(commonEnv.STORAGE_ROOT!, 'intelligence-cache'), CONTENTOS_INTELLIGENCE_EMBEDDING_ROOT: resolve(commonEnv.STORAGE_ROOT!, 'intelligence-embeddings'), PORT: process.env.MEDIA_INTELLIGENCE_WORKER_PORT ?? '3016' });
   launchDirect('@contentos/worker-publisher', 'workers/publisher-worker/src/dev-main.ts', { ...commonEnv, PORT: process.env.PUBLISHER_WORKER_PORT ?? '3020' });
   launchDirect('@contentos/review-worker', 'workers/review-worker/src/dev-main.ts', { ...commonEnv, PORT: process.env.REVIEW_WORKER_PORT ?? '3025' });
   launchDirect('@contentos/benchmark-worker', 'workers/benchmark-worker/src/dev-main.ts', { ...commonEnv, PORT: process.env.BENCHMARK_WORKER_PORT ?? '3026' });
@@ -89,6 +90,7 @@ if (direct) {
   launch(['--filter', '@contentos/director-worker', 'dev'], { ...commonEnv, PORT: process.env.DIRECTOR_WORKER_PORT ?? '3010' });
   launch(['--filter', '@contentos/asset-worker', 'dev'], { ...commonEnv, PORT: process.env.ASSET_WORKER_PORT ?? '3012' });
   launch(['--filter', '@contentos/worker-video', 'dev'], { ...commonEnv, PORT: process.env.VIDEO_WORKER_PORT ?? '3015' });
+  launch(['--filter', '@contentos/media-intelligence-worker', 'dev'], { ...commonEnv, CONTENTOS_INTELLIGENCE_DATABASE_URL: commonEnv.DATABASE_URL, CONTENTOS_INTELLIGENCE_STORAGE_ROOT: commonEnv.STORAGE_ROOT, CONTENTOS_INTELLIGENCE_KEYFRAME_ROOT: resolve(commonEnv.STORAGE_ROOT!, 'intelligence-keyframes'), CONTENTOS_INTELLIGENCE_TEMP_ROOT: resolve(commonEnv.STORAGE_ROOT!, 'intelligence-temp'), CONTENTOS_INTELLIGENCE_CACHE_ROOT: resolve(commonEnv.STORAGE_ROOT!, 'intelligence-cache'), CONTENTOS_INTELLIGENCE_EMBEDDING_ROOT: resolve(commonEnv.STORAGE_ROOT!, 'intelligence-embeddings'), PORT: process.env.MEDIA_INTELLIGENCE_WORKER_PORT ?? '3016' });
   launch(['--filter', '@contentos/worker-publisher', 'dev'], { ...commonEnv, PORT: process.env.PUBLISHER_WORKER_PORT ?? '3020' });
   launch(['--filter', '@contentos/review-worker', 'dev'], { ...commonEnv, PORT: process.env.REVIEW_WORKER_PORT ?? '3025' });
   launch(['--filter', '@contentos/benchmark-worker', 'dev'], { ...commonEnv, PORT: process.env.BENCHMARK_WORKER_PORT ?? '3026' });

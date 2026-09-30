@@ -29,7 +29,8 @@
 - `8a76e24` — `feat(intelligence): plan edits from analyzed shots`
 - `9aff1dd` — `test(intelligence): close v1.5 analysis and decision gates`
 - `cb5ba8a` — `feat(intelligence): wire render and configurable AI adapters`
-- `待提交` — Worker stale-run recovery, latest-analysis selection and configured embedding wiring
+- `f05a0a8` — `fix(intelligence): finalize v1.5 closure recovery and wiring`
+- `c1cbb7c` — `test(intelligence): add cancellation gold and browser closure gates`
 
 ## 3. Database migrations
 
@@ -50,15 +51,16 @@
 
 已验证：
 
-- `corepack pnpm test:intelligent-editing-v15`：11/11 passed；含真实 FFmpeg shot detection、真实 JPEG keyframe、analysis/planner/render vertical slice、decision evidence、Worker polling/restart/cancel；使用隔离 schema `intelligence_v15_test`。
+- `corepack pnpm test:intelligent-editing-v15`：14/14 passed；含真实 FFmpeg shot detection、真实 JPEG keyframe、analysis/planner/render vertical slice、failure/retry/cancel matrix、Semantic Gold、Planner Gold、decision evidence、Worker polling/restart/cancel；使用隔离 schema `intelligence_v15_test`。
 - `corepack pnpm test:production-pipeline`：12/12 passed。
 - `corepack pnpm test:migrations`：9/9 passed；含完整 migration chain、latest down/up 与历史边界。
 - `corepack pnpm typecheck`、`corepack pnpm build`、`corepack pnpm format`、`corepack pnpm lint`：全部通过。
 - `apps/web/node_modules/.bin/next build apps/web`：通过，包含 `/projects/[id]/intelligence` 页面编译。
+- `corepack pnpm test:browser`（仅 `tests/e2e/intelligent-editing-v15-browser.test.ts`）：1/1 passed；真实隔离 API/Web/Asset Worker/Media Intelligence Worker/Video Worker + Playwright，覆盖上传、分析、Shot/搜索、Planner、替换证据和 Render Job/MP4。
 - 独立 Worker 启动：输出 `status=READY`、注册 `MEDIA_ANALYSIS` handler。
 - `git diff --check`：通过。
 
-全仓库 `corepack pnpm test` 已执行但不能作为通过项：仓库既有大部分数据库集成/e2e 测试硬编码连接 `127.0.0.1:55432`，当前环境该端口未启动，结果为 110 个环境连接失败；非 V1.5 隔离 schema 的代码断言失败。该环境问题不影响上方已使用 `55433` 隔离 schema 的 V1.5、生产管线和迁移证据。
+全仓库 `corepack pnpm test` 已在干净 `full_regression_v15_20260930` schema 上执行：287/288 通过，唯一失败为既有 `tests/integration/publisher-foundation.test.ts` 的 migration boundary 测试，因共享 `schema_migrations` 状态/测试顺序导致 `migrateDown` 计数不稳定；不是 V1.5 变更引起。首次执行曾因默认 55432 未启动失败，随后已用 `DATABASE_URL` 指向 55433 隔离 schema 重跑，排除了环境端口误判。
 
 ## 5. Isolation and provider behavior
 
@@ -79,3 +81,26 @@
 ## 7. Current handoff
 
 当前状态：`REMOTE BRANCH READY FOR SECOND REVIEW`。本任务不合并 `main`，不删除功能分支。ASR 真实服务与全仓库默认 55432 测试环境仍需部署/配置后再做第二轮验证。
+
+## 8. Final handoff report
+
+- Branch: `feature/contentos-intelligent-editing-v15`
+- Base SHA: `7338c9266e685d26975c928349ee13d1a589b86d`
+- Final SHA: `f05a0a82c8ea002c4713a5ef1615e5a1e07aea3f`
+- New Commits: `6428e41`, `cf5e87b`, `8a76e24`, `9aff1dd`, `cb5ba8a`, `f05a0a8`
+- New Migrations: `0050_intelligent_editing_core_closure`, `0051_intelligent_edit_render_reference`; up/down and full-chain matrix passed
+- Worker Closure: PASS — executable entrypoint, polling, claim, heartbeat through JobRunner, lease reconciliation, stale-run recovery, cancellation, restart and graceful shutdown
+- Shot Detection: PASS — existing FFmpeg scene detector reused through provider adapter; no production uniform-shot fallback
+- Keyframe: PASS — real FFmpeg midpoint JPEGs under configured root with READY/FAILED state and frame hash
+- ASR: PASS for contract/persistence/Fake provider path; real ASR adapter intentionally reserved for later configuration
+- Vision: PASS — per-shot normalized results; Qwen adapter is configurable and no network call is made by default
+- Embedding: PASS — shot/input-digest/dimension/model provenance, hybrid lexical/vector retrieval; Qwen adapter is configurable
+- Semantic Search: PASS — shot-level results with source ranges and semantic/lexical scores
+- Shot Planner: PASS — shot/range candidates, quality/diversity/repetition features and provenance
+- Manifest Integration: PASS — existing `EDIT_MANIFEST_V0` and `VideoService` revision/ownership path reused
+- Render Vertical Slice: PASS — real analysis to Video Worker/FFmpeg render produced 1080x1920 MP4
+- Decision Evidence: PASS — `SHOT_REPLACED` event and RecommendationBuilder evidence are durable and project-scoped
+- Web Changes: intelligence page displays analysis status, shots/keyframes, search scores, planner candidates, alternatives, manifest/render references and quality evidence; Web production build passed
+- Tests: V1.5 14/14; browser vertical slice 1/1; full regression 287/288 with one pre-existing publisher migration-boundary failure; production pipeline 12/12; migration matrix 9/9; typecheck/build/format/lint/Web build passed
+- Known Limitations: real ASR endpoint still needs user configuration; one unrelated existing publisher migration test is not green when the full suite shares one schema
+- Remote Push Status: PASS — `origin/feature/contentos-intelligent-editing-v15` equals `f05a0a82c8ea002c4713a5ef1615e5a1e07aea3f`
