@@ -13,6 +13,7 @@
 | Windows portable executable | PACKAGED | `artifacts/desktop/ContentOS.exe` |
 | Packaged runtime smoke | TESTED_ON_DEV_MACHINE | Runtime `READY_WITH_WARNINGS`; all services READY in `desktop-smoke-runtime-v4` |
 | Clean Windows acceptance | NOT TESTED | Requires a clean Windows profile/machine |
+| Source package / runtime baseline | IMPLEMENTED | Revalidated by integration packaging, CI, and clean-Windows gates; source artifact hashes are not reused. |
 
 The final report must distinguish:
 

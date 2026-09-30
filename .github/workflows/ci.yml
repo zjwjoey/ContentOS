@@ -2,7 +2,7 @@ name: ContentOS CI
 
 on:
   push:
-    branches: [main, 'codex/**']
+    branches: [main, 'codex/**', 'feature/contentos-desktop-v1']
   pull_request:
     branches: [main]
 
@@ -204,6 +204,36 @@ jobs:
       - run: pnpm test:runtime
       - name: Windows runtime lifecycle integration
         run: pnpm exec tsx --test tests/integration/runtime-lifecycle-windows.test.ts
+
+  desktop-windows-package:
+    name: Desktop Windows package and smoke
+    runs-on: windows-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build installer and portable package
+        run: pnpm desktop:package
+      - name: Packaged runtime smoke
+        run: pnpm desktop:smoke
+      - name: Upload Windows desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: contentos-desktop-windows-${{ github.sha }}
+          path: |
+            artifacts/desktop/ContentOS Setup.exe
+            artifacts/desktop/ContentOS.exe
+            apps/desktop/resources/runtime-manifest.json
+          if-no-files-found: error
 
   build:
     name: Build
