@@ -23,6 +23,9 @@ export interface ClipMatchingV1 {
   selectedRole?: 'AUTHENTIC_ENTITY' | 'NEUTRAL_BROLL' | 'GENERIC_BROLL' | 'PLACE_CONTEXT';
   entityFallback?: boolean;
   allowAssetReuse?: boolean;
+  shotType?: string;
+  cameraMotion?: string;
+  sourceSegmentId?: string;
   query?: string;
   reason?: string;
 }

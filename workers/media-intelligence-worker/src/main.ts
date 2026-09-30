@@ -80,7 +80,9 @@ export function createMediaIntelligenceWorker(dependencies: MediaIntelligenceWor
 }
 
 export async function createMediaIntelligenceWorkerFromConfig(config = loadConfig()): Promise<{ worker: MediaIntelligenceWorkerRuntime; db: Pool }> {
-  const db = await createDatabase(config.intelligenceDatabaseUrl);
+  const configuredDatabaseUrl = process.env.DATABASE_URL?.trim();
+  if (configuredDatabaseUrl && configuredDatabaseUrl !== config.databaseUrl) throw new Error('MEDIA_INTELLIGENCE_DATABASE_URL_MISMATCH');
+  const db = await createDatabase(config.databaseUrl);
   const jobs = new JobService(db);
   const storage = new LocalStorageProvider(config.storageRoot);
   const providers = createIntelligenceProviders({ ffmpegPath: config.ffmpegPath, ffprobePath: config.ffprobePath, keyframeRoot: config.intelligenceKeyframeRoot, realProvidersEnabled: config.intelligenceRealProvidersEnabled, asrProvider: config.intelligenceAsrProvider, visionProvider: config.intelligenceVisionProvider, embeddingProvider: config.intelligenceEmbeddingProvider });

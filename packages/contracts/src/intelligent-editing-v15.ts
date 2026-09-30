@@ -5,6 +5,24 @@ export type MediaAnalysisRunStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'PARTI
 export type MediaAnalysisProviderMode = 'FAKE' | 'REAL';
 export type MediaAnalysisCapability = 'TECHNICAL' | 'SHOTS' | 'KEYFRAMES' | 'ASR' | 'VISION' | 'EMBEDDING';
 
+export interface ProviderDescriptorV1 {
+  id: string;
+  modelVersion: string;
+  promptVersion?: string;
+}
+
+export interface AnalysisConfigSnapshotV1 {
+  schemaVersion: 'ANALYSIS_CONFIG_SNAPSHOT_V1';
+  providerMode: MediaAnalysisProviderMode;
+  technical: ProviderDescriptorV1;
+  shots: ProviderDescriptorV1;
+  asr: ProviderDescriptorV1;
+  vision: ProviderDescriptorV1;
+  embedding: ProviderDescriptorV1;
+  pipelineVersion: string;
+  capabilities: MediaAnalysisCapability[];
+}
+
 export interface MediaAnalysisRunV1 {
   schemaVersion: typeof INTELLIGENT_EDITING_V15_RUN_SCHEMA;
   id: string;
@@ -14,6 +32,8 @@ export interface MediaAnalysisRunV1 {
   capabilities: MediaAnalysisCapability[];
   providerMode: MediaAnalysisProviderMode;
   analysisVersion: string;
+  analysisFingerprint?: string;
+  configSnapshot?: AnalysisConfigSnapshotV1;
   sourceChecksum?: string | null;
   pipelineVersion?: string;
   idempotencyKey: string;
@@ -155,6 +175,7 @@ export interface IntelligentEditQualityV1 {
   durationFit?: number;
   repeatedShotRatio?: number;
   shotTypeDiversity?: number;
+  evidence?: { knownShotTypeCount: number; unknownShotTypeCount: number; requestedDurationMs?: number; actualDurationMs?: number };
   consecutiveSameAssetCount?: number;
   passed: boolean;
   issues: string[];
@@ -171,6 +192,7 @@ export interface IntelligentEditPlanV1 {
   manifestId?: string | null;
   videoRevisionId?: string | null;
   renderJobId?: string | null;
+  revision?: number;
   sourceAnalysisRunIds?: string[];
   plannerVersion?: string;
   analysisVersion?: string | null;
@@ -220,6 +242,8 @@ export function validateMediaAnalysisRunV1(value: MediaAnalysisRunV1): void {
   if (!['FAKE', 'REAL'].includes(value.providerMode) || !nonEmpty(value.analysisVersion) || !nonEmpty(value.idempotencyKey) || !Number.isSafeInteger(value.attemptCount) || value.attemptCount < 0) throw new Error('Invalid media analysis run configuration');
   if (value.sourceChecksum !== undefined && value.sourceChecksum !== null && !nonEmpty(value.sourceChecksum)) throw new Error('Invalid media analysis source checksum');
   if (value.pipelineVersion !== undefined && !nonEmpty(value.pipelineVersion)) throw new Error('Invalid media analysis pipeline version');
+  if (value.analysisFingerprint !== undefined && !nonEmpty(value.analysisFingerprint)) throw new Error('Invalid media analysis fingerprint');
+  if (value.configSnapshot !== undefined && value.configSnapshot.schemaVersion !== 'ANALYSIS_CONFIG_SNAPSHOT_V1') throw new Error('Invalid media analysis config snapshot');
 }
 
 export function validateTechnicalMediaAnalysisV1(value: TechnicalMediaAnalysisV1): void {

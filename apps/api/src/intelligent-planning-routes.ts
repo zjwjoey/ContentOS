@@ -17,4 +17,11 @@ export function registerIntelligentPlanningRoutes(app: FastifyInstance, dependen
     } catch (error) { const message = error instanceof Error ? error.message : 'Intelligent plan failed'; return reply.code(message.includes('NOT_FOUND') ? 404 : 422).send({ error: { code: message, message, details: [] } }); }
   });
   app.get('/api/v1/projects/:projectId/intelligence/plans/:planId', async (request, reply) => { const params = request.params as { projectId: string; planId: string }; const result = await dependencies.planning.getPlan(params.projectId, params.planId); return result ? result : reply.code(404).send({ error: { code: 'INTELLIGENT_PLAN_NOT_FOUND', message: 'Intelligent plan not found', details: [] } }); });
+  app.post('/api/v1/projects/:projectId/intelligence/plans/:planId/sentences/:sentenceId/select-candidate', async (request, reply) => {
+    const params = request.params as { projectId: string; planId: string; sentenceId: string };
+    const parsed = z.object({ candidateId: z.string().trim().min(1) }).strict().safeParse(request.body || {});
+    if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid candidate selection input', details: parsed.error.issues } });
+    try { return reply.send(await dependencies.planning.applyCandidateReplacement({ projectId: params.projectId, planId: params.planId, sentenceId: params.sentenceId, candidateId: parsed.data.candidateId })); }
+    catch (error) { const message = error instanceof Error ? error.message : 'Candidate replacement failed'; return reply.code(message.includes('NOT_FOUND') ? 404 : 409).send({ error: { code: message, message, details: [] } }); }
+  });
 }

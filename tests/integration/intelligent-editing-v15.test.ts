@@ -12,7 +12,7 @@ import { JobRunner, JobService } from '../../packages/modules/job/src/index.js';
 import { MEDIA_ANALYSIS, MediaIntelligenceService, createFakeIntelligenceProviders } from '../../packages/modules/intelligence/src/index.js';
 import { createMediaAnalysisJobHandler } from '../../workers/media-intelligence-worker/src/handler.js';
 
-const databaseUrl = process.env.CONTENTOS_INTELLIGENCE_TEST_DATABASE_URL;
+const databaseUrl = process.env.CONTENTOS_TEST_DATABASE_URL || process.env.DATABASE_URL;
 
 test('isolated media intelligence job produces real shots and READY keyframes', { skip: !databaseUrl }, async () => {
   const db = await createDatabase(databaseUrl!); const root = await mkdtemp(join(tmpdir(), 'contentos-intelligence-v15-')); const storage = new LocalStorageProvider(root); const suffix = randomUUID();

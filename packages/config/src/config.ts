@@ -30,7 +30,6 @@ export interface AppConfig {
   digitalHumanProviderRequestTimeoutMs: number;
   digitalHumanProviderCapabilityTimeoutMs: number;
   digitalHumanRemoteResultTimeoutMs: number;
-  intelligenceDatabaseUrl: string;
   intelligenceStorageRoot: string;
   intelligenceTempRoot: string;
   intelligenceKeyframeRoot: string;
@@ -99,7 +98,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     digitalHumanProviderRequestTimeoutMs: integer(env, 'CONTENTOS_PROVIDER_REQUEST_TIMEOUT_MS', 30_000),
     digitalHumanProviderCapabilityTimeoutMs: integer(env, 'CONTENTOS_PROVIDER_CAPABILITY_TIMEOUT_MS', 5_000),
     digitalHumanRemoteResultTimeoutMs: integer(env, 'CONTENTOS_AVATAR_RESULT_TIMEOUT_MS', 300_000),
-    intelligenceDatabaseUrl: env.CONTENTOS_INTELLIGENCE_DATABASE_URL || env.CONTENTOS_TEST_DATABASE_URL || required(env, 'DATABASE_URL'),
     intelligenceStorageRoot: env.CONTENTOS_INTELLIGENCE_STORAGE_ROOT || 'storage/intelligence-local',
     intelligenceTempRoot: env.CONTENTOS_INTELLIGENCE_TEMP_ROOT || 'storage/intelligence-temp',
     intelligenceKeyframeRoot: env.CONTENTOS_INTELLIGENCE_KEYFRAME_ROOT || 'storage/intelligence-keyframes',

@@ -8,7 +8,6 @@ import { ProjectService } from '../../../packages/modules/project/src/index.js';
 const createAnalysisInput = z.object({
   assetId: z.string().trim().min(1),
   capabilities: z.array(z.enum(['TECHNICAL', 'SHOTS', 'KEYFRAMES', 'ASR', 'VISION', 'EMBEDDING'])).min(1).optional(),
-  providerMode: z.enum(['FAKE', 'REAL']).optional(),
   idempotencyKey: z.string().trim().min(1).max(300).optional(),
 }).strict();
 const searchInput = z.object({ q: z.string().max(2_000).default(''), limit: z.coerce.number().int().min(1).max(100).default(20) }).strict();
@@ -20,7 +19,7 @@ export function registerIntelligentEditingRoutes(app: FastifyInstance, dependenc
     const parsed = createAnalysisInput.safeParse(request.body || {});
     if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid media analysis input', details: parsed.error.issues } });
     try {
-      const run = await dependencies.intelligence.createRun({ projectId, assetId: parsed.data.assetId, ...(parsed.data.capabilities ? { capabilities: parsed.data.capabilities } : {}), ...(parsed.data.providerMode ? { providerMode: parsed.data.providerMode } : {}), ...(parsed.data.idempotencyKey ? { idempotencyKey: parsed.data.idempotencyKey } : {}) });
+      const run = await dependencies.intelligence.createRun({ projectId, assetId: parsed.data.assetId, ...(parsed.data.capabilities ? { capabilities: parsed.data.capabilities } : {}), ...(parsed.data.idempotencyKey ? { idempotencyKey: parsed.data.idempotencyKey } : {}) });
       if (run.status === 'QUEUED' && !run.jobId) {
         const job = await dependencies.jobs.createIdempotent({ id: `job-${randomUUID()}`, type: MEDIA_ANALYSIS, projectId, workspaceId: null, payload: { schemaVersion: 'MEDIA_ANALYSIS_JOB_V1', projectId, assetId: run.assetId, runId: run.id, correlationId: `media-analysis-${run.id}` }, idempotencyKey: `media-analysis-job:${run.id}`, maxAttempts: 3 });
         await dependencies.intelligence.attachJob(run.id, job.id);

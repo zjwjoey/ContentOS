@@ -14,6 +14,7 @@ import {
   validateMediaAnalysisShotV1,
   validateMediaAnalysisVisionResultV1,
   validateTechnicalMediaAnalysisV1,
+  type AnalysisConfigSnapshotV1,
   type MediaAnalysisAsrSegmentV1,
   type MediaAnalysisCapability,
   type MediaAnalysisEmbeddingV1,
@@ -39,7 +40,7 @@ function mapRun(row: Record<string, unknown>): MediaAnalysisRunV1 {
     schemaVersion: INTELLIGENT_EDITING_V15_RUN_SCHEMA,
     id: String(row.id), projectId: String(row.project_id), assetId: String(row.asset_id), status: String(row.status) as MediaAnalysisRunV1['status'],
     capabilities: (Array.isArray(row.capabilities) ? row.capabilities : []) as MediaAnalysisCapability[], providerMode: String(row.provider_mode) as MediaAnalysisRunV1['providerMode'],
-    analysisVersion: String(row.analysis_version), sourceChecksum: row.source_checksum ? String(row.source_checksum) : null, ...(row.pipeline_version ? { pipelineVersion: String(row.pipeline_version) } : {}),
+    analysisVersion: String(row.analysis_version), ...(row.analysis_fingerprint ? { analysisFingerprint: String(row.analysis_fingerprint) } : {}), ...(row.config_snapshot ? { configSnapshot: row.config_snapshot as NonNullable<MediaAnalysisRunV1['configSnapshot']> } : {}), sourceChecksum: row.source_checksum ? String(row.source_checksum) : null, ...(row.pipeline_version ? { pipelineVersion: String(row.pipeline_version) } : {}),
     idempotencyKey: String(row.idempotency_key), jobId: row.job_id ? String(row.job_id) : null, attemptCount: Number(row.attempt_count),
     error: row.error && typeof row.error === 'object' ? row.error as MediaAnalysisRunV1['error'] : null,
     createdAt: new Date(String(row.created_at)).toISOString(), startedAt: row.started_at ? new Date(String(row.started_at)).toISOString() : null, finishedAt: row.finished_at ? new Date(String(row.finished_at)).toISOString() : null,
@@ -62,19 +63,28 @@ function sourcePath(storage: LocalStorageProvider | undefined, storageKey: strin
 function overlapShot(shots: MediaAnalysisShotV1[], startMs: number, endMs: number): string | null {
   return shots.find((shot) => Math.min(endMs, shot.sourceOutMs) > Math.max(startMs, shot.sourceInMs))?.id || null;
 }
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(',')}}`;
+  return JSON.stringify(value);
+}
 
 export class MediaIntelligenceService {
   constructor(private readonly db: Pool, private readonly providers: IntelligenceProviders, private readonly options: MediaIntelligenceServiceOptions = {}) {}
 
   async createRun(input: CreateMediaAnalysisInput): Promise<MediaAnalysisRunV1> {
     const capabilities = [...new Set(input.capabilities?.length ? input.capabilities : DEFAULT_CAPABILITIES)];
-    if (input.providerMode === 'REAL' && this.providers.mode !== 'REAL') throw Object.assign(new Error('REAL_INTELLIGENCE_PROVIDER_DISABLED'), { code: 'REAL_INTELLIGENCE_PROVIDER_DISABLED', retryable: false });
+    const providerMode = input.providerMode || this.providers.mode;
+    if (providerMode !== this.providers.mode) throw Object.assign(new Error('MEDIA_ANALYSIS_PROVIDER_MODE_MISMATCH'), { code: 'MEDIA_ANALYSIS_PROVIDER_MODE_MISMATCH', retryable: false });
     const asset = await this.db.query<AssetRow>('select a.id, a.metadata, a.storage_key, a.checksum from assets a left join project_assets pa on pa.asset_id = a.id and pa.project_id = $1 where a.id = $2 and a.lifecycle = $3 and (a.project_id = $1 or pa.project_id = $1)', [input.projectId, input.assetId, 'READY']);
     if (!asset.rows[0]) throw new Error('MEDIA_ANALYSIS_ASSET_NOT_FOUND');
     const checksum = asset.rows[0].checksum || null;
     const analysisVersion = this.options.analysisVersion || INTELLIGENT_EDITING_V15_ANALYSIS_VERSION;
-    const idempotencyKey = input.idempotencyKey?.trim() || `media-analysis:${input.projectId}:${input.assetId}:${checksum || 'no-checksum'}:${analysisVersion}:${capabilities.join(',')}`;
-    const result = await this.db.query('insert into media_analysis_runs (id, project_id, asset_id, status, capabilities, provider_mode, analysis_version, source_checksum, pipeline_version, idempotency_key) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict (project_id,idempotency_key) do nothing returning *', [input.id || `analysis-${randomUUID()}`, input.projectId, input.assetId, 'QUEUED', capabilities, input.providerMode || this.providers.mode, analysisVersion, checksum, this.options.pipelineVersion || 'intelligent-editing-v15-core-closure-1', idempotencyKey]);
+    const pipelineVersion = this.options.pipelineVersion || 'intelligent-editing-v15-core-closure-1';
+    const configSnapshot: AnalysisConfigSnapshotV1 = { schemaVersion: 'ANALYSIS_CONFIG_SNAPSHOT_V1', providerMode, technical: this.providers.descriptors.technical, shots: this.providers.descriptors.shots, asr: this.providers.descriptors.asr, vision: this.providers.descriptors.vision, embedding: this.providers.descriptors.embedding, pipelineVersion, capabilities };
+    const analysisFingerprint = createHash('sha256').update(stableJson({ assetChecksum: checksum, analysisVersion, configSnapshot })).digest('hex');
+    const idempotencyKey = input.idempotencyKey?.trim() || `media-analysis:${input.projectId}:${input.assetId}:${checksum || 'no-checksum'}:${analysisFingerprint}:${capabilities.join(',')}`;
+    const result = await this.db.query('insert into media_analysis_runs (id, project_id, asset_id, status, capabilities, provider_mode, analysis_version, source_checksum, pipeline_version, analysis_fingerprint, config_snapshot, idempotency_key) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict (project_id,idempotency_key) do nothing returning *', [input.id || `analysis-${randomUUID()}`, input.projectId, input.assetId, 'QUEUED', capabilities, providerMode, analysisVersion, checksum, pipelineVersion, analysisFingerprint, JSON.stringify(configSnapshot), idempotencyKey]);
     if (result.rows[0]) return mapRun(result.rows[0] as Record<string, unknown>);
     const existing = await this.db.query('select * from media_analysis_runs where project_id = $1 and idempotency_key = $2', [input.projectId, idempotencyKey]);
     if (!existing.rows[0]) throw new Error('MEDIA_ANALYSIS_IDEMPOTENCY_CONFLICT');
@@ -110,7 +120,7 @@ export class MediaIntelligenceService {
       throw new Error('MEDIA_ANALYSIS_STALE');
     }
     const run = mapRun(row);
-    if (run.providerMode === 'REAL' && this.providers.mode !== 'REAL') throw Object.assign(new Error('REAL_INTELLIGENCE_PROVIDER_DISABLED'), { code: 'REAL_INTELLIGENCE_PROVIDER_DISABLED', retryable: false });
+    if (run.providerMode !== this.providers.mode) throw Object.assign(new Error('MEDIA_ANALYSIS_PROVIDER_MODE_MISMATCH'), { code: 'MEDIA_ANALYSIS_PROVIDER_MODE_MISMATCH', retryable: false });
     const metadata = safeMetadata(row.metadata);
     const source = sourcePath(this.options.storage, String(row.storage_key));
     if (this.providers.mode === 'REAL' && (!source || !(await stat(source).then((details) => details.isFile()).catch(() => false)))) throw Object.assign(new Error('MEDIA_ANALYSIS_SOURCE_UNAVAILABLE'), { code: 'MEDIA_ANALYSIS_SOURCE_UNAVAILABLE', retryable: false });

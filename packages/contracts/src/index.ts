@@ -70,6 +70,8 @@ export type {
   MediaAnalysisSearchResultV1,
   MediaAnalysisShotV1,
   MediaAnalysisVisionResultV1,
+  AnalysisConfigSnapshotV1,
+  ProviderDescriptorV1,
   TechnicalMediaAnalysisV1,
   IntelligentEditCandidateV1,
   IntelligentEditPlanV1,
