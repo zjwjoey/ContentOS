@@ -20,6 +20,7 @@ let child: ChildProcess | undefined;
 let childStdout = '';
 let childStderr = '';
 let forcedKill = false;
+let smokeSucceeded = false;
 
 async function readState(): Promise<SmokeState | undefined> {
   try { return JSON.parse(await readFile(statePath, 'utf8')) as SmokeState; } catch { return undefined; }
@@ -82,12 +83,15 @@ try {
   const stop = await fetch(`http://127.0.0.1:${readyState.controlPort}/runtime/stop`, { method: 'POST', headers: { authorization: `Bearer ${readyState.controlToken}` } });
   if (!stop.ok) throw new Error(`runtime stop returned HTTP ${stop.status}`);
   await waitForStateRemoval();
+  smokeSucceeded = true;
   console.log(JSON.stringify({ ok: true, executable, state: readyState.state, launchMode: status.launchMode, databaseMode: status.databaseMode, runtimeVersion: status.runtimeVersion, postgresVersion: status.postgresVersion, ffmpegVersion: status.ffmpegVersion, buildTimestamp: status.buildTimestamp, services: serviceStates, ports: status.services.filter((service) => service.port).map((service) => `${service.id}:${service.port}`) }));
 } finally {
   const smokeChild = child;
   await killTree(smokeChild);
-  if (smokeChild && smokeChild.exitCode !== 0 && !forcedKill && (childStdout || childStderr)) console.error(JSON.stringify({ childExitCode: smokeChild.exitCode, childStdout, childStderr }));
-  if (smokeChild?.exitCode !== 0 && !forcedKill) console.error(JSON.stringify({ runtimeDiagnostics: await readSmokeDiagnostics() }));
+  if (!smokeSucceeded || (smokeChild && smokeChild.exitCode !== 0)) {
+    if (smokeChild && (childStdout || childStderr)) console.error(JSON.stringify({ childExitCode: smokeChild.exitCode, forcedKill, childStdout, childStderr }));
+    console.error(JSON.stringify({ runtimeDiagnostics: await readSmokeDiagnostics() }));
+  }
   if (process.env.CONTENTOS_KEEP_SMOKE_ROOT !== '1') await removeSmokeRoot();
   else console.error(`packaged smoke root preserved at ${root}`);
 }
