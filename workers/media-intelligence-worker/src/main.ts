@@ -11,7 +11,7 @@ import { createMediaAnalysisJobHandler, type MediaAnalysisJobPayload, type Media
 export type { MediaAnalysisJobPayload, MediaIntelligenceWorkerDependencies } from './handler.js';
 export interface MediaIntelligenceWorkerOptions { workerId?: string; reconcileIntervalMs?: number; pollIntervalMs?: number; concurrency?: number; }
 
-class MediaIntelligenceWorkerRuntime extends WorkerRuntime {
+export class MediaIntelligenceWorkerRuntime extends WorkerRuntime {
   private reconciliationTimer: NodeJS.Timeout | null = null;
   private consumptionTimer: NodeJS.Timeout | null = null;
   private activeReconciliation: Promise<void> | null = null;
@@ -62,7 +62,7 @@ class MediaIntelligenceWorkerRuntime extends WorkerRuntime {
   }
 }
 
-export function createMediaIntelligenceWorker(dependencies: MediaIntelligenceWorkerDependencies, options: MediaIntelligenceWorkerOptions = {}): WorkerRuntime {
+export function createMediaIntelligenceWorker(dependencies: MediaIntelligenceWorkerDependencies, options: MediaIntelligenceWorkerOptions = {}): MediaIntelligenceWorkerRuntime {
   const resolved: Required<MediaIntelligenceWorkerOptions> = { workerId: options.workerId || 'media-intelligence-worker-v15', reconcileIntervalMs: options.reconcileIntervalMs ?? 5_000, pollIntervalMs: options.pollIntervalMs ?? 250, concurrency: options.concurrency ?? 1 };
   if (resolved.reconcileIntervalMs <= 0 || resolved.pollIntervalMs <= 0 || resolved.concurrency <= 0) throw new Error('Media intelligence worker intervals and concurrency must be positive');
   const runtime = new MediaIntelligenceWorkerRuntime(dependencies, resolved);
@@ -78,11 +78,11 @@ export function createMediaIntelligenceWorker(dependencies: MediaIntelligenceWor
   return runtime;
 }
 
-export async function createMediaIntelligenceWorkerFromConfig(config = loadConfig()): Promise<{ worker: WorkerRuntime; db: Pool }> {
+export async function createMediaIntelligenceWorkerFromConfig(config = loadConfig()): Promise<{ worker: MediaIntelligenceWorkerRuntime; db: Pool }> {
   const db = await createDatabase(config.intelligenceDatabaseUrl);
   const jobs = new JobService(db);
   const storage = new LocalStorageProvider(config.storageRoot);
-  const providers = createIntelligenceProviders({ ffmpegPath: config.ffmpegPath, ffprobePath: config.ffprobePath, realProvidersEnabled: config.intelligenceRealProvidersEnabled, asrProvider: config.intelligenceAsrProvider, visionProvider: config.intelligenceVisionProvider, embeddingProvider: config.intelligenceEmbeddingProvider });
+  const providers = createIntelligenceProviders({ ffmpegPath: config.ffmpegPath, ffprobePath: config.ffprobePath, keyframeRoot: config.intelligenceKeyframeRoot, realProvidersEnabled: config.intelligenceRealProvidersEnabled, asrProvider: config.intelligenceAsrProvider, visionProvider: config.intelligenceVisionProvider, embeddingProvider: config.intelligenceEmbeddingProvider });
   const intelligence = new MediaIntelligenceService(db, providers, { storage, ffmpegPath: config.ffmpegPath, keyframeRoot: config.intelligenceKeyframeRoot });
   const worker = createMediaIntelligenceWorker({ jobs, intelligence }, { concurrency: config.intelligenceWorkerConcurrency });
   return { worker, db };
