@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createDatabase } from '../../packages/database/src/client.js';
+import { buildApi } from '../../apps/api/src/app.js';
 import { ProjectService } from '../../packages/modules/project/src/index.js';
 import { IntelligentDecisionService } from '../../packages/modules/intelligence/src/index.js';
 
-const databaseUrl = process.env.CONTENTOS_INTELLIGENCE_TEST_DATABASE_URL;
+const databaseUrl = process.env.CONTENTOS_TEST_DATABASE_URL || process.env.DATABASE_URL;
 
 test('decision evidence records a shot replacement and RecommendationBuilder uses it', { skip: !databaseUrl }, async () => {
   const db = await createDatabase(databaseUrl!); const suffix = randomUUID();
@@ -16,5 +17,6 @@ test('decision evidence records a shot replacement and RecommendationBuilder use
     const assetId = `asset-${suffix}`; await db.query('insert into assets (id,project_id,kind,checksum,byte_size,storage_key,lifecycle,metadata) values ($1,$2,$3,$4,$5,$6,$7,$8)', [assetId, project.id, 'VIDEO', `sha256:${suffix}`, 100, `objects/${suffix}.mp4`, 'READY', {}]);
     await db.query('insert into intelligent_edit_candidates (id,plan_id,sentence_id,asset_id,score,selected,reasons,features) values ($1,$2,$3,$4,$5,$6,$7,$8),($9,$2,$3,$4,$10,$11,$12,$13)', [candidateA, planId, 's1', assetId, .8, true, JSON.stringify(['semantic']), JSON.stringify({ semantic: .8, duration: 1, quality: .5, diversity: 1, repetition: 1 }), candidateB, .7, false, JSON.stringify(['alternative']), JSON.stringify({ semantic: .7, duration: 1, quality: .5, diversity: 1, repetition: 1 })]);
     const decisions = new IntelligentDecisionService(db); const event = await decisions.createDecisionEvent({ projectId: project.id, planId, sentenceId: 's1', eventType: 'SHOT_REPLACED', previousCandidateId: candidateA, nextCandidateId: candidateB, evidence: { reason: 'manual alternative selection' } }); assert.equal(event.eventType, 'SHOT_REPLACED'); const recommendation = await decisions.buildRecommendation(project.id, planId); assert.equal(recommendation.profile, 'DIVERSITY_FIRST'); assert.ok(recommendation.evidence.decisionEventCount === 1); assert.ok((await decisions.listDecisionEvents(project.id, planId)).length === 1);
+    const app = await buildApi(db); const spoofed = await app.inject({ method: 'POST', url: `/api/v1/projects/${project.id}/intelligence/plans/${planId}/decisions`, payload: { sentenceId: 's1', eventType: 'SHOT_REPLACED', previousCandidateId: candidateA, nextCandidateId: candidateB, previousShotId: 'forged-previous', nextShotId: 'forged-next' } }); assert.equal(spoofed.statusCode, 422); await app.close();
   } finally { await db.end(); }
 });

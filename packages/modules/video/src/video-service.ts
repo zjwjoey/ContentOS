@@ -45,7 +45,7 @@ export class VideoService {
     await this.db.query("insert into video_workspaces (id, type, project_id) values ($1, 'PROJECT', $2) on conflict (project_id) do nothing", [projectWorkspaceId(projectId), projectId]);
   }
 
-  async createManifestRevision(projectId: string, manifest: EditManifestV0, options: { createdBy?: string; idempotencyKey?: string } = {}): Promise<{ manifestId: string; revision: number }> {
+  async createManifestRevision(projectId: string, manifest: EditManifestV0, options: { createdBy?: string; idempotencyKey?: string; forceNewRevision?: boolean } = {}): Promise<{ manifestId: string; revision: number }> {
     if (manifest.projectId !== projectId || manifest.workspaceId) throw new Error('VIDEO_MANIFEST_PROJECT_SCOPE_INVALID');
     validateEditManifest(manifest);
     await this.ensureProjectWorkspace(projectId);
@@ -54,7 +54,7 @@ export class VideoService {
       await client.query('begin');
       await client.query('select pg_advisory_xact_lock(hashtext($1))', [`contentos:video-manifest:${projectId}`]);
       const planId = manifest.metadata?.intelligentPlanId;
-      if (planId) {
+      if (planId && !options.forceNewRevision) {
         const existing = await client.query<{ id: string; revision: number }>("select id,revision from edit_manifests where project_id=$1 and manifest->'metadata'->>'intelligentPlanId'=$2 order by revision desc limit 1", [projectId, planId]);
         if (existing.rows[0]) { await client.query('commit'); return { manifestId: String(existing.rows[0].id), revision: Number(existing.rows[0].revision) }; }
       }

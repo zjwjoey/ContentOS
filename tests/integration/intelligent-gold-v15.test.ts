@@ -11,7 +11,7 @@ import { ProjectService } from '../../packages/modules/project/src/index.js';
 import { IntelligentPlanningService, MediaIntelligenceService, createFakeIntelligenceProviders } from '../../packages/modules/intelligence/src/index.js';
 import type { EmbeddingProvider, IntelligenceProviders, ShotDetectionProvider, VisionProvider } from '../../packages/modules/intelligence/src/providers.js';
 
-const databaseUrl = process.env.CONTENTOS_INTELLIGENCE_TEST_DATABASE_URL;
+const databaseUrl = process.env.CONTENTOS_TEST_DATABASE_URL || process.env.DATABASE_URL;
 
 function vectorProvider(mode: 'semantic' | 'planner'): EmbeddingProvider {
   return { embed: async ({ text, modelVersion }) => {

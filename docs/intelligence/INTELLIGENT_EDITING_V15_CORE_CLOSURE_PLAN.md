@@ -1,6 +1,6 @@
 # ContentOS Intelligent Editing V1.5 Core Closure Plan
 
-状态：`COMPLETED — READY FOR SECOND REVIEW`
+状态：`COMPLETED — READY FOR MERGE REVIEW`
 
 本轮基线：`7338c9266e685d26975c928349ee13d1a589b86d`
 
@@ -126,8 +126,8 @@
 
 ## 8. 当前验收状态
 
-`P0/P1/P2 CORE CLOSURE COMPLETE`。真实 FFmpeg fixture、Semantic Gold、Planner Gold、失败/取消/重试矩阵、隔离 Worker/API/Web/Video Worker 浏览器垂直切片均已通过。全仓库回归为 `287/288`：唯一失败是既有 `publisher-foundation` migration boundary 测试在共享 `schema_migrations` 状态下的顺序/隔离问题，不属于本分支 V1.5 变更；因此 Acceptance 仍明确记录 full regression 未达到全绿。
+`P0/P1/P2 CORE CLOSURE COMPLETE`，并完成 F0–F5 Final Closure。真实 FFmpeg fixture、Semantic Gold、Planner Gold、失败/取消/重试矩阵、同库 API→Worker gate、Candidate replacement revision、隔离 Worker/API/Web/Video Worker 浏览器垂直切片均已通过。全仓库回归在独立 schema 中为 `288/288`，另行通过 production/auto-edit/script-edit gates。
 
-当前状态：`REMOTE BRANCH READY FOR SECOND REVIEW`
+当前状态：`REMOTE BRANCH READY FOR MERGE REVIEW`
 
 本轮禁止 merge main。

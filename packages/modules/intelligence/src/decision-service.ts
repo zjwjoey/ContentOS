@@ -4,7 +4,7 @@ import { validateEditingDecisionEventV1, validateIntelligentEditPresetV1, valida
 
 export interface CreatePresetInput { id?: string; projectId?: string | null; name: string; config: IntelligentPlannerConfigV1; enabled?: boolean; }
 export interface CreateRecommendationInput { id?: string; projectId: string; planId: string; presetId?: string | null; profile: string; confidence: number; alternatives?: string[]; limitations?: string[]; evidence?: Record<string, unknown>; }
-export interface CreateDecisionEventInput { id?: string; projectId: string; planId: string; sentenceId?: string | null; eventType: EditingDecisionEventType; previousCandidateId?: string | null; nextCandidateId?: string | null; previousShotId?: string | null; nextShotId?: string | null; evidence?: Record<string, unknown>; }
+export interface CreateDecisionEventInput { id?: string; projectId: string; planId: string; sentenceId?: string | null; eventType: EditingDecisionEventType; previousCandidateId?: string | null; nextCandidateId?: string | null; evidence?: Record<string, unknown>; }
 
 function array(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; }
 function record(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
@@ -19,8 +19,18 @@ export class IntelligentDecisionService {
   async createDecisionEvent(input: CreateDecisionEventInput): Promise<EditingDecisionEventV1> {
     const plan = await this.db.query('select id from intelligent_edit_plans where id=$1 and project_id=$2', [input.planId, input.projectId]);
     if (!plan.rows[0]) throw new Error('INTELLIGENT_PLAN_NOT_FOUND');
-    for (const [candidateId, label] of [[input.previousCandidateId, 'previous'], [input.nextCandidateId, 'next']] as const) if (candidateId) { const candidate = await this.db.query('select id from intelligent_edit_candidates where id=$1 and plan_id=$2', [candidateId, input.planId]); if (!candidate.rows[0]) throw new Error(`INTELLIGENT_${label.toUpperCase()}_CANDIDATE_NOT_FOUND`); }
-    const result = await this.db.query('insert into editing_decision_events (id,project_id,plan_id,sentence_id,event_type,previous_candidate_id,next_candidate_id,previous_shot_id,next_shot_id,evidence) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *', [input.id || `decision-${randomUUID()}`, input.projectId, input.planId, input.sentenceId || null, input.eventType, input.previousCandidateId || null, input.nextCandidateId || null, input.previousShotId || null, input.nextShotId || null, JSON.stringify(input.evidence || {})]);
+    const candidateRows = await this.db.query<{ id: string; sentence_id: string; shot_id: string | null; selected: boolean }>('select id,sentence_id,shot_id,selected from intelligent_edit_candidates where plan_id=$1 and id = any($2::text[])', [input.planId, [input.previousCandidateId, input.nextCandidateId].filter((value): value is string => Boolean(value))]);
+    const candidateMap = new Map(candidateRows.rows.map((candidate) => [candidate.id, candidate]));
+    const previous = input.previousCandidateId ? candidateMap.get(input.previousCandidateId) : undefined;
+    const next = input.nextCandidateId ? candidateMap.get(input.nextCandidateId) : undefined;
+    if (input.previousCandidateId && !previous) throw new Error('INTELLIGENT_PREVIOUS_CANDIDATE_NOT_FOUND');
+    if (input.nextCandidateId && !next) throw new Error('INTELLIGENT_NEXT_CANDIDATE_NOT_FOUND');
+    if (previous && input.sentenceId && previous.sentence_id !== input.sentenceId) throw new Error('INTELLIGENT_PREVIOUS_CANDIDATE_SENTENCE_MISMATCH');
+    if (next && input.sentenceId && next.sentence_id !== input.sentenceId) throw new Error('INTELLIGENT_NEXT_CANDIDATE_SENTENCE_MISMATCH');
+    if (input.eventType === 'SHOT_REPLACED' && (!input.sentenceId || !previous || !next || previous.id === next.id || !previous.selected || next.selected)) throw new Error('INTELLIGENT_SHOT_REPLACEMENT_STATE_INVALID');
+    const accepted = input.eventType === 'SHOT_ACCEPTED' ? (next || previous) : undefined;
+    if (input.eventType === 'SHOT_ACCEPTED' && !accepted?.selected) throw new Error('INTELLIGENT_ACCEPTED_CANDIDATE_NOT_SELECTED');
+    const result = await this.db.query('insert into editing_decision_events (id,project_id,plan_id,sentence_id,event_type,previous_candidate_id,next_candidate_id,previous_shot_id,next_shot_id,evidence) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *', [input.id || `decision-${randomUUID()}`, input.projectId, input.planId, input.sentenceId || previous?.sentence_id || next?.sentence_id || null, input.eventType, input.previousCandidateId || null, input.nextCandidateId || null, previous?.shot_id || null, next?.shot_id || null, JSON.stringify({ ...(input.evidence || {}), derivedShotIds: true })]);
     return mapEvent(result.rows[0] as Record<string, unknown>);
   }
   async listDecisionEvents(projectId: string, planId: string): Promise<EditingDecisionEventV1[]> { const result = await this.db.query('select * from editing_decision_events where project_id=$1 and plan_id=$2 order by created_at,id', [projectId, planId]); return result.rows.map((row) => mapEvent(row as Record<string, unknown>)); }
@@ -30,14 +40,15 @@ export class IntelligentDecisionService {
     const result = await this.db.query('insert into intelligent_edit_recommendations (id,project_id,plan_id,preset_id,profile,confidence,alternatives,limitations,evidence) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *', [input.id || `recommendation-${randomUUID()}`, input.projectId, input.planId, input.presetId || null, input.profile.trim(), input.confidence, JSON.stringify(input.alternatives || []), JSON.stringify(input.limitations || []), JSON.stringify(input.evidence || {})]); return mapRecommendation(result.rows[0] as Record<string, unknown>);
   }
   async buildRecommendation(projectId: string, planId: string, presetId?: string | null): Promise<IntelligentEditRecommendationV1> {
-    const plan = await this.db.query('select quality from intelligent_edit_plans where id=$1 and project_id=$2', [planId, projectId]); if (!plan.rows[0]) throw new Error('INTELLIGENT_PLAN_NOT_FOUND');
+    const plan = await this.db.query('select quality,revision,manifest_id from intelligent_edit_plans where id=$1 and project_id=$2', [planId, projectId]); if (!plan.rows[0]) throw new Error('INTELLIGENT_PLAN_NOT_FOUND');
     const quality = record(plan.rows[0].quality); const events = await this.listDecisionEvents(projectId, planId); const issues = Array.isArray(quality.issues) ? quality.issues.map(String) : []; const replacements = events.filter((event) => event.eventType === 'SHOT_REPLACED');
     const alternatives: string[] = []; const limitations: string[] = []; const reasons: string[] = [];
     if (issues.includes('HIGH_ASSET_REPETITION') || issues.includes('HIGH_SHOT_REPETITION')) { alternatives.push('increase-diversity-weight'); reasons.push('plan_quality_repetition'); }
     if (issues.includes('LOW_SEMANTIC_MATCH')) { alternatives.push('review-script-sentence'); limitations.push('semantic-match-below-threshold'); reasons.push('plan_quality_semantic'); }
     if (replacements.length >= 2) { alternatives.push('prefer-alternative-shot-types'); reasons.push('repeated-shot-replacement'); }
     const confidence = Math.max(0.2, Math.min(0.95, 0.45 + reasons.length * 0.12));
-    return this.createRecommendation({ projectId, planId, ...(presetId === undefined ? {} : { presetId }), profile: reasons.includes('plan_quality_repetition') ? 'DIVERSITY_FIRST' : replacements.length ? 'SHOT_ALTERNATIVE_PREFERENCE' : 'REVIEW_PLAN', confidence, alternatives, limitations, evidence: { source: 'RecommendationBuilder', planQuality: quality, decisionEventCount: events.length, replacementCount: replacements.length, reasons } });
+    const manifest = plan.rows[0].manifest_id ? await this.db.query<{ revision: number }>('select revision from edit_manifests where id=$1 and project_id=$2', [plan.rows[0].manifest_id, projectId]) : { rows: [] };
+    return this.createRecommendation({ projectId, planId, ...(presetId === undefined ? {} : { presetId }), profile: reasons.includes('plan_quality_repetition') ? 'DIVERSITY_FIRST' : replacements.length ? 'SHOT_ALTERNATIVE_PREFERENCE' : 'REVIEW_PLAN', confidence, alternatives, limitations, evidence: { source: 'RecommendationBuilder', planQuality: quality, decisionEventCount: events.length, replacementCount: replacements.length, reasons, planRevision: Number(plan.rows[0].revision || 1), manifestRevision: manifest.rows[0] ? Number(manifest.rows[0].revision) : null, decisionEventIds: events.map((event) => event.id) } });
   }
   async listRecommendations(projectId: string, planId: string): Promise<IntelligentEditRecommendationV1[]> { const result = await this.db.query('select * from intelligent_edit_recommendations where project_id=$1 and plan_id=$2 order by created_at desc,id desc', [projectId, planId]); return result.rows.map((row) => mapRecommendation(row as Record<string, unknown>)); }
 }

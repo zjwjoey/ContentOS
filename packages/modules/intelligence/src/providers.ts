@@ -3,7 +3,7 @@ import { probeMedia } from '../../../infrastructure/ffmpeg/src/index.js';
 import { detectShotsV1, type DetectedShot } from '../../video/src/shot-detection.js';
 import { QwenEmbeddingProvider, QwenVisualAnalysisProvider } from '../../video/src/index.js';
 import { join, resolve } from 'node:path';
-import type { MediaAnalysisAsrSegmentV1, MediaAnalysisShotV1, MediaAnalysisVisionResultV1, TechnicalMediaAnalysisV1 } from '../../../contracts/src/index.js';
+import type { MediaAnalysisAsrSegmentV1, MediaAnalysisShotV1, MediaAnalysisVisionResultV1, ProviderDescriptorV1, TechnicalMediaAnalysisV1 } from '../../../contracts/src/index.js';
 
 export interface TechnicalMediaProvider {
   probe(input: { assetId: string; runId: string; metadata: Record<string, unknown>; sourcePath?: string; signal?: AbortSignal }): Promise<Omit<TechnicalMediaAnalysisV1, 'runId' | 'assetId'>>;
@@ -21,7 +21,7 @@ export interface EmbeddingProvider {
   embed(input: { text: string; modelVersion: string; signal?: AbortSignal }): Promise<{ vector: number[]; provider: string; modelVersion: string }>;
 }
 export interface IntelligenceProviderConfig { ffmpegPath?: string; ffprobePath?: string; keyframeRoot?: string; realProvidersEnabled: boolean; asrProvider?: string; visionProvider?: string; embeddingProvider?: string; }
-export interface IntelligenceProviders { technical: TechnicalMediaProvider; shots: ShotDetectionProvider; asr: AsrProvider; vision: VisionProvider; embedding: EmbeddingProvider; mode: 'FAKE' | 'REAL'; }
+export interface IntelligenceProviders { technical: TechnicalMediaProvider; shots: ShotDetectionProvider; asr: AsrProvider; vision: VisionProvider; embedding: EmbeddingProvider; descriptors: { technical: ProviderDescriptorV1; shots: ProviderDescriptorV1; asr: ProviderDescriptorV1; vision: ProviderDescriptorV1; embedding: ProviderDescriptorV1 }; mode: 'FAKE' | 'REAL'; }
 
 function numberMetadata(metadata: Record<string, unknown>, key: string, fallback: number): number { const value = metadata[key]; return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback; }
 
@@ -119,12 +119,12 @@ class QwenShotEmbeddingProvider implements EmbeddingProvider {
 }
 
 export function createFakeIntelligenceProviders(): IntelligenceProviders {
-  return { technical: new FakeTechnicalMediaProvider(), shots: new FakeShotDetectionProvider(), asr: new FakeAsrProvider(), vision: new FakeVisionProvider(), embedding: new FakeEmbeddingProvider(), mode: 'FAKE' };
+  return { technical: new FakeTechnicalMediaProvider(), shots: new FakeShotDetectionProvider(), asr: new FakeAsrProvider(), vision: new FakeVisionProvider(), embedding: new FakeEmbeddingProvider(), descriptors: { technical: { id: 'FAKE_TECHNICAL', modelVersion: 'fake-1' }, shots: { id: 'FAKE_SHOTS', modelVersion: 'fake-uniform-v1' }, asr: { id: 'FAKE_ASR', modelVersion: 'fake-1' }, vision: { id: 'FAKE_VISION', modelVersion: 'fake-1', promptVersion: 'fake-vision-v1' }, embedding: { id: 'FAKE_EMBEDDING', modelVersion: 'fake-1' } }, mode: 'FAKE' };
 }
 
 export function createIntelligenceProviders(config: IntelligenceProviderConfig): IntelligenceProviders {
   if (!config.realProvidersEnabled) return createFakeIntelligenceProviders();
   const vision = config.visionProvider === 'qwen' && config.keyframeRoot ? new QwenShotVisionProvider(config.keyframeRoot) : new UnconfiguredRealVisionProvider();
   const embedding = config.embeddingProvider === 'qwen' ? new QwenShotEmbeddingProvider() : new UnconfiguredRealEmbeddingProvider();
-  return { technical: new FfprobeTechnicalMediaProvider(config.ffprobePath), shots: new FfmpegShotDetectionProvider(config.ffmpegPath), asr: new UnconfiguredRealAsrProvider(), vision, embedding, mode: 'REAL' };
+  return { technical: new FfprobeTechnicalMediaProvider(config.ffprobePath), shots: new FfmpegShotDetectionProvider(config.ffmpegPath), asr: new UnconfiguredRealAsrProvider(), vision, embedding, descriptors: { technical: { id: 'FFPROBE', modelVersion: 'ffprobe-v1' }, shots: { id: 'FFMPEG_SCENE_DETECTOR', modelVersion: 'shot-detection-v1' }, asr: { id: config.asrProvider || 'UNCONFIGURED_ASR', modelVersion: 'unconfigured' }, vision: config.visionProvider === 'qwen' ? { id: 'QWEN_VISION', modelVersion: process.env.QWEN_VL_MODEL || 'qwen-vl-max', promptVersion: 'qwen-vision-v1' } : { id: 'UNCONFIGURED_VISION', modelVersion: 'unconfigured' }, embedding: config.embeddingProvider === 'qwen' ? { id: 'QWEN_EMBEDDING', modelVersion: process.env.QWEN_EMBEDDING_MODEL || 'text-embedding-v3' } : { id: 'UNCONFIGURED_EMBEDDING', modelVersion: 'unconfigured' } }, mode: 'REAL' };
 }

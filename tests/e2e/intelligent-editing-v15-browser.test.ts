@@ -38,9 +38,12 @@ test('Intelligent Editing V1.5 browser vertical slice uploads, analyzes, plans, 
     await page.goto(`${baseUrl}/projects/${project.id}/intelligence`, { waitUntil: 'domcontentloaded' });
     let runId = '';
     let renderJobId = '';
+    let initialPlan: { manifestId?: string | null; renderJobId?: string | null; candidates: Array<{ id: string; sentenceId: string; shotId: string | null; selected: boolean }> } | undefined;
+    let replacement: { manifestId: string; renderJobId: string; revision: number; manifestRevision: number; selectedCandidateId: string } | undefined;
     page.on('response', (response) => {
       if (response.url().endsWith(`/api/v1/projects/${project.id}/intelligence/analyses`) && response.request().method() === 'POST') void response.json().then((body: { runId?: string }) => { runId = body.runId || ''; }).catch(() => undefined);
-      if (response.url().endsWith(`/api/v1/projects/${project.id}/intelligence/plans`) && response.request().method() === 'POST') void response.json().then((body: { renderJobId?: string | null }) => { renderJobId = body.renderJobId || ''; }).catch(() => undefined);
+      if (response.url().endsWith(`/api/v1/projects/${project.id}/intelligence/plans`) && response.request().method() === 'POST') void response.json().then((body: typeof initialPlan & { renderJobId?: string | null }) => { initialPlan = body; renderJobId = body.renderJobId || ''; }).catch(() => undefined);
+      if (response.url().includes(`/api/v1/projects/${project.id}/intelligence/plans/`) && response.url().endsWith('/select-candidate') && response.request().method() === 'POST') void response.json().then((body: typeof replacement) => { replacement = body; }).catch(() => undefined);
     });
     await page.getByRole('button', { name: '分析全部 READY 视频' }).click();
     await waitFor(async () => runId, (value) => Boolean(value), 'Analysis Run ID', 15_000);
@@ -57,13 +60,15 @@ test('Intelligent Editing V1.5 browser vertical slice uploads, analyzes, plans, 
     await page.locator('input[placeholder^="输入 Script Sentence"]').fill('素材中的视频画面');
     await page.getByRole('button', { name: '生成 Plan / Manifest / Render Job' }).click();
     await page.getByText(/Plan intelligent-plan-/).waitFor({ state: 'visible', timeout: 30_000 });
-    const alternatives = page.getByRole('button', { name: '选择此候选' });
-    if (await alternatives.count() > 0) {
-      await alternatives.first().click();
-      await page.getByText('已记录 SHOT_REPLACED 决策证据。').waitFor({ state: 'visible', timeout: 15_000 });
-    }
-
-    await waitFor(async () => renderJobId, (value) => Boolean(value), 'Render Job ID', 15_000);
+    await waitFor(async () => initialPlan, (value) => Boolean(value?.manifestId && value?.renderJobId && value.candidates?.length), 'Initial Plan', 15_000);
+    const initialSelected = initialPlan!.candidates.find((candidate) => candidate.selected); const alternative = initialPlan!.candidates.find((candidate) => !candidate.selected); assert.ok(initialSelected); assert.ok(alternative);
+    const alternatives = page.getByRole('button', { name: '选择此候选' }); assert.ok(await alternatives.count() > 0); await alternatives.first().click();
+    await waitFor(async () => replacement, (value) => Boolean(value?.manifestId && value?.renderJobId && value.selectedCandidateId === alternative!.id), 'Candidate Replacement', 30_000);
+    assert.notEqual(replacement!.manifestId, initialPlan!.manifestId); assert.notEqual(replacement!.renderJobId, initialPlan!.renderJobId); assert.equal(replacement!.revision, 2);
+    const replacementManifest = await json<{ manifest: { timeline: Array<{ sourceSegmentId?: string }> } }>(await page.request.get(`${baseUrl}/api/v1/projects/${project.id}/video/manifests/${replacement!.manifestId}`)); assert.equal(replacementManifest.manifest.timeline.find((clip) => clip.sourceSegmentId === alternative!.shotId)?.sourceSegmentId, alternative!.shotId);
+    renderJobId = replacement!.renderJobId;
+    await page.getByText(/已生成新剪辑版本：Manifest Revision/).waitFor({ state: 'visible', timeout: 15_000 });
+    await waitFor(async () => renderJobId, (value) => Boolean(value), 'Replacement Render Job ID', 15_000);
     const renderJob = await waitFor(async () => json<{ state: string; result?: { outputAssetId?: string } | null }>(await page.request.get(`${baseUrl}/api/v1/jobs/${renderJobId}`)), (job) => job.state === 'SUCCEEDED', 'Intelligent Render Job');
     assert.equal(renderJob.state, 'SUCCEEDED');
     assert.equal(typeof renderJob.result?.outputAssetId, 'string');

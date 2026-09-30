@@ -15,6 +15,12 @@ test('config parses boot values without logging raw secrets', () => {
   assert.equal(config.databaseUrl, 'postgresql://user:password@localhost/db');
 });
 
+test('intelligent editing uses the core DATABASE_URL and ignores legacy split-database overrides', () => {
+  const config = loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgresql://core/db', STORAGE_ROOT: './storage/test', CONTENTOS_INTELLIGENCE_DATABASE_URL: 'postgresql://legacy/db', CONTENTOS_INTELLIGENCE_TEST_DATABASE_URL: 'postgresql://legacy-test/db' });
+  assert.equal(config.databaseUrl, 'postgresql://core/db');
+  assert.equal('intelligenceDatabaseUrl' in config, false);
+});
+
 test('config exposes digital human runtime defaults and overrides', () => {
   const defaults = loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgresql://user:password@localhost/db', STORAGE_ROOT: './storage/test' });
   assert.equal(defaults.digitalHumanSpeechProvider, 'indextts25'); assert.equal(defaults.digitalHumanWorkerConcurrency, 1); assert.equal(defaults.digitalHumanRemoteResultTimeoutMs, 300_000);
