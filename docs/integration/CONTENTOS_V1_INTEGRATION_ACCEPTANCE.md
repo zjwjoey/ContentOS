@@ -18,6 +18,7 @@
 | Windows package | PASS | `pnpm desktop:package`; installer and portable artifacts generated |
 | Portable packaged smoke | PASS | `pnpm desktop:smoke`; API, Web, Embedded PostgreSQL, migrations and `media-intelligence-worker` were `READY` |
 | Installer smoke | PASS | `pnpm desktop:installer-smoke`; silent install, launch, stop and uninstall completed |
+| Clean Windows acceptance | PASS | `pnpm desktop:clean-acceptance`; import, two real renders, crash recovery, three restarts, dynamic ports, one PostgreSQL cluster and cleanup passed |
 
 The packaged smoke explicitly verifies that `media-intelligence-worker` is
 registered as an optional service and reaches `READY`. Its worker log reports
@@ -25,9 +26,6 @@ the `MEDIA_ANALYSIS` handler.
 
 ## Not yet accepted
 
-- The clean-Windows acceptance scenario that imports media, performs an actual
-  render, restarts repeatedly and checks persistence has not been run in this
-  integration worktree.
 - Remote fetch/push and GitHub Actions evidence cannot be produced while this
   environment cannot connect to GitHub. The integration branch must be pushed
   and its CI run must pass before it is marked `INTEGRATION ACCEPTED`.
