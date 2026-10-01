@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFile, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -58,6 +58,37 @@ for (const [label, subset] of [['clean', 0], ['0001-0005', 5], ['0001-0006', 6]]
     } finally { await database.drop(); }
   });
 }
+
+test('integrated inventory upgrades a Desktop V1 duration-migration history without replaying it', async () => {
+  const database = await createTemporarySchema();
+  const temp = await mkdtemp(join(tmpdir(), 'contentos-desktop-v1-upgrade-'));
+  try {
+    await migrateSubset(database.url, 46);
+    await writeFile(join(temp, '0047_digital_human_duration.sql'), [
+      'alter table avatar_generations add column if not exists source_video_asset_id text references assets(id);',
+      'alter table avatar_generations add column if not exists source_in_ms integer not null default 0 check (source_in_ms >= 0);',
+      'alter table avatar_generations add column if not exists source_out_ms integer;',
+      'alter table avatar_generations add column if not exists target_duration_ms integer;',
+      'alter table avatar_generations add constraint avatar_generations_source_range_check check (source_out_ms is null or (source_out_ms > source_in_ms and target_duration_ms is not null and target_duration_ms > 0 and source_out_ms = source_in_ms + target_duration_ms));',
+      'alter table avatar_generations add constraint avatar_generations_target_duration_check check (target_duration_ms is null or target_duration_ms > 0);',
+    ].join('\n'), 'utf8');
+    const legacy = await createDatabase(database.url);
+    try { await migrateUp(legacy, temp); } finally { await legacy.end(); }
+    const integrated = await createDatabase(database.url);
+    try {
+      await migrateUp(integrated);
+      const columns = await integrated.query<{ column_name: string }>("select column_name from information_schema.columns where table_schema=current_schema() and table_name='avatar_generations' and column_name in ('source_video_asset_id','source_in_ms','source_out_ms','target_duration_ms') order by column_name");
+      assert.deepEqual(columns.rows.map((row) => row.column_name), ['source_in_ms', 'source_out_ms', 'source_video_asset_id', 'target_duration_ms']);
+      const intelligence = await integrated.query<{ exists: boolean }>("select exists(select 1 from information_schema.tables where table_schema=current_schema() and table_name='media_analysis_runs') as exists");
+      assert.equal(intelligence.rows[0]?.exists, true);
+      const history = await integrated.query<{ name: string }>("select name from schema_migrations where name in ('0047_digital_human_duration.sql','0047_intelligent_editing_v15.sql') order by name");
+      assert.deepEqual(history.rows.map((row) => row.name), ['0047_digital_human_duration.sql', '0047_intelligent_editing_v15.sql']);
+    } finally { await integrated.end(); }
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+    await database.drop();
+  }
+});
 
 test('migration 0016 down restores the legacy project ownership constraints', async () => {
   const database = await createTemporarySchema();
