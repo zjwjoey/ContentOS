@@ -122,6 +122,8 @@ importers:
 
   workers/director-worker: {}
 
+  workers/media-intelligence-worker: {}
+
   workers/publisher-worker: {}
 
   workers/review-worker: {}

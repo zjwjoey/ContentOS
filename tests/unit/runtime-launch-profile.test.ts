@@ -13,6 +13,12 @@ test('development launch profile uses source runners while packaged profile uses
   assert.ok(development.find((item) => item.id === 'api')?.args?.some((arg) => arg.includes('tsx')));
   assert.ok(!packaged.find((item) => item.id === 'api')?.args?.some((arg) => arg.includes('tsx')));
   assert.ok(packaged.find((item) => item.id === 'web')?.args?.includes('start'));
+  const normal = createServiceDefinitions({ appRoot: process.cwd(), env: { CONTENTOS_RUNTIME_MODE: 'PACKAGED', PORT: '3000', WEB_PORT: '3001' }, safeMode: false, config: resolveRuntimeConfig({ CONTENTOS_APP_ROOT: process.cwd(), CONTENTOS_RUNTIME_MODE: 'PACKAGED' }) });
+  const intelligence = normal.find((item) => item.id === 'media-intelligence-worker');
+  assert.ok(intelligence);
+  assert.equal(intelligence.required, false);
+  assert.deepEqual(intelligence.dependsOn, ['database', 'migration']);
+  assert.ok(intelligence.args?.some((arg) => /dist[\\/]workers[\\/]media-intelligence-worker[\\/]src[\\/]main\.js$/u.test(arg)));
 });
 
 test('packaged Runtime Host launch uses the built host entry without tsx', async () => {

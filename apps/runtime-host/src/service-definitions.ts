@@ -25,10 +25,12 @@ export function createServiceDefinitions(options: RuntimeServicesOptions): Servi
   const video = processService('video-worker', 'Video Worker', 'workers/video-worker/src/main.ts', options, ['database', 'migration'], true);
   const review = processService('review-worker', 'Review Worker', 'workers/review-worker/src/dev-main.ts', options, ['database', 'migration'], true);
   const benchmark = processService('benchmark-worker', 'Benchmark Worker', 'workers/benchmark-worker/src/dev-main.ts', options, ['database', 'migration'], false);
+  const mediaIntelligence = processService('media-intelligence-worker', 'Media Intelligence Worker', 'workers/media-intelligence-worker/src/main.ts', options, ['database', 'migration'], false);
   const digitalHuman = processService('digital-human-worker', 'Digital Human Worker', 'workers/digital-human-worker/src/dev-main.ts', options, ['database', 'migration'], false);
   const publisher = processService('publisher-worker', 'Publisher Worker', 'workers/publisher-worker/src/dev-main.ts', options, ['database', 'migration'], false);
-  digitalHuman.capabilityProbe = async () => ({ provider: env.CONTENTOS_HZAGENT_API_KEY ? 'HZAGENT' : 'NOT_CONFIGURED', speech: env.CONTENTOS_INDEXTTS_BASE_URL ? 'CONFIGURED' : 'NOT_CONFIGURED' });
+  mediaIntelligence.capabilityProbe = async () => ({ shotDetection: env.FFMPEG_PATH ? 'READY' : 'NOT_CONFIGURED', keyframe: env.FFMPEG_PATH ? 'READY' : 'NOT_CONFIGURED', asr: env.CONTENTOS_INTELLIGENCE_REAL_PROVIDERS_ENABLED === '1' ? (env.CONTENTOS_INTELLIGENCE_ASR_PROVIDER || 'NOT_CONFIGURED').toUpperCase() : 'NOT_CONFIGURED', vision: env.CONTENTOS_INTELLIGENCE_REAL_PROVIDERS_ENABLED === '1' ? (env.CONTENTOS_INTELLIGENCE_VISION_PROVIDER || 'NOT_CONFIGURED').toUpperCase() : 'NOT_CONFIGURED', embedding: env.CONTENTOS_INTELLIGENCE_REAL_PROVIDERS_ENABLED === '1' ? (env.CONTENTOS_INTELLIGENCE_EMBEDDING_PROVIDER || 'NOT_CONFIGURED').toUpperCase() : 'NOT_CONFIGURED' });
+  digitalHuman.capabilityProbe = async () => ({ provider: env.CONTENTOS_AVATAR_PROVIDER ? 'CONFIGURED' : 'NOT_CONFIGURED', speech: env.CONTENTOS_INDEXTTS_BASE_URL ? 'CONFIGURED' : 'NOT_CONFIGURED' });
   publisher.capabilityProbe = async () => ({ adapters: env.PUBLISHER_REAL_ADAPTERS_ENABLED === '1' || env.PUBLISHER_REAL_ADAPTERS_ENABLED === 'true' ? 'ENABLED' : 'NOT_CONFIGURED', account: 'LOGIN_REQUIRED' });
-  const all = [db, migration, api, asset, director, video, review, benchmark, digitalHuman, publisher, web];
+  const all = [db, migration, api, asset, director, video, review, benchmark, mediaIntelligence, digitalHuman, publisher, web];
   return options.safeMode ? all.filter((item) => item.required) : all;
 }

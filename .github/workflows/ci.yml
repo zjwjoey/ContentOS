@@ -2,7 +2,7 @@ name: ContentOS CI
 
 on:
   push:
-    branches: [main, 'codex/**', 'feature/contentos-desktop-v1']
+    branches: [main, 'codex/**', 'feature/contentos-desktop-v1', 'integration/**']
   pull_request:
     branches: [main]
 
@@ -83,6 +83,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Migrations
         run: pnpm test:migrations 2>&1 | tee migrations-output.log
+      - name: Intelligent Editing V1.5
+        run: pnpm test:intelligent-editing-v15 2>&1 | tee intelligent-editing-v15-output.log
       - name: Runtime unit gate
         run: |
           pnpm build

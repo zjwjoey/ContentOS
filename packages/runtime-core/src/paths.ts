@@ -14,6 +14,11 @@ export interface RuntimePaths {
   databaseRoot: string;
   cacheRoot: string;
   tempRoot: string;
+  intelligenceRoot: string;
+  intelligenceKeyframeRoot: string;
+  intelligenceCacheRoot: string;
+  intelligenceTempRoot: string;
+  intelligenceEmbeddingRoot: string;
   resourcesRoot: string;
 }
 
@@ -40,6 +45,7 @@ export function resolveRuntimePaths(env: Record<string, string | undefined> = pr
   const desktopUserData = env.CONTENTOS_USER_DATA_ROOT?.trim();
   const userDataRoot = resolve(desktopUserData || resolve(appRoot, 'runtime'));
   const runtimeRoot = resolve(env.CONTENTOS_RUNTIME_ROOT?.trim() || resolve(userDataRoot, 'runtime'));
+  const intelligenceRoot = resolve(env.CONTENTOS_INTELLIGENCE_STORAGE_ROOT?.trim() || (desktopUserData ? resolve(userDataRoot, 'intelligence') : resolve(appRoot, 'storage', 'intelligence-local')));
   return {
     appRoot,
     userDataRoot,
@@ -52,6 +58,11 @@ export function resolveRuntimePaths(env: Record<string, string | undefined> = pr
     databaseRoot: resolve(env.CONTENTOS_DATABASE_ROOT?.trim() || resolve(userDataRoot, 'data', 'postgres')),
     cacheRoot: resolve(env.CONTENTOS_CACHE_ROOT?.trim() || resolve(userDataRoot, 'cache')),
     tempRoot: resolve(env.CONTENTOS_TEMP_ROOT?.trim() || resolve(userDataRoot, 'temp')),
+    intelligenceRoot,
+    intelligenceKeyframeRoot: resolve(env.CONTENTOS_INTELLIGENCE_KEYFRAME_ROOT?.trim() || resolve(intelligenceRoot, 'keyframes')),
+    intelligenceCacheRoot: resolve(env.CONTENTOS_INTELLIGENCE_CACHE_ROOT?.trim() || resolve(intelligenceRoot, 'cache')),
+    intelligenceTempRoot: resolve(env.CONTENTOS_INTELLIGENCE_TEMP_ROOT?.trim() || resolve(intelligenceRoot, 'temp')),
+    intelligenceEmbeddingRoot: resolve(env.CONTENTOS_INTELLIGENCE_EMBEDDING_ROOT?.trim() || resolve(intelligenceRoot, 'embeddings')),
     resourcesRoot: resolve(env.CONTENTOS_RESOURCES_ROOT?.trim() || resolve(appRoot, 'resources')),
   };
 }

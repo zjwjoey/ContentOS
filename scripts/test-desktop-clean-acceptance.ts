@@ -8,7 +8,7 @@ import { createServer, type Server } from 'node:net';
 
 const execFileAsync = promisify(execFile);
 type RuntimeState = { state: string; controlPort: number; controlToken: string };
-type RuntimeService = { id: string; state: string; port?: number };
+type RuntimeService = { id: string; state: string; port?: number; required?: boolean; capability?: Record<string, unknown> };
 type RuntimeStatus = { state: string; services: RuntimeService[]; databaseMode?: string; launchMode?: string; postgresVersion?: string; ffmpegVersion?: string; runtimeVersion?: string };
 type ApiJob = { id: string; state: string; result?: Record<string, unknown> | null; error?: Record<string, unknown> | null };
 type AcceptanceResult = { projectId: string; sourceAssetId: string; firstOutputAssetId: string; secondOutputAssetId: string; apiPort: number; webPort: number; controlPort: number; databasePort: number; postgresVersion?: string; ffmpegVersion?: string; outputBytes: number; outputDuration: string };
@@ -100,6 +100,9 @@ async function startApp(): Promise<{ state: RuntimeState; status: RuntimeStatus 
   const { state, status } = running;
   const required = ['database', 'migration', 'api', 'asset-worker', 'video-worker', 'web'];
   for (const serviceId of required) if (status.services.find((service) => service.id === serviceId)?.state !== 'READY') throw new Error(`Required service is not READY: ${serviceId}`);
+  const intelligence = status.services.find((service) => service.id === 'media-intelligence-worker');
+  if (!intelligence || intelligence.required !== false) throw new Error('Media Intelligence Worker must be registered as an optional Desktop service');
+  if (intelligence.state !== 'READY') throw new Error(`Media Intelligence Worker did not start: ${intelligence.state}`);
   return { state, status };
 }
 

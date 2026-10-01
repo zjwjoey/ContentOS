@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RestartBudget, RuntimeStateStore, ServiceRegistry, resolveRuntimeConfig, resolveRuntimePaths } from '../../packages/runtime-core/src/index.js';
+import { RestartBudget, RuntimeStateStore, ServiceRegistry, resolveRuntimeConfig, resolveRuntimePaths, runtimeConfigEnv } from '../../packages/runtime-core/src/index.js';
 
 test('service registry resolves dependencies and rejects cycles', () => {
   const registry = new ServiceRegistry();
@@ -31,6 +31,24 @@ test('runtime config is the single source for roots, ports, database and launch 
   const config = resolveRuntimeConfig({ CONTENTOS_APP_ROOT: root, CONTENTOS_RUNTIME_ROOT: join(root, 'runtime-data'), STORAGE_ROOT: join(root, 'media'), DATABASE_URL: 'postgresql://example', PORT: '3010', WEB_PORT: '3011', CONTENTOS_RUNTIME_CONTROL_PORT: '3019', CONTENTOS_RUNTIME_MODE: 'PACKAGED' });
   assert.equal(config.appRoot, root);
   assert.equal(config.apiPort, 3010); assert.equal(config.webPort, 3011); assert.equal(config.controlPort, 3019); assert.equal(config.databaseUrl, 'postgresql://example'); assert.equal(config.launchMode, 'PACKAGED');
+  assert.equal(config.intelligenceRoot, join(root, 'storage', 'intelligence-local'));
+  assert.equal(config.intelligenceKeyframeRoot, join(root, 'storage', 'intelligence-local', 'keyframes'));
+});
+
+test('desktop user data keeps all intelligence-derived paths outside the install root', () => {
+  const root = join(tmpdir(), 'contentos-install'); const userData = join(tmpdir(), 'contentos-user-data');
+  const paths = resolveRuntimePaths({ CONTENTOS_APP_ROOT: root, CONTENTOS_USER_DATA_ROOT: userData });
+  assert.equal(paths.intelligenceRoot, join(userData, 'intelligence'));
+  assert.equal(paths.intelligenceKeyframeRoot, join(userData, 'intelligence', 'keyframes'));
+  assert.equal(paths.intelligenceCacheRoot, join(userData, 'intelligence', 'cache'));
+  assert.equal(paths.intelligenceTempRoot, join(userData, 'intelligence', 'temp'));
+  assert.equal(paths.intelligenceEmbeddingRoot, join(userData, 'intelligence', 'embeddings'));
+});
+
+test('packaged runtime defaults Intelligence to configured-real mode while test mode can use fake providers', () => {
+  const packaged = resolveRuntimeConfig({ CONTENTOS_RUNTIME_MODE: 'PACKAGED' });
+  assert.equal(runtimeConfigEnv(packaged, {}).CONTENTOS_INTELLIGENCE_REAL_PROVIDERS_ENABLED, '1');
+  assert.equal(runtimeConfigEnv(packaged, { CONTENTOS_TEST_MODE: '1' }).CONTENTOS_INTELLIGENCE_REAL_PROVIDERS_ENABLED, '0');
 });
 
 test('embedded database mode ignores inherited external database URLs', () => {

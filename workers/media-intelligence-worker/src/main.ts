@@ -91,7 +91,7 @@ export async function createMediaIntelligenceWorkerFromConfig(config = loadConfi
   return { worker, db };
 }
 
-if (basename(process.argv[1] ?? '') === 'main.ts') {
+if (/^main\.(?:ts|js)$/u.test(basename(process.argv[1] ?? ''))) {
   const { worker, db } = await createMediaIntelligenceWorkerFromConfig();
   let stopping = false;
   const stop = async (signal: string): Promise<void> => { if (stopping) return; stopping = true; await worker.shutdown(signal); await db.end(); };

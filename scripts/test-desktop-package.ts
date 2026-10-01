@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const execFileAsync = promisify(execFile);
-type SmokeState = { state: string; controlPort: number; controlToken: string; hostPid: number; services: Array<{ id: string; state: string; port?: number }> };
+type SmokeState = { state: string; controlPort: number; controlToken: string; hostPid: number; services: Array<{ id: string; state: string; port?: number; required?: boolean }> };
 type SmokeStatus = SmokeState & { launchMode?: string; databaseMode?: string; runtimeVersion?: string; ffmpegVersion?: string; postgresVersion?: string; buildTimestamp?: string };
 
 if (process.platform !== 'win32') throw new Error('desktop packaged smoke currently requires win32-x64');
@@ -82,6 +82,8 @@ try {
   const status = await response.json() as SmokeStatus;
   const serviceStates = Object.fromEntries(status.services.map((service) => [service.id, service.state]));
   if (serviceStates.database !== 'READY' || serviceStates.migration !== 'READY' || serviceStates.api !== 'READY' || serviceStates.web !== 'READY') throw new Error(`required service is not READY: ${JSON.stringify(serviceStates)}`);
+  const intelligence = status.services.find((service) => service.id === 'media-intelligence-worker');
+  if (!intelligence || intelligence.required !== false || intelligence.state !== 'READY') throw new Error(`Media Intelligence Worker is not READY as an optional service: ${JSON.stringify(intelligence)}`);
   const stop = await fetch(`http://127.0.0.1:${readyState.controlPort}/runtime/stop`, { method: 'POST', headers: { authorization: `Bearer ${readyState.controlToken}` } });
   if (!stop.ok) throw new Error(`runtime stop returned HTTP ${stop.status}`);
   await waitForStateRemoval(smokeTimeoutMs);
