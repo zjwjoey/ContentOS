@@ -275,6 +275,7 @@ export function createPublisherWorker(options?: PublisherWorkerOptions | JobHand
   return runtime;
 }
 
-if (['main.ts', 'main.js'].includes(basename(process.argv[1] ?? ''))) {
+const invokedEntrypoint = basename(process.argv[1] ?? '');
+if (invokedEntrypoint === 'main.ts' || invokedEntrypoint === 'main.js') {
   throw new Error('Publisher worker composition must be provided by the deployment entrypoint');
 }

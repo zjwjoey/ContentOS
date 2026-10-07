@@ -1,11 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import pg from 'pg';
 import { createDatabase, migrateDown, migrateUp } from '../../packages/database/src/index.js';
 import { ProjectService } from '../../packages/modules/project/src/index.js';
 import { PublisherService } from '../../packages/modules/publisher/src/index.js';
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://contentos_dev@127.0.0.1:55432/contentos_dev';
+
+async function createTemporarySchema(): Promise<{ url: string; drop: () => Promise<void> }> {
+  const schema = `publisher_foundation_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
+  const admin = new pg.Pool({ connectionString: databaseUrl });
+  await admin.query(`create schema "${schema}"`);
+  const url = new URL(databaseUrl);
+  url.searchParams.set('options', `-c search_path=${schema}`);
+  return {
+    url: url.toString(),
+    drop: async () => {
+      await admin.query(`drop schema if exists "${schema}" cascade`);
+      await admin.end();
+    },
+  };
+}
 
 async function fixture(db: Awaited<ReturnType<typeof createDatabase>>) {
   const project = await new ProjectService(db).create(`Publisher Foundation ${randomUUID()}`);
@@ -53,13 +69,10 @@ test('Publisher foundation migration creates bounded tables and constraints', as
 });
 
 test('Publisher foundation migration down and up restores its schema without assuming it is latest', async () => {
-  const db = await createDatabase(databaseUrl);
+  const schema = await createTemporarySchema();
+  const db = await createDatabase(schema.url);
   try {
     await migrateUp(db);
-    // This test exercises the legacy rollback boundary, so remove any
-    // workspace-owned rows left by earlier shared-database integration tests.
-    await db.query('delete from renders where project_id is null');
-    await db.query('delete from edit_manifests where project_id is null');
     let removedCount = 0;
     while ((await db.query("select to_regclass('publisher_requests') as table_name")).rows[0]?.table_name) {
       const down = await migrateDown(db);
@@ -74,6 +87,7 @@ test('Publisher foundation migration down and up restores its schema without ass
     assert.equal(present.rows[0]?.table_name, 'publisher_requests');
   } finally {
     await db.end();
+    await schema.drop();
   }
 });
 
