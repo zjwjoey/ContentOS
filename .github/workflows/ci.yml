@@ -83,6 +83,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Migrations
         run: pnpm test:migrations 2>&1 | tee migrations-output.log
+      - name: Reset database after migration matrix
+        env:
+          CONTENTOS_ALLOW_TEST_DB_RESET: '1'
+          CONTENTOS_EXPECTED_TEST_DATABASE_NAME: contentos_test
+        run: pnpm exec tsx scripts/reset-test-database.ts
       - name: Intelligent Editing V1.5
         run: pnpm test:intelligent-editing-v15 2>&1 | tee intelligent-editing-v15-output.log
       - name: Runtime unit gate
