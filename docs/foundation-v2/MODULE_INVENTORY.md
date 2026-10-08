@@ -26,3 +26,5 @@ Initial filesystem/API/contract inventory; table families below are ownership ca
 | Workers | workers/* | Asset, benchmark, director, video, publisher, review, digital-human, media-intelligence | Package and entry inventory |
 
 Several module READMEs still say “Reserved” despite existing service files (Project, Job, Asset, Video, Director). Those README statements must not be used as feature absence evidence. Workspace globs cover apps/*, workers/*, packages/* and packages/modules/*; frozen install reports 19 package projects, which is not the number of logical modules. Full ownership mapping, test coverage attribution and runtime call graph remain pending.
+
+Follow-up inspection: Job state/fence/recovery and Media Intelligence worker/service paths now read in detail; scoped Video render and hybrid-cache paths inspected. [Bounded audit](BOUNDED_RELIABILITY_AUDIT.md) lists actual direct Job/Asset table accesses and existing owner-contract examples. This upgrades these specific areas from entry discovery to scoped source review, not full module/table ownership certification.

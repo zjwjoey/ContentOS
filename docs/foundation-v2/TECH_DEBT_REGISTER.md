@@ -14,3 +14,5 @@ Evidence-based initial register. No speculative finding is classified as a confi
 | FV2-007 | Post-build runtime 22/23; focused baseline/current both fail with killed zombie adopted by PID1 tail; both pass unchanged under external subreaper | P1 / cloud reaping limitation isolated; ordinary runner CI pending | Preserve original assertions/runtime semantics; verify exact-head normal-runner CI; see RUNTIME_PROCESS_TREE_EVIDENCE.md |
 
 Priorities express delivery order, not measured incident severity. Worker failure injection, actual vendor integrations and embedded PostgreSQL upgrade behavior require separate evidence before adding defects.
+
+Bounded source review follow-up: see [five scoped reliability tasks](BOUNDED_RELIABILITY_AUDIT.md). These refine FV2-004 with concrete evidence and add Job/analysis reliability findings without changing runtime. FV2-A01/A02/A03 are source-confirmed gaps requiring DB regression; A04 is a policy decision; A05 is confirmed private-table write debt. None is marked fixed.
