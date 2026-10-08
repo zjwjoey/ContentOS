@@ -20,3 +20,9 @@
 ## Counts
 
 `Accepted: 7` · `Accepted with Conditions: 7` · `Proposed: 0` · `Rejected: 0` · `Superseded: 0`.
+
+## Foundation V2 additive decisions after the freeze index
+
+| ADR | Decision | Status | Evidence/condition |
+| --- | --- | --- | --- |
+| [ADR-018](ADR-018-queued-media-analysis-cancellation.md) | Job-owned terminal fence for queued Media Analysis cancellation | Accepted with Conditions | Delegated technical review approved compatibility; scoped transaction/owner/fairness regressions and existing gates required |

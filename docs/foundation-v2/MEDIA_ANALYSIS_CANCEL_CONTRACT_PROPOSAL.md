@@ -1,6 +1,8 @@
-# QUEUED Media Analysis cancellation — red regression and contract review
+# QUEUED Media Analysis cancellation — historical red regression and contract review
 
-Status: **WIP / implementation paused for required contract review**, 2026-10-08. Not a completed bug fix and not a green delivery.
+Current status: delegated technical review accepted the additive contract with conditions on 2026-10-08; implementation is recorded in [ADR-018](../adr/ADR-018-queued-media-analysis-cancellation.md) and [delivery evidence](MEDIA_ANALYSIS_CANCEL_DELIVERY.md).
+
+The remainder of this document preserves the historical WIP/red evidence at b1749327. Statements about implementation being paused, unchanged business source or absent green evidence describe that earlier checkpoint, not the current branch.
 
 Branch `codex/fv2-media-analysis-cancel`, worktree `/workspace/ContentOS-media-analysis-cancel`, base `27d43854f0571d127bb1ed4ac01334ff294409b2`. No claim/Phase0 commits imported. Existing worktrees preserved. Only this document and regression tests change; business source, contracts, workers, migrations, providers, defer and maxAttempts remain byte-identical to the base.
 

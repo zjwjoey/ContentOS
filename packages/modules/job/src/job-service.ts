@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 
 export type JobState = 'QUEUED' | 'RUNNING' | 'RETRY_WAIT' | 'FAILED' | 'SUCCEEDED' | 'CANCEL_REQUESTED' | 'CANCELLED' | 'BLOCKED';
@@ -13,6 +14,55 @@ export type JobHeartbeat = 'ACTIVE' | 'CANCEL_REQUESTED' | 'STALE';
 export type JobAttemptFenceResult<T> = { executed: true; value: T } | { executed: false };
 export type JobAttemptCommitResult<T> = { executed: true; value: T; job: JobRecord } | { executed: false; job: JobRecord };
 export type JobLeaseCancellationHandler = (job: JobRecord, scope: JobAttemptScope) => Promise<boolean>;
+export interface CancelledJobExpectation { type: string; projectId: string; attemptCount: number; }
+export type JobCancellationFenceResult<T> = { executed: true; value: T } | { executed: false };
+const cancellationScopeBrand: unique symbol = Symbol('JobCancellationScope');
+export interface JobCancellationScope extends JobQueryExecutor {
+  readonly [cancellationScopeBrand]: true;
+  readonly jobId: string;
+  readonly type: string;
+  readonly projectId: string;
+  readonly attemptCount: number;
+}
+const cancellationCallback = new AsyncLocalStorage<{ failure?: Error }>();
+function assertOutsideCancellationCallback(): void {
+  const context = cancellationCallback.getStore();
+  if (context) {
+    const error = Object.assign(new Error('Job APIs cannot be nested inside a cancellation callback; use its executor'), { code: 'JOB_CANCELLATION_NESTED_JOB_CALL' });
+    context.failure = error;
+    throw error;
+  }
+}
+
+class ActiveJobCancellationScope implements JobCancellationScope {
+  readonly [cancellationScopeBrand] = true;
+  private active = true;
+  private failure: Error | null = null;
+  private readonly pending = new Set<Promise<unknown>>();
+  constructor(readonly jobId: string, readonly type: string, readonly projectId: string, readonly attemptCount: number, private readonly client: PoolClient) {}
+  query<T extends QueryResultRow = QueryResultRow>(text: string, values: unknown[] = []): Promise<QueryResult<T>> {
+    if (!this.active) return Promise.reject(Object.assign(new Error('Job cancellation transaction is no longer active'), { code: 'JOB_CANCELLATION_SCOPE_CLOSED' }));
+    const statement = text.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/--[^\n]*/gu, '').trim().replace(/;$/u, '').trim();
+    if (statement.includes(';') || !/^(?:select|insert|update|delete|with)\b/iu.test(statement)) {
+      this.failure = Object.assign(new Error('Cancellation callbacks require a single data statement'), { code: 'JOB_CANCELLATION_QUERY_FORBIDDEN' });
+      return Promise.reject(this.failure);
+    }
+    const operation = this.client.query<T>(text, values);
+    this.pending.add(operation);
+    void operation.then(() => { this.pending.delete(operation); }, (error: unknown) => { this.failure = error instanceof Error ? error : new Error('Cancellation query failed'); this.pending.delete(operation); });
+    return operation;
+  }
+  close(): void { this.active = false; }
+  async finish(): Promise<void> {
+    this.close();
+    if (this.failure) { await this.drain(); throw this.failure; }
+    if (this.pending.size) {
+      await this.drain();
+      throw Object.assign(new Error('Cancellation callback left queries in flight'), { code: 'JOB_CANCELLATION_QUERY_NOT_AWAITED' });
+    }
+  }
+  async drain(): Promise<void> { await Promise.allSettled([...this.pending]); }
+}
 
 const jobAttemptScopeBrand: unique symbol = Symbol('JobAttemptScope');
 export interface JobAttemptScope {
@@ -41,14 +91,41 @@ function mapJob(row: Record<string, unknown>): JobRecord {
 export class JobService {
   constructor(private readonly db: Pool) {}
 
-  async createWithExecutor(executor: JobQueryExecutor, input: CreateJobInput): Promise<JobRecord> {
+  async withCancelledJobFence<T>(id: string, expected: CancelledJobExpectation, action: (scope: JobCancellationScope) => Promise<T>): Promise<JobCancellationFenceResult<T>> { assertOutsideCancellationCallback();
+    const client = await this.db.connect();
+    let scope: ActiveJobCancellationScope | null = null;
+    try {
+      await client.query('begin');
+      const selected = await client.query('select id, type, project_id, state, attempt_count from jobs where id = $1 for update', [id]);
+      const row = selected.rows[0];
+      if (![id, expected.type, expected.projectId].every((value) => typeof value === 'string' && value.trim().length > 0) || !row || row.id !== id || row.type !== expected.type || row.project_id !== expected.projectId || row.state !== 'CANCELLED' || !Number.isSafeInteger(expected.attemptCount) || expected.attemptCount < 0 || Number(row.attempt_count) !== expected.attemptCount) {
+        await client.query('commit');
+        return { executed: false };
+      }
+      scope = new ActiveJobCancellationScope(id, expected.type, expected.projectId, expected.attemptCount, client);
+      const activeScope = scope;
+      const context: { failure?: Error } = {};
+      const value = await cancellationCallback.run(context, () => action(activeScope));
+      if (context.failure) throw context.failure;
+      await scope.finish();
+      await client.query('commit');
+      return { executed: true, value };
+    } catch (error) {
+      scope?.close();
+      if (scope) await scope.drain();
+      await client.query('rollback');
+      throw error;
+    } finally { scope?.close(); client.release(); }
+  }
+
+  async createWithExecutor(executor: JobQueryExecutor, input: CreateJobInput): Promise<JobRecord> { assertOutsideCancellationCallback();
     const result = await executor.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts, scheduled_at) values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now())) returning *', [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts, input.scheduledAt || null]);
     return mapJob(result.rows[0] as Record<string, unknown>);
   }
 
-  async create(input: CreateJobInput): Promise<JobRecord> { return this.createWithExecutor(this.db, input); }
+  async create(input: CreateJobInput): Promise<JobRecord> { assertOutsideCancellationCallback(); return this.createWithExecutor(this.db, input); }
 
-  async createIdempotentWithExecutor(executor: JobQueryExecutor, input: CreateJobInput): Promise<JobRecord> {
+  async createIdempotentWithExecutor(executor: JobQueryExecutor, input: CreateJobInput): Promise<JobRecord> { assertOutsideCancellationCallback();
     const values = [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts, input.scheduledAt || null];
     const result = await executor.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts, scheduled_at) values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now())) on conflict do nothing returning *', values);
     if (result.rows[0]) return mapJob(result.rows[0] as Record<string, unknown>);
@@ -57,17 +134,17 @@ export class JobService {
     throw new Error(`JOB_ID_CONFLICT: ${input.id}`);
   }
 
-  async createIdempotent(input: CreateJobInput): Promise<JobRecord> { return this.createIdempotentWithExecutor(this.db, input); }
+  async createIdempotent(input: CreateJobInput): Promise<JobRecord> { assertOutsideCancellationCallback(); return this.createIdempotentWithExecutor(this.db, input); }
 
-  async get(id: string): Promise<JobRecord | null> {
+  async get(id: string): Promise<JobRecord | null> { assertOutsideCancellationCallback();
     const result = await this.db.query('select * from jobs where id = $1', [id]);
     return result.rows[0] ? mapJob(result.rows[0] as Record<string, unknown>) : null;
   }
-  async getByIdempotencyKey(idempotencyKey: string): Promise<JobRecord | null> {
+  async getByIdempotencyKey(idempotencyKey: string): Promise<JobRecord | null> { assertOutsideCancellationCallback();
     const result = await this.db.query('select * from jobs where idempotency_key = $1', [idempotencyKey]);
     return result.rows[0] ? mapJob(result.rows[0] as Record<string, unknown>) : null;
   }
-  async listProjectSummaries(projectId: string, limit = 8): Promise<JobSummary[]> {
+  async listProjectSummaries(projectId: string, limit = 8): Promise<JobSummary[]> { assertOutsideCancellationCallback();
     if (!projectId || limit <= 0) return [];
     const result = await this.db.query('select id, project_id, type, state, attempt_count, max_attempts, created_at from jobs where project_id = $1 order by created_at desc, id desc limit $2', [projectId, Math.min(limit, 20)]);
     return result.rows.map((row) => ({
@@ -80,7 +157,7 @@ export class JobService {
       createdAt: new Date(String(row.created_at)).toISOString(),
     }));
   }
-  async listProjectFailedSummaries(projectId: string, limit = 8): Promise<JobSummary[]> {
+  async listProjectFailedSummaries(projectId: string, limit = 8): Promise<JobSummary[]> { assertOutsideCancellationCallback();
     if (!projectId || limit <= 0) return [];
     const result = await this.db.query("select id, project_id, type, state, attempt_count, max_attempts, created_at from jobs where project_id = $1 and state in ('FAILED', 'BLOCKED') order by created_at desc, id desc limit $2", [projectId, Math.min(limit, 20)]);
     return result.rows.map((row) => ({
@@ -93,7 +170,7 @@ export class JobService {
       createdAt: new Date(String(row.created_at)).toISOString(),
     }));
   }
-  async getProjectStateSummary(projectId: string): Promise<ProjectJobStateSummary> {
+  async getProjectStateSummary(projectId: string): Promise<ProjectJobStateSummary> { assertOutsideCancellationCallback();
     const result = await this.db.query("select type, state, count(*)::text as count from jobs where project_id = $1 and state in ('QUEUED', 'RUNNING', 'RETRY_WAIT', 'FAILED', 'BLOCKED') group by type, state", [projectId]);
     const stateCounts: Record<string, number> = {};
     const videoStateCounts: Record<string, number> = {};
@@ -105,13 +182,13 @@ export class JobService {
     return { stateCounts, videoStateCounts };
   }
 
-  async listRunnable(types: string[], limit = 10): Promise<JobRecord[]> {
+  async listRunnable(types: string[], limit = 10): Promise<JobRecord[]> { assertOutsideCancellationCallback();
     if (types.length === 0 || limit <= 0) return [];
     const result = await this.db.query("select * from jobs where type = any($1::text[]) and scheduled_at <= now() and (state = 'QUEUED' or (state = 'RETRY_WAIT' and (retry_at is null or retry_at <= now()))) order by created_at, id limit $2", [types, limit]);
     return result.rows.map((row) => mapJob(row as Record<string, unknown>));
   }
 
-  async claim(id: string, workerId: string, leaseMs: number): Promise<{ job: JobRecord; attemptId: string } | null> {
+  async claim(id: string, workerId: string, leaseMs: number): Promise<{ job: JobRecord; attemptId: string } | null> { assertOutsideCancellationCallback();
     const client = await this.db.connect();
     try {
       await client.query('begin');
@@ -131,7 +208,7 @@ export class JobService {
     finally { client.release(); }
   }
 
-  async succeed(id: string, attemptId: string, result: unknown): Promise<JobRecord> {
+  async succeed(id: string, attemptId: string, result: unknown): Promise<JobRecord> { assertOutsideCancellationCallback();
     const client = await this.db.connect();
     try {
       await client.query('begin');
@@ -153,7 +230,7 @@ export class JobService {
     finally { client.release(); }
   }
 
-  async fail(id: string, attemptId: string, error: unknown, retryable: boolean, action?: (scope: JobAttemptScope) => Promise<void>): Promise<JobRecord> {
+  async fail(id: string, attemptId: string, error: unknown, retryable: boolean, action?: (scope: JobAttemptScope) => Promise<void>): Promise<JobRecord> { assertOutsideCancellationCallback();
     const client = await this.db.connect();
     let scope: ActiveJobAttemptScope | null = null;
     try {
@@ -182,7 +259,7 @@ export class JobService {
     finally { scope?.close(); client.release(); }
   }
 
-  async defer(id: string, attemptId: string, error: unknown, retryDelayMs = 1_000): Promise<JobRecord> {
+  async defer(id: string, attemptId: string, error: unknown, retryDelayMs = 1_000): Promise<JobRecord> { assertOutsideCancellationCallback();
     const client = await this.db.connect();
     try {
       await client.query('begin');
@@ -203,9 +280,9 @@ export class JobService {
     finally { client.release(); }
   }
 
-  async requeue(id: string): Promise<void> { await this.db.query("update jobs set state = 'QUEUED', retry_at = null, updated_at = now() where id = $1 and state = 'RETRY_WAIT'", [id]); }
+  async requeue(id: string): Promise<void> { assertOutsideCancellationCallback(); await this.db.query("update jobs set state = 'QUEUED', retry_at = null, updated_at = now() where id = $1 and state = 'RETRY_WAIT'", [id]); }
 
-  async requeueTerminal(id: string): Promise<JobRecord> {
+  async requeueTerminal(id: string): Promise<JobRecord> { assertOutsideCancellationCallback();
     const updated = await this.db.query("update jobs set state = 'QUEUED', scheduled_at = now(), retry_at = null, result = null, error = null, progress = '{}'::jsonb, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 and state in ('FAILED','CANCELLED') returning *", [id]);
     if (updated.rows[0]) {
       await this.db.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [id, 'job.requeued', { reason: 'explicit_retry' }]);
@@ -216,11 +293,11 @@ export class JobService {
     return current;
   }
 
-  async requestCancel(id: string): Promise<void> {
+  async requestCancel(id: string): Promise<void> { assertOutsideCancellationCallback();
     await this.db.query("update jobs set state = case when state = 'RUNNING' then 'CANCEL_REQUESTED' else 'CANCELLED' end, retry_at = null, lease_owner = case when state = 'RUNNING' then lease_owner else null end, lease_expires_at = case when state = 'RUNNING' then lease_expires_at else null end, updated_at = now() where id = $1 and state in ('QUEUED','RUNNING','RETRY_WAIT')", [id]);
   }
 
-  async heartbeat(id: string, attemptId: string, leaseMs: number): Promise<JobHeartbeat> {
+  async heartbeat(id: string, attemptId: string, leaseMs: number): Promise<JobHeartbeat> { assertOutsideCancellationCallback();
     if (leaseMs <= 0) return 'STALE';
     const leaseExpires = new Date(Date.now() + leaseMs);
     const renewed = await this.db.query("update jobs j set lease_expires_at = $3, updated_at = now() where j.id = $1 and j.state = 'RUNNING' and exists (select 1 from job_attempts a where a.id = $2 and a.job_id = j.id and a.status = 'RUNNING' and a.attempt_number = j.attempt_count) returning j.id", [id, attemptId, leaseExpires]);
@@ -229,16 +306,16 @@ export class JobService {
     return cancellation.rowCount ? 'CANCEL_REQUESTED' : 'STALE';
   }
 
-  async updateProgress(id: string, attemptId: string, progress: unknown): Promise<boolean> {
+  async updateProgress(id: string, attemptId: string, progress: unknown): Promise<boolean> { assertOutsideCancellationCallback();
     const result = await this.db.query("update jobs set progress = $3, updated_at = now() where id = $1 and state = 'RUNNING' and attempt_count = (select attempt_number from job_attempts where id = $2 and job_id = $1 and status = 'RUNNING')", [id, attemptId, progress]);
     return Boolean(result.rowCount);
   }
 
-  async renewLease(id: string, attemptId: string, leaseMs: number): Promise<boolean> {
+  async renewLease(id: string, attemptId: string, leaseMs: number): Promise<boolean> { assertOutsideCancellationCallback();
     return (await this.heartbeat(id, attemptId, leaseMs)) === 'ACTIVE';
   }
 
-  async withCurrentAttemptFence<T>(id: string, attemptId: string, action: (scope: JobAttemptScope) => Promise<T>): Promise<JobAttemptFenceResult<T>> {
+  async withCurrentAttemptFence<T>(id: string, attemptId: string, action: (scope: JobAttemptScope) => Promise<T>): Promise<JobAttemptFenceResult<T>> { assertOutsideCancellationCallback();
     const client = await this.db.connect();
     let scope: ActiveJobAttemptScope | null = null;
     try {
@@ -264,7 +341,7 @@ export class JobService {
     } finally { scope?.close(); client.release(); }
   }
 
-  async succeedWithCurrentAttempt<T>(id: string, attemptId: string, action: (scope: JobAttemptScope) => Promise<T>): Promise<JobAttemptCommitResult<T>> {
+  async succeedWithCurrentAttempt<T>(id: string, attemptId: string, action: (scope: JobAttemptScope) => Promise<T>): Promise<JobAttemptCommitResult<T>> { assertOutsideCancellationCallback();
     const client = await this.db.connect();
     let scope: ActiveJobAttemptScope | null = null;
     try {
@@ -289,7 +366,7 @@ export class JobService {
     finally { scope?.close(); client.release(); }
   }
 
-  async cancelAttempt(id: string, attemptId: string, action?: (scope: JobAttemptScope) => Promise<void>): Promise<JobRecord> {
+  async cancelAttempt(id: string, attemptId: string, action?: (scope: JobAttemptScope) => Promise<void>): Promise<JobRecord> { assertOutsideCancellationCallback();
     const client = await this.db.connect();
     let scope: ActiveJobAttemptScope | null = null;
     try {
@@ -316,7 +393,7 @@ export class JobService {
     finally { scope?.close(); client.release(); }
   }
 
-  async reconcileExpiredLeases(now = new Date(), cancel?: JobLeaseCancellationHandler): Promise<number> {
+  async reconcileExpiredLeases(now = new Date(), cancel?: JobLeaseCancellationHandler): Promise<number> { assertOutsideCancellationCallback();
     const expired = await this.db.query<{ id: string }>("select id from jobs where state in ('RUNNING','CANCEL_REQUESTED') and lease_expires_at < $1 order by id", [now]);
     let recovered = 0;
     for (const row of expired.rows) {
@@ -355,7 +432,7 @@ export class JobService {
     finally { scope?.close(); client.release(); }
   }
 
-  async attempts(jobId: string): Promise<Array<{ id: string; status: string; attempt_number: number }>> {
+  async attempts(jobId: string): Promise<Array<{ id: string; status: string; attempt_number: number }>> { assertOutsideCancellationCallback();
     const result = await this.db.query('select id, status, attempt_number from job_attempts where job_id = $1 order by attempt_number', [jobId]);
     return result.rows as Array<{ id: string; status: string; attempt_number: number }>;
   }
