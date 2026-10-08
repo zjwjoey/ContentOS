@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { createDatabase, migrateUp } from '../../packages/database/src/index.js';
 import { ProjectService } from '../../packages/modules/project/src/index.js';
-import { JobService } from '../../packages/modules/job/src/index.js';
+import { JobService, JobRunner, type JobAttemptScope, type JobHeartbeat } from '../../packages/modules/job/src/index.js';
 import { MEDIA_ANALYSIS, MediaIntelligenceService, createFakeIntelligenceProviders } from '../../packages/modules/intelligence/src/index.js';
 import { createMediaAnalysisJobHandler } from '../../workers/media-intelligence-worker/src/handler.js';
 
@@ -130,5 +130,131 @@ test('existing Job attempt fence skips stale/cancelled owners and commits curren
     await f.jobs.requestCancel(f.jobId);
     assert.deepEqual(await f.jobs.withCurrentAttemptFence(f.jobId, current.attemptId, async () => { callbacks += 1; return true; }), { executed: false });
     assert.equal(callbacks, 1); assert.equal(f.fakeCalls(), 0);
+  } finally { await f.close(); }
+});
+
+// Terminal-contract probes model a rejected generation with fixture-owned SQL.
+// They invoke real public Job APIs/Runner; they are not new production owner ports.
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+async function setGeneration(f: Fixture, scope: JobAttemptScope) {
+  await scope.query("update media_analysis_runs set status='RUNNING',attempt_count=2 where id=$1 and job_id=$2 and project_id=$3", [f.runId, f.jobId, f.projectId]);
+}
+async function rejectedGenerationWrite(f: Fixture, scope: JobAttemptScope) {
+  const result = await scope.query("update media_analysis_runs set status='SUCCEEDED' where id=$1 and job_id=$2 and project_id=$3 and status='RUNNING' and attempt_count=1", [f.runId, f.jobId, f.projectId]);
+  assert.equal(result.rowCount, 0, 'old generation owner write is rejected');
+}
+for (const terminal of ['success', 'failure', 'cancel'] as const) {
+  test(`RED: ${terminal} callback rejecting same-attempt generation must not terminalize its Job`, async () => {
+    const f = await fixture();
+    try {
+      const current = await f.jobs.claim(f.jobId, 'generation-worker', 30_000); assert.ok(current);
+      await f.jobs.withCurrentAttemptFence(f.jobId, current.attemptId, (scope) => setGeneration(f, scope));
+      if (terminal === 'cancel') await f.jobs.requestCancel(f.jobId);
+      const before = await f.snapshot();
+      if (terminal === 'success') await f.jobs.succeedWithCurrentAttempt(f.jobId, current.attemptId, async (scope) => {
+        await rejectedGenerationWrite(f, scope); return { kind: 'STALE_GENERATION' };
+      });
+      if (terminal === 'failure') await f.jobs.fail(f.jobId, current.attemptId, { code: 'OLD_GENERATION' }, false, (scope) => rejectedGenerationWrite(f, scope));
+      if (terminal === 'cancel') await f.jobs.cancelAttempt(f.jobId, current.attemptId, (scope) => rejectedGenerationWrite(f, scope));
+      assert.deepEqual(await f.snapshot(), before, 'owner remains on generation 2'); assert.equal(f.fakeCalls(), 0);
+      const job = await f.jobs.get(f.jobId);
+      console.log(JSON.stringify({ evidence: 'no_owner_write_terminalizes_job', terminal, jobState: job?.state, generation: 2, providerCalls: 0 }));
+      assert.equal(job?.state, terminal === 'cancel' ? 'CANCEL_REQUESTED' : 'RUNNING', 'owner rejection must abort the entire terminal transaction');
+    } finally { await f.close(); }
+  });
+}
+
+test('RED: owner stale-generation rollback must not be converted into generic Runner failure', async () => {
+  const f = await fixture(); let rolledBack = false;
+  try {
+    const result = await new JobRunner(f.jobs, 'stale-generation-runner').run(f.jobId, async (_job, attemptId) => {
+      await f.jobs.withCurrentAttemptFence(f.jobId, attemptId, (scope) => setGeneration(f, scope));
+      try {
+        await f.jobs.succeedWithCurrentAttempt(f.jobId, attemptId, async (scope) => {
+          await rejectedGenerationWrite(f, scope);
+          throw Object.assign(new Error('Generation no longer owns the run'), { code: 'MEDIA_ANALYSIS_STALE_GENERATION', retryable: false });
+        });
+      } catch (error) {
+        rolledBack = (await f.jobs.get(f.jobId))?.state === 'RUNNING';
+        throw error;
+      }
+      return {};
+    });
+    assert.equal(rolledBack, true, 'terminal callback exception really rolled back before Runner fallback');
+    assert.equal((await f.snapshot()).run[0]?.status, 'RUNNING'); assert.equal(f.fakeCalls(), 0);
+    console.log(JSON.stringify({ evidence: 'runner_converts_stale_rollback', jobState: result.state, rolledBack, providerCalls: 0 }));
+    assert.equal(result.state, 'RUNNING', 'control-plane stale generation must escape generic Runner.fail');
+  } finally { await f.close(); }
+});
+
+test('RED: cancellation between handler final fence check and Runner pulse must finalize the owner atomically', async () => {
+  const f = await fixture();
+  try {
+    const result = await new JobRunner(f.jobs, 'cancel-window-runner').run(f.jobId, async (_job, attemptId) => {
+      const checked = await f.jobs.withCurrentAttemptFence(f.jobId, attemptId, (scope) => setGeneration(f, scope));
+      assert.equal(checked.executed, true);
+      // Deterministic cancellation in the exact final-check -> handler-return -> pulse gap.
+      await f.jobs.requestCancel(f.jobId); return { status: 'SUCCEEDED' };
+    });
+    assert.equal(result.state, 'CANCELLED'); assert.equal(f.fakeCalls(), 0);
+    const run = (await f.snapshot()).run[0];
+    console.log(JSON.stringify({ evidence: 'runner_cancel_without_owner', jobState: result.state, runStatus: run?.status, providerCalls: 0 }));
+    assert.equal(run?.status, 'CANCELLED', 'Runner.cancelAttempt without owner callback leaves RUNNING analysis');
+  } finally { await f.close(); }
+});
+
+test('RED: heartbeat transport ERROR must not trigger ownerless generic Runner.fail', async () => {
+  const f = await fixture();
+  class HeartbeatUnavailableJobs extends JobService {
+    override async heartbeat(_id: string, _attemptId: string, _leaseMs: number): Promise<JobHeartbeat> {
+      throw Object.assign(new Error('Synthetic heartbeat transport failure'), { code: 'TEST_HEARTBEAT_TRANSPORT' });
+    }
+  }
+  try {
+    const jobs = new HeartbeatUnavailableJobs(f.db);
+    const result = await new JobRunner(jobs, 'heartbeat-error-runner').run(f.jobId, async (_job, attemptId) => {
+      await f.jobs.withCurrentAttemptFence(f.jobId, attemptId, (scope) => setGeneration(f, scope)); return {};
+    });
+    const run = (await f.snapshot()).run[0]; assert.equal(run?.status, 'RUNNING'); assert.equal(f.fakeCalls(), 0);
+    console.log(JSON.stringify({ evidence: 'runner_heartbeat_error_without_owner', jobState: result.state, runStatus: run?.status, providerCalls: 0 }));
+    assert.equal(result.state, 'RUNNING', 'uncertain heartbeat must park or use coordinated owner protocol, not ownerless failure');
+  } finally { await f.close(); }
+});
+
+test('RED: handler abort must not fall through to ownerless Runner cancellation', async () => {
+  const f = await fixture();
+  try {
+    const result = await new JobRunner(f.jobs, 'abort-runner').run(f.jobId, async (_job, attemptId) => {
+      await f.jobs.withCurrentAttemptFence(f.jobId, attemptId, (scope) => setGeneration(f, scope));
+      await f.jobs.requestCancel(f.jobId); throw new DOMException('Cancelled handler', 'AbortError');
+    });
+    assert.equal(result.state, 'CANCELLED'); assert.equal(f.fakeCalls(), 0);
+    assert.equal((await f.snapshot()).run[0]?.status, 'CANCELLED', 'catch-path cancellation must include owner callback');
+  } finally { await f.close(); }
+});
+
+test('RED: successful handler return alone must not close Job without owner finalization', async () => {
+  const f = await fixture();
+  try {
+    const result = await new JobRunner(f.jobs, 'success-fallback-runner').run(f.jobId, async (_job, attemptId) => {
+      await f.jobs.withCurrentAttemptFence(f.jobId, attemptId, (scope) => setGeneration(f, scope)); return { kind: 'STALE_GENERATION' };
+    });
+    assert.equal((await f.snapshot()).run[0]?.status, 'RUNNING'); assert.equal(f.fakeCalls(), 0);
+    assert.equal(result.state, 'RUNNING', 'structured stale result must not become generic Runner.succeed');
+  } finally { await f.close(); }
+});
+
+test('generic Runner correctly leaves replacement Job ownership intact after real recovery', async () => {
+  const f = await fixture();
+  try {
+    const result = await new JobRunner(f.jobs, 'old-owner-runner').run(f.jobId, async (job, attemptId) => {
+      await f.jobs.withCurrentAttemptFence(f.jobId, attemptId, (scope) => setGeneration(f, scope));
+      assert.equal(await f.jobs.reconcileExpiredLeases(new Date(job.leaseExpiresAt!.getTime() + 1_000)), 1);
+      assert.ok(await f.jobs.claim(f.jobId, 'replacement-owner', 30_000));
+      throw Object.assign(new Error('Old Job ownership revoked'), { code: 'STALE_JOB_OWNER', retryable: false });
+    });
+    assert.equal(result.state, 'RUNNING'); assert.equal(result.attemptCount, 2);
+    assert.deepEqual((await f.jobs.attempts(f.jobId)).map((a) => a.status), ['FAILED', 'RUNNING']);
+    assert.equal((await f.snapshot()).run[0]?.status, 'RUNNING'); assert.equal(f.fakeCalls(), 0);
   } finally { await f.close(); }
 });
