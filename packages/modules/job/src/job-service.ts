@@ -119,6 +119,7 @@ export class JobService {
       const row = selected.rows[0] as Record<string, unknown> | undefined;
       if (!row || !['QUEUED', 'RETRY_WAIT'].includes(String(row.state))) { await client.query('rollback'); return null; }
       if (row.scheduled_at && new Date(String(row.scheduled_at)).getTime() > Date.now()) { await client.query('rollback'); return null; }
+      if (row.state === 'RETRY_WAIT' && row.retry_at && new Date(String(row.retry_at)).getTime() > Date.now()) { await client.query('rollback'); return null; }
       const attemptNumber = Number(row.attempt_count) + 1;
       const attemptId = randomUUID();
       const leaseExpires = new Date(Date.now() + leaseMs);

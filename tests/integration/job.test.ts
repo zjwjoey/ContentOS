@@ -78,6 +78,92 @@ test('deferred external work is rescheduled without consuming the terminal retry
   } finally { await db.end(); }
 });
 
+test('Job claim refuses future retry_at without creating another attempt', async () => {
+  const db = await setup();
+  try {
+    const service = new JobService(db);
+    const id = 'job-integration-retry-not-due';
+    await service.create({ id, type: 'VIDEO_RENDER', projectId: null, payload: {}, idempotencyKey: id, maxAttempts: 3 });
+    const first = await service.claim(id, 'worker-first', 30_000);
+    assert.ok(first);
+    await service.defer(id, first.attemptId, { code: 'EXTERNAL_TASK_PENDING' }, 60_000);
+    const eventsBefore = await db.query('select count(*)::int as count from job_events where job_id = $1', [id]);
+
+    assert.equal(await service.claim(id, 'worker-too-early', 30_000), null);
+    const current = await service.get(id);
+    assert.equal(current?.state, 'RETRY_WAIT');
+    assert.equal(current?.attemptCount, 1);
+    assert.equal((await service.attempts(id)).length, 1);
+    const eventsAfter = await db.query('select count(*)::int as count from job_events where job_id = $1', [id]);
+    assert.deepEqual(eventsAfter.rows, eventsBefore.rows);
+  } finally { await db.end(); }
+});
+
+test('Job claim accepts due and null retry_at without changing defer attempt policy', async () => {
+  const db = await setup();
+  try {
+    const service = new JobService(db);
+    for (const ready of ['due', 'null'] as const) {
+      const id = `job-integration-retry-ready-${ready}`;
+      await service.create({ id, type: 'AVATAR_LIPSYNC_GENERATE', projectId: null, payload: {}, idempotencyKey: id, maxAttempts: 1 });
+      const first = await service.claim(id, 'worker-first', 30_000);
+      assert.ok(first);
+      await service.defer(id, first.attemptId, { code: 'EXTERNAL_TASK_PENDING' }, 60_000);
+      await db.query("update jobs set retry_at = case when $2 = 'due' then now() - interval '1 second' else null end where id = $1", [id, ready]);
+
+      const next = await service.claim(id, 'worker-ready', 30_000);
+      assert.ok(next);
+      assert.equal(next.job.attemptCount, 2);
+      assert.equal(next.job.state, 'RUNNING');
+      assert.equal((await service.attempts(id)).length, 2);
+    }
+  } finally { await db.end(); }
+});
+
+test('Job claim rechecks retry_at after waiting for a concurrent state change', async () => {
+  const db = await setup();
+  const blocker = await db.connect();
+  let transactionOpen = false;
+  let pendingClaim: ReturnType<JobService['claim']> | undefined;
+  try {
+    const service = new JobService(db);
+    const id = 'job-integration-retry-lock-race';
+    await service.create({ id, type: 'VIDEO_RENDER', projectId: null, payload: {}, idempotencyKey: id, maxAttempts: 3 });
+    const runnable = await service.listRunnable(['VIDEO_RENDER']);
+    assert.ok(runnable.some((job) => job.id === id));
+    await blocker.query('begin');
+    transactionOpen = true;
+    const backend = await blocker.query<{ pid: number }>('select pg_backend_pid() as pid');
+    const claimSql = 'select * from jobs where id = $1 for update';
+    await blocker.query(claimSql, [id]);
+    pendingClaim = service.claim(id, 'worker-stale-runnable', 30_000);
+
+    let waitingOnLock = false;
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const waiting = await db.query<{ waiting: boolean }>('select exists(select 1 from pg_stat_activity where $1::integer = any(pg_blocking_pids(pid)) and query = $2) as waiting', [backend.rows[0]!.pid, claimSql]);
+      if (waiting.rows[0]?.waiting) { waitingOnLock = true; break; }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(waitingOnLock, true, 'claim must be blocked on the real PostgreSQL row lock');
+    await blocker.query("update jobs set state = 'RETRY_WAIT', retry_at = now() + interval '1 minute' where id = $1", [id]);
+    await blocker.query('commit');
+    transactionOpen = false;
+
+    assert.equal(await pendingClaim, null);
+    assert.equal((await service.get(id))?.state, 'RETRY_WAIT');
+    assert.equal((await service.get(id))?.attemptCount, 0);
+    assert.deepEqual(await service.attempts(id), []);
+    const events = await db.query('select count(*)::int as count from job_events where job_id = $1', [id]);
+    assert.equal(events.rows[0]?.count, 0);
+  } finally {
+    if (transactionOpen) await blocker.query('rollback');
+    if (pendingClaim) await pendingClaim.catch(() => undefined);
+    blocker.release();
+    await db.end();
+  }
+});
+
 test('cooperative cancellation is durable and lease reconciliation recovers crashed work', async () => {
   const db = await setup();
   try {
