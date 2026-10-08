@@ -1,3 +1,5 @@
+> Historical protocol review at 1ec0692. Conservative choices and isolated segment-one implementation are now recorded in [ADR-019](../adr/ADR-019-media-analysis-attempt-owner.md) and [segment evidence](ANALYSIS_ATTEMPT_SEGMENT1.md). In particular, duplicate starts are rejected rather than taking over generations. Statements below about no implementation describe the historical review checkpoint; production activation remains unapproved.
+
 # Active Media Analysis attempt fencing: red reproduction and minimal contract proposal
 
 Status: **RED / revised proposal only; no implementation**, 2026-10-08.

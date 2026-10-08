@@ -8,3 +8,5 @@ export { IntelligentPlanningService } from './intelligent-planning-service.js';
 export type { CreateIntelligentPlanInput } from './intelligent-planning-service.js';
 export { IntelligentDecisionService } from './decision-service.js';
 export type { CreateDecisionEventInput, CreatePresetInput, CreateRecommendationInput } from './decision-service.js';
+export { MediaAnalysisAttemptOwner } from './analysis-attempt-owner.js';
+export type { AnalysisAttemptLink, AnalysisAttemptIdentity, AnalysisStartDecision } from './analysis-attempt-owner.js';

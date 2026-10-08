@@ -12,6 +12,10 @@ export interface JobQueryExecutor {
 export type JobHeartbeat = 'ACTIVE' | 'CANCEL_REQUESTED' | 'STALE';
 export type JobAttemptFenceResult<T> = { executed: true; value: T } | { executed: false };
 export type JobAttemptCommitResult<T> = { executed: true; value: T; job: JobRecord } | { executed: false; job: JobRecord };
+const ownerRecoveryScopeBrand: unique symbol = Symbol('OwnerRecoveryAttemptScope');
+export interface OwnerRecoveryAttemptScope extends JobAttemptScope { readonly [ownerRecoveryScopeBrand]: true; }
+export type JobLeaseRecoveryOwner = (job: JobRecord, scope: JobAttemptScope, outcome: 'RETRY_WAIT' | 'CANCELLED') => Promise<void>;
+export type JobLeaseRecoveryOwners = ReadonlyMap<string, JobLeaseRecoveryOwner>;
 export type JobLeaseCancellationHandler = (job: JobRecord, scope: JobAttemptScope) => Promise<boolean>;
 
 const jobAttemptScopeBrand: unique symbol = Symbol('JobAttemptScope');
@@ -20,13 +24,15 @@ export interface JobAttemptScope {
   readonly jobId: string;
   readonly attemptId: string;
   readonly attemptNumber: number;
+  readonly projectId?: string | null;
+  readonly type?: string;
   query<T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<T>>;
 }
 
 class ActiveJobAttemptScope implements JobAttemptScope {
   readonly [jobAttemptScopeBrand] = true;
   private active = true;
-  constructor(readonly jobId: string, readonly attemptId: string, readonly attemptNumber: number, private readonly client: PoolClient) {}
+  constructor(readonly jobId: string, readonly attemptId: string, readonly attemptNumber: number, private readonly client: PoolClient, readonly projectId: string | null, readonly type: string) {}
   async query<T extends QueryResultRow = QueryResultRow>(text: string, values: unknown[] = []): Promise<QueryResult<T>> {
     if (!this.active) throw new Error('Job attempt transaction is no longer active');
     return this.client.query<T>(text, values);
@@ -40,6 +46,14 @@ function mapJob(row: Record<string, unknown>): JobRecord {
 
 export class JobService {
   constructor(private readonly db: Pool) {}
+
+  async withOwnerRecoveryAttemptFence<T>(id: string, attemptId: string, expectedType: string, action: (scope: OwnerRecoveryAttemptScope) => Promise<T>): Promise<JobAttemptFenceResult<T>> {
+    return this.withCurrentAttemptFence(id, attemptId, async (scope) => {
+      const marked = await scope.query('update jobs set requires_owner_recovery=true where id=$1 and type=$2 returning id', [id, expectedType]);
+      if (marked.rowCount !== 1) throw Object.assign(new Error('Owner recovery type mismatch'), { code: 'JOB_OWNER_RECOVERY_TYPE_MISMATCH' });
+      return action(Object.assign(scope, { [ownerRecoveryScopeBrand]: true as const }));
+    });
+  }
 
   async createWithExecutor(executor: JobQueryExecutor, input: CreateJobInput): Promise<JobRecord> {
     const result = await executor.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts, scheduled_at) values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now())) returning *', [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts, input.scheduledAt || null]);
@@ -168,7 +182,7 @@ export class JobService {
         return mapJob(current);
       }
       if (action) {
-        scope = new ActiveJobAttemptScope(id, attemptId, Number(active.attempt_number), client);
+        scope = new ActiveJobAttemptScope(id, attemptId, Number(active.attempt_number), client, current.project_id ? String(current.project_id) : null, String(current.type));
         await action(scope);
       }
       const retry = retryable && Number(current.attempt_count) < Number(current.max_attempts);
@@ -243,8 +257,8 @@ export class JobService {
     let scope: ActiveJobAttemptScope | null = null;
     try {
       await client.query('begin');
-      const selected = await client.query('select state, attempt_count from jobs where id = $1 for update', [id]);
-      const current = selected.rows[0] as { state: JobState; attempt_count: number } | undefined;
+      const selected = await client.query('select state, attempt_count, project_id, type from jobs where id = $1 for update', [id]);
+      const current = selected.rows[0] as { state: JobState; attempt_count: number; project_id: string | null; type: string } | undefined;
       if (!current || current.state !== 'RUNNING') {
         await client.query('commit');
         return { executed: false };
@@ -254,7 +268,7 @@ export class JobService {
         await client.query('commit');
         return { executed: false };
       }
-      scope = new ActiveJobAttemptScope(id, attemptId, Number(current.attempt_count), client);
+      scope = new ActiveJobAttemptScope(id, attemptId, Number(current.attempt_count), client, current.project_id, current.type);
       const value = await action(scope);
       await client.query('commit');
       return { executed: true, value };
@@ -278,7 +292,7 @@ export class JobService {
         await client.query('commit');
         return { executed: false, job: mapJob(current) };
       }
-      scope = new ActiveJobAttemptScope(id, attemptId, Number(active.attempt_number), client);
+      scope = new ActiveJobAttemptScope(id, attemptId, Number(active.attempt_number), client, current.project_id ? String(current.project_id) : null, String(current.type));
       const value = await action(scope);
       await client.query("update job_attempts set status = 'SUCCEEDED', finished_at = now() where id = $1", [attemptId]);
       const updated = await client.query("update jobs set state = 'SUCCEEDED', result = $2, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 returning *", [id, value]);
@@ -304,7 +318,7 @@ export class JobService {
         return mapJob(current);
       }
       if (action) {
-        scope = new ActiveJobAttemptScope(id, attemptId, Number(active.attempt_number), client);
+        scope = new ActiveJobAttemptScope(id, attemptId, Number(active.attempt_number), client, current.project_id ? String(current.project_id) : null, String(current.type));
         await action(scope);
       }
       await client.query("update job_attempts set status = 'CANCELLED', finished_at = now() where id = $1", [attemptId]);
@@ -316,11 +330,11 @@ export class JobService {
     finally { scope?.close(); client.release(); }
   }
 
-  async reconcileExpiredLeases(now = new Date(), cancel?: JobLeaseCancellationHandler): Promise<number> {
+  async reconcileExpiredLeases(now = new Date(), cancel?: JobLeaseCancellationHandler, owners?: JobLeaseRecoveryOwners): Promise<number> {
     const expired = await this.db.query<{ id: string }>("select id from jobs where state in ('RUNNING','CANCEL_REQUESTED') and lease_expires_at < $1 order by id", [now]);
     let recovered = 0;
     for (const row of expired.rows) {
-      try { if (await this.reconcileExpiredLease(row.id, now, cancel)) recovered += 1; }
+      try { if (await this.reconcileExpiredLease(row.id, now, cancel, owners)) recovered += 1; }
       catch {
         try { await this.db.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [row.id, 'job.lease_recovery_failed', { code: 'LEASE_RECOVERY_FAILED' }]); }
         catch { /* preserve isolation when diagnostics persistence is also unavailable */ }
@@ -329,7 +343,7 @@ export class JobService {
     return recovered;
   }
 
-  private async reconcileExpiredLease(id: string, now: Date, cancel?: JobLeaseCancellationHandler): Promise<boolean> {
+  private async reconcileExpiredLease(id: string, now: Date, cancel?: JobLeaseCancellationHandler, owners?: JobLeaseRecoveryOwners): Promise<boolean> {
     const client = await this.db.connect();
     let scope: ActiveJobAttemptScope | null = null;
     try {
@@ -341,9 +355,15 @@ export class JobService {
       const active = attempt.rows[0];
       if (!active) { await client.query('commit'); return false; }
       const cancelled = row.state === 'CANCEL_REQUESTED';
-      if (cancelled) {
+      if (row.requires_owner_recovery) {
+        if (Number(active.attempt_number) !== Number(row.attempt_count)) { await client.query('commit'); return false; }
+        const owner = owners?.get(String(row.type));
+        if (!owner) { await client.query('commit'); return false; }
+        scope = new ActiveJobAttemptScope(id, active.id, Number(active.attempt_number), client, row.project_id ? String(row.project_id) : null, String(row.type));
+        await owner(mapJob(row), scope, cancelled ? 'CANCELLED' : 'RETRY_WAIT');
+      } else if (cancelled) {
         if (!cancel) { await client.query('commit'); return false; }
-        scope = new ActiveJobAttemptScope(id, active.id, Number(active.attempt_number), client);
+        scope = new ActiveJobAttemptScope(id, active.id, Number(active.attempt_number), client, row.project_id ? String(row.project_id) : null, String(row.type));
         if (!(await cancel(mapJob(row), scope))) { await client.query('commit'); return false; }
       }
       await client.query("update job_attempts set status = $2, error = case when $2 = 'FAILED' then '{\"code\":\"LEASE_EXPIRED\"}'::jsonb else error end, finished_at = now() where id = $1", [active.id, cancelled ? 'CANCELLED' : 'FAILED']);

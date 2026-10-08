@@ -20,3 +20,7 @@
 ## Counts
 
 `Accepted: 7` · `Accepted with Conditions: 7` · `Proposed: 0` · `Rejected: 0` · `Superseded: 0`.
+
+## Foundation V2 staged decisions
+
+ADR-019: Accepted with Conditions — isolated owner-binding/recovery contract development authorized; compatibility/drain review gates production activation. Historical freeze counts above remain unchanged.
