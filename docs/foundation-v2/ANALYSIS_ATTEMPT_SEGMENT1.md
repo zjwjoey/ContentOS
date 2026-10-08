@@ -55,3 +55,17 @@ Final actual result: owner contract **10/10 PASS**, zero provider calls; Job + m
 ## Remaining increments
 
 Next review should validate the persisted recovery policy and first-bind guards independently. After compatibility/drain approval, implement the Media-only coordinator and owner stage writers, simultaneously replacing both dispatch paths and linked legacy reconciliation; verify Runner exits and recovery from other instances. Then add immutable attempt-specific files/fenced publication, followed by production Runner/E2E and complete regression checks. No migration rollout, merge or release is authorized by this segment; GitHub API actions remain stopped after Forbidden.
+
+## P1 follow-up: claim-before-owner-start crash gap
+
+Independent review found that requires_owner_recovery remains true after retry, while recover previously required binding equality. After attempt1 recovery, a claim2 crash before owner.start left binding1 and the registered dispatcher could not recover attempt2. The same gap existed after authorized requeue of FAILED/CANCELLED runs.
+
+Before the fix, all six QUEUED/FAILED/CANCELLED × normal/CANCEL_REQUESTED real-PG cases failed with recovery count 0; log /tmp/fv2-crash-gap-six-red.log (earlier queued pair: /tmp/fv2-crash-gap-red.log). The fix accepts only the validated current Job scope with an older non-active binding. Normal recovery preserves the domain snapshot; cancellation preserves completed/already-cancelled records or changes pending state in the same Job transaction. No new binding/generation is invented. A later claim can start normally or REUSE completed results. Old RUNNING/same-number-other-id/future bindings and wrong owner/linkage reject; absent dispatcher still skips. Write-then-throw handlers roll back Job, attempt and owner changes.
+
+New cases also cover completed reuse, retained binding/generation, authorized third claim, stale old attempt rejection, and rollback. Final owner suite **19/19 PASS**; Job + migration matrix + safety + owner regression **48/48 PASS**, zero skipped. format/lint/typecheck/diff checks PASS. Six required crash-gap cases were red before the fix and are now green; no real provider calls. Current command:
+
+```bash
+DATABASE_URL=postgresql://postgres@127.0.0.1:55441/contentos_test CONTENTOS_TEST_ADMIN_DATABASE_URL=postgresql://postgres@127.0.0.1:55441/contentos_test CONTENTOS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55441/contentos_test ./node_modules/.bin/tsx --test --test-concurrency=1 tests/integration/job.test.ts tests/integration/migration-matrix.test.ts tests/unit/test-database-safety.test.ts tests/integration/media-analysis-owner.test.ts
+```
+
+Fresh task-owned PostgreSQL16.15/contentos_test container on loopback55441, guarded reset then owned schemas; provider methods remain forbidden in these fixtures. Logs /tmp/fv2-crash-gap-green.log (17 owner tests before completed-result additions), /tmp/fv2-crash-gap-regression.log. This follow-up does not enable production paths or resolve pending external-call/legacy-drain compatibility. Full Intelligent Editing 38/38 above is historical b1be083 evidence; current follow-up runs the targeted DB/owner/migration regression and static checks.

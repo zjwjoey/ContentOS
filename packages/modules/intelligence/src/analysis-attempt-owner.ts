@@ -53,13 +53,20 @@ export class MediaAnalysisAttemptOwner {
   }
 
   async recover(job: JobRecord, scope: JobAttemptScope, outcome: 'RETRY_WAIT' | 'CANCELLED'): Promise<void> {
-    if (job.type !== 'MEDIA_ANALYSIS' || job.id !== scope.jobId || job.attemptCount !== scope.attemptNumber || !job.projectId) stale();
+    if (job.type !== 'MEDIA_ANALYSIS' || job.id !== scope.jobId || job.attemptCount !== scope.attemptNumber || !job.projectId || scope.type !== job.type || scope.projectId !== job.projectId) stale();
     const rows = (await scope.query<Run>('select * from media_analysis_runs where job_id=$1 for update', [scope.jobId])).rows;
     if (rows.length !== 1) stale();
     const row = rows[0]!;
-    if (row.project_id !== job.projectId || row.active_job_attempt_id !== scope.attemptId || Number(row.active_job_attempt_number) !== scope.attemptNumber) stale();
+    const previous = Number(row.active_job_attempt_number);
+    if (row.project_id !== job.projectId || !row.asset_id || !row.active_job_attempt_id || !Number.isSafeInteger(previous) || previous < 1 || !Number.isSafeInteger(Number(row.attempt_count)) || Number(row.attempt_count) < 1) stale();
+    const current = row.active_job_attempt_id === scope.attemptId && previous === scope.attemptNumber;
+    // A newer claim can crash before start: keep the previous non-active generation.
+    // Never adopt a RUNNING, same-number/different-id or future binding.
+    const notStarted = previous < scope.attemptNumber && row.active_job_attempt_id !== scope.attemptId && ['QUEUED', 'FAILED', 'CANCELLED', 'SUCCEEDED'].includes(row.status);
+    if (!current && !notStarted) stale();
+    if (notStarted && (outcome === 'RETRY_WAIT' || row.status === 'CANCELLED')) return;
     if (row.status === 'SUCCEEDED') return; // Validated completed-result reuse, never rewritten by recovery.
-    if (row.status !== 'RUNNING') stale();
+    if (!notStarted && row.status !== 'RUNNING') stale();
     await scope.query('update media_analysis_runs set status=$2,error=$3,finished_at=case when $2=\'CANCELLED\' then coalesce(finished_at,now()) else null end where id=$1', [row.id, outcome === 'CANCELLED' ? 'CANCELLED' : 'QUEUED', { code: outcome === 'CANCELLED' ? 'MEDIA_ANALYSIS_LEASE_CANCELLED' : 'MEDIA_ANALYSIS_LEASE_RECOVERED', message: 'Media analysis lease reconciled' }]);
   }
 }

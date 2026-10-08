@@ -178,3 +178,70 @@ test('terminal owner validates locked Job project/type metadata, not payload or 
     assert.deepEqual(await f.rows(), before); assert.equal((await f.jobs.get(f.jobId))?.state, 'RUNNING');
   } finally { await f.close(); }
 });
+
+for (const initial of ['QUEUED', 'FAILED', 'CANCELLED', 'SUCCEEDED'] as const) for (const cancel of [false, true]) {
+  test(`not-yet-started claim crash gap recovers atomically (${initial}, ${cancel ? 'cancel' : 'normal'})`, async () => {
+    const f = await fixture(1);
+    try {
+      const first = await f.claim(); const started = await f.start(first.attemptId);
+      if (initial === 'QUEUED') assert.equal(await f.jobs.reconcileExpiredLeases(new Date(first.job.leaseExpiresAt!.getTime() + 1000), undefined, f.owners), 1);
+      else {
+        if (initial === 'SUCCEEDED') {
+          await f.jobs.withCurrentAttemptFence(f.jobId, first.attemptId, (scope) => f.owner.finish(scope, started.identity, 'SUCCEEDED'));
+          await f.jobs.requestCancel(f.jobId);
+          await f.jobs.cancelAttempt(f.jobId, first.attemptId, async (scope) => { await f.owner.finish(scope, started.identity, 'REUSE'); });
+        } else if (initial === 'FAILED') await f.jobs.fail(f.jobId, first.attemptId, { code: 'FIRST_FAILED' }, false, async (scope) => { await f.owner.finish(scope, started.identity, 'FAILED'); });
+        else { await f.jobs.requestCancel(f.jobId); await f.jobs.cancelAttempt(f.jobId, first.attemptId, async (scope) => { await f.owner.finish(scope, started.identity, 'CANCELLED'); }); }
+        await f.jobs.requeueTerminal(f.jobId);
+      }
+      const before = await f.rows(); assert.equal(before[0]?.status, initial);
+      const second = await f.claim(); if (cancel) await f.jobs.requestCancel(f.jobId);
+      const clock = new Date(second.job.leaseExpiresAt!.getTime() + 1000);
+      const jobState = cancel ? 'CANCEL_REQUESTED' : 'RUNNING';
+      const broken: JobLeaseRecoveryOwners = new Map([['MEDIA_ANALYSIS', async (job, scope, outcome) => {
+        await f.owner.recover(job, scope, outcome); throw new Error('CRASH_GAP_OWNER_THROW');
+      }]]);
+      assert.equal(await f.jobs.reconcileExpiredLeases(clock, undefined, broken), 0);
+      assert.deepEqual(await f.rows(), before); assert.equal((await f.jobs.get(f.jobId))?.state, jobState);
+      assert.equal((await f.jobs.attempts(f.jobId))[1]?.status, 'RUNNING');
+      assert.equal(await new JobService(f.db).reconcileExpiredLeases(clock), 0, 'unconfigured instance still cannot bypass owner');
+      assert.equal(await f.jobs.reconcileExpiredLeases(clock, undefined, f.owners), 1, 'registered owner must recover claim before start');
+      assert.equal((await f.jobs.get(f.jobId))?.state, cancel ? 'CANCELLED' : 'RETRY_WAIT');
+      const after = (await f.rows())[0]; assert.equal(after?.status, cancel && initial !== 'SUCCEEDED' ? 'CANCELLED' : initial);
+      assert.equal(after?.active_job_attempt_id, first.attemptId); assert.equal(after?.active_job_attempt_number, 1); assert.equal(after?.attempt_count, started.identity.generation);
+      if (!cancel || initial === 'CANCELLED' || initial === 'SUCCEEDED') assert.deepEqual(await f.rows(), before, 'normal recovery does not invent an Analysis generation');
+      assert.deepEqual(await f.jobs.withCurrentAttemptFence(f.jobId, first.attemptId, (scope) => f.owner.finish(scope, started.identity, 'SUCCEEDED')), { executed: false });
+      if (cancel) await f.jobs.requeueTerminal(f.jobId);
+      const third = await f.claim(); const resumed = await f.start(third.attemptId);
+      assert.equal(resumed.identity.attemptNumber, 3); assert.equal(resumed.identity.generation, initial === 'SUCCEEDED' ? 1 : 2);
+      assert.equal(resumed.kind, initial === 'SUCCEEDED' ? 'REUSE' : 'STARTED');
+    } finally { await f.close(); }
+  });
+}
+
+test('crash-gap recovery rejects active, same-number, future and wrong persisted owner/linkage', async () => {
+  const f = await fixture();
+  try {
+    const first = await f.claim(); await f.start(first.attemptId);
+    assert.equal(await f.jobs.reconcileExpiredLeases(new Date(first.job.leaseExpiresAt!.getTime() + 1000), undefined, f.owners), 1);
+    const second = await f.claim(); const clock = new Date(second.job.leaseExpiresAt!.getTime() + 1000);
+    const other = await new ProjectService(f.db).create('Mismatch owner');
+    const cases = [
+      { status: 'RUNNING', number: 1, project: f.link.projectId },
+      { status: 'QUEUED', number: 2, project: f.link.projectId },
+      { status: 'QUEUED', number: 3, project: f.link.projectId },
+      { status: 'QUEUED', number: 1, project: other.id },
+    ];
+    for (const item of cases) {
+      await f.db.query('update media_analysis_runs set status=$2,active_job_attempt_number=$3,project_id=$4 where id=$1', [f.link.runId, item.status, item.number, item.project]);
+      const before = await f.rows();
+      assert.equal(await f.jobs.reconcileExpiredLeases(clock, undefined, f.owners), 0);
+      assert.deepEqual(await f.rows(), before); assert.equal((await f.jobs.get(f.jobId))?.state, 'RUNNING');
+      assert.equal((await f.jobs.attempts(f.jobId))[1]?.status, 'RUNNING');
+    }
+    await f.db.query("update media_analysis_runs set status='QUEUED',active_job_attempt_number=1,project_id=$2,job_id=null where id=$1", [f.link.runId, f.link.projectId]);
+    const unlinked = await f.rows();
+    assert.equal(await f.jobs.reconcileExpiredLeases(clock, undefined, f.owners), 0);
+    assert.deepEqual(await f.rows(), unlinked); assert.equal((await f.jobs.get(f.jobId))?.state, 'RUNNING');
+  } finally { await f.close(); }
+});
