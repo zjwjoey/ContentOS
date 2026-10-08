@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import pg from 'pg';
 import { createDatabase, migrateUp } from '../../packages/database/src/index.js';
 import { JobService, JobRunner } from '../../packages/modules/job/src/index.js';
 import { PgBossDelivery } from '../../packages/infrastructure/queue/src/index.js';
@@ -119,6 +120,49 @@ test('Job claim accepts due and null retry_at without changing defer attempt pol
     }
   } finally { await db.end(); }
 });
+
+for (const timestampType of ['Date', 'string'] as const) {
+  test(`Job claim preserves subsecond retry_at returned as ${timestampType}`, async (context) => {
+    const db = await setup();
+    const queryDb = timestampType === 'Date' ? db : new pg.Pool({
+      connectionString: databaseUrl,
+      types: { getTypeParser: (oid, format) => oid === 1184 && format !== 'binary' ? (value: string) => value : pg.types.getTypeParser(oid, format) },
+    });
+    try {
+      const service = new JobService(queryDb);
+      const id = `job-integration-retry-subsecond-${timestampType}`;
+      const secondStart = Math.floor(Date.now() / 1_000) * 1_000 + 60_000;
+      let applicationNow = secondStart + 500;
+      context.mock.method(Date, 'now', () => applicationNow);
+      await service.create({ id, type: 'AVATAR_LIPSYNC_GENERATE', projectId: null, payload: {}, idempotencyKey: id, maxAttempts: 1 });
+      const first = await service.claim(id, 'worker-first', 30_000);
+      assert.ok(first);
+      await service.defer(id, first.attemptId, { code: 'EXTERNAL_TASK_PENDING' }, 60_000);
+      await queryDb.query('update jobs set retry_at = $2 where id = $1', [id, new Date(secondStart + 900)]);
+      const stored = await queryDb.query<{ retry_at: Date | string }>('select retry_at from jobs where id = $1', [id]);
+      const retryAt = stored.rows[0]!.retry_at;
+      assert.equal(retryAt instanceof Date ? 'Date' : typeof retryAt, timestampType);
+      assert.equal(retryAt instanceof Date ? retryAt.getTime() : Date.parse(retryAt), secondStart + 900);
+      const eventsBefore = await queryDb.query('select count(*)::int as count from job_events where job_id = $1', [id]);
+
+      assert.equal(await service.claim(id, 'worker-400ms-early', 30_000), null);
+      assert.equal((await service.get(id))?.state, 'RETRY_WAIT');
+      assert.equal((await service.get(id))?.attemptCount, 1);
+      assert.equal((await service.attempts(id)).length, 1);
+      const eventsAfter = await queryDb.query('select count(*)::int as count from job_events where job_id = $1', [id]);
+      assert.deepEqual(eventsAfter.rows, eventsBefore.rows);
+
+      applicationNow = secondStart + 900;
+      const due = await service.claim(id, 'worker-at-deadline', 30_000);
+      assert.ok(due);
+      assert.equal(due.job.attemptCount, 2);
+      assert.equal(due.job.state, 'RUNNING');
+    } finally {
+      if (queryDb !== db) await queryDb.end();
+      await db.end();
+    }
+  });
+}
 
 test('Job claim rechecks retry_at after waiting for a concurrent state change', async () => {
   const db = await setup();

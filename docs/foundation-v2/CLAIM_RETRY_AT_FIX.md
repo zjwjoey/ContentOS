@@ -6,7 +6,7 @@
 
 listRunnable filters future retry_at, but claim previously checked only state and scheduled_at after SELECT FOR UPDATE. Direct/delayed delivery or a stale runnable ID could start a new RETRY_WAIT attempt before its backoff expires, including after waiting for another transaction to change the row.
 
-`packages/modules/job/src/job-service.ts:122` adds only a RETRY_WAIT + future retry_at guard inside the existing locked transaction. It rolls back/returns null before generating an attempt ID, incrementing attempt_count or writing events. It follows the existing scheduled_at comparison style. No change to maxAttempts policy, defer, explicit requeue, migrations, module boundaries or any other audit finding.
+`packages/modules/job/src/job-service.ts:122` adds only a RETRY_WAIT + future retry_at guard inside the existing locked transaction. It rolls back/returns null before generating an attempt ID, incrementing attempt_count or writing events. The final guard reads driver Date values with getTime() and parses only string values, preserving millisecond precision. The earlier Date-to-string comparison was corrected after review; see the subsecond follow-up below. No change to maxAttempts policy, defer, explicit requeue, migrations, module boundaries or any other audit finding.
 
 ## Real PostgreSQL setup and safety
 
@@ -36,7 +36,7 @@ DATABASE_URL=postgresql://postgres@127.0.0.1:55436/contentos_test ./node_modules
 
 Before implementation: **1 passed, 2 failed** on the unchanged baseline service. Both failing tests received a RUNNING claimed attempt instead of null; concurrent test first confirmed a real database lock wait. After the one-line fix: **3 passed, 0 failed, 0 skipped**.
 
-## Regression and review
+## Initial regression and review (before subsecond follow-up)
 
 ```bash
 DATABASE_URL=postgresql://postgres@127.0.0.1:55436/contentos_test ./node_modules/.bin/tsx --test --test-concurrency=1 tests/integration/job.test.ts tests/unit/test-database-safety.test.ts tests/unit/video-handler-idempotency.test.ts tests/worker/media-intelligence-worker.test.ts
@@ -51,3 +51,22 @@ Raw session logs: `/tmp/fv2-claim-red.log`, `/tmp/fv2-claim-green.log`, `/tmp/fv
 ## Remote limits
 
 Commit/push and ls-remote verification are performed on this independent feature branch; final SHA is reported at handoff. No merge into main or Foundation integration. GitHub API PR/Issue/Actions operations remain paused after their earlier Forbidden responses; no credential/proxy/connector workaround or API retry. Push coverage alone does not establish a CI run or result; exact-head remote CI, browser/Windows/full-product acceptance remain unverified.
+
+## Subsecond review follow-up — latest acceptance
+
+Review found the first guard's `new Date(String(row.retry_at))` converted a driver Date to a human-readable string without milliseconds. Deadline xx:10.900 could become xx:10.000 and allow claim at xx:10.500. The initial +60 seconds / -1 second / null tests did not detect that precision defect.
+
+Added two real PostgreSQL integration tests, `Job claim preserves subsecond retry_at returned as Date` and `... as string`. A per-test application Date.now clock is fixed at a second boundary +500ms; stored PostgreSQL retry_at is +900ms. The database is real PG16, the default driver Date representation is asserted, and a separate Pool-local timestamptz text parser exercises the supported string representation without changing global parser settings. Only the application comparison clock is controlled to avoid flaky wall-time sleeps; DB queries, transactions and the existing lock-wait test are real. Each test requires no state/attempt/event mutation 400ms before the deadline, then successful attempt 2 exactly at the deadline, preserving defer/maxAttempts=1 behavior. Test-context clock mocks restore automatically.
+
+Before the precision fix on fe6cf61: **Date test FAIL, string test PASS (1/2)**. After the fix: all five claim-focused cases **5/5 PASS**, including real concurrent lock wait. Guard uses Date.getTime() for Date and Date.parse() only for strings; no new coercion of arbitrary objects/numbers, no maxAttempts/migration/module/other-job-field changes.
+
+Latest full scoped command (same regression command above): **27/27 PASS, zero skipped** — real Job integration **20/20**, reset guards **4/4**, Video offline **2/2**, Media worker offline **1/1**. pnpm format/lint/typecheck and git diff --check also PASS. Source review confirms milliseconds are retained, future blocks and equality is eligible, clock/parser isolation is local to each test, and pending lock claims are released during cleanup.
+
+Focused commands:
+
+```bash
+DATABASE_URL=postgresql://postgres@127.0.0.1:55436/contentos_test ./node_modules/.bin/tsx --test --test-concurrency=1 --test-name-pattern='Job claim preserves subsecond' tests/integration/job.test.ts
+DATABASE_URL=postgresql://postgres@127.0.0.1:55436/contentos_test ./node_modules/.bin/tsx --test --test-concurrency=1 --test-name-pattern='Job claim (refuses|accepts|preserves|rechecks)' tests/integration/job.test.ts
+```
+
+Latest session logs: `/tmp/fv2-claim-subsecond-red.log`, `/tmp/fv2-claim-subsecond-green.log`, `/tmp/fv2-claim-subsecond-regression.log`. A fresh task-specific postgres:16 container was verified as contentos_test/16.15 and initialized through the same reset guard, then stopped after verification. No GitHub API action retried; PR/Issue/current-head CI remains blocked/unverified. No merge.
