@@ -49,3 +49,9 @@ Status: code/docs pushed; remote PR/issue/CI acceptance BLOCKED by cloud GitHub 
 ## Remaining acceptance
 
 Full private-table audit, failure-injection worker recovery, real vendor/platform checks, embedded PostgreSQL lifecycle/upgrade validation and local Windows execution are pending. Remote CI/draft PR cannot be called successful until read/creation confirms it. Follow-up is a narrow Job/Video/Intelligence table-access inventory, then one evidenced hardening task.
+
+## Focused Runtime investigation follow-up
+
+Baseline 27d43854 and current 7d0c35d reproduce the same process-tree assertion failure (1/1 failed each) with identical runtime/test source hashes. Non-invasive proc observations show the killed grandchild in Z state adopted by PID1 (`tail`), while the parent is absent. A temporary external Linux subreaper reaps the SIGKILL orphan; original focused tests PASS 1/1 on both commits, and the current ProcessManager module PASS 3/3 without observer. This isolates the observed failure to cloud container zombie reaping/test PID-existence criterion. No runtime source, waits, assertions or CI gates changed. Remote normal-runner CI remains unverified.
+
+See [reproducible focused evidence](RUNTIME_PROCESS_TREE_EVIDENCE.md) for exact commands, process snapshots, diagnostic code and API refusal metadata. Captured gh errors contain no response status/body/scopes. gh auth status diagnoses GH_TOKEN login failure/invalid token, but proxy transport is configured, so the exact authorization or routing defect is not established. API actions were not retried or routed around during this follow-up.

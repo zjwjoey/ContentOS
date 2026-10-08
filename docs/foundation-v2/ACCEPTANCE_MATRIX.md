@@ -10,7 +10,7 @@ Statuses must be supported by source, an executed command, or an exact-SHA remot
 | Six original gates and dependency edges | Compare entire jobs section to baseline; resolve every needs target | PASS: entire jobs section matches baseline; all needs targets exist |
 | Frozen toolchain/install | Node24; pnpm10.32.1 install --frozen-lockfile | PASS with pinned 10.32.1; default global pnpm differs |
 | Static checks/build | pnpm format, lint, typecheck, build and apps/web build | PASS; detailed actual execution in PROGRESS |
-| Reset guard and runtime regression | Existing test-database-safety and runtime unit tests | Reset guard PASS 4/4; post-build runtime FAIL 22/23; see PROGRESS |
+| Reset guard and runtime regression | Existing test-database-safety and runtime unit tests | Reset guard PASS 4/4; normal cloud runtime FAIL 22/23; focused baseline/current PASS under external subreaper; ProcessManager 3/3 there; see focused evidence |
 | Real DB / migration / workers | PG16 isolated contentos_test; existing migration matrix/full DB suite | Not yet executed locally; no production database/reset allowed |
 | Browser/render | Existing browser-and-render job on this head | Requires actual remote evidence; historical run is separate |
 | Windows runtime/package/install | Existing two Windows jobs on this head | Linux cloud cannot supply local Windows evidence |

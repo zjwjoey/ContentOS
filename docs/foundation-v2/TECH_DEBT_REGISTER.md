@@ -11,6 +11,6 @@ Evidence-based initial register. No speculative finding is classified as a confi
 | FV2-005 | Historical Desktop 0047 and Intelligence 0047 must coexist by full filename | P1 / protected compatibility obligation | Re-run migration matrix on isolated contentos_test and retain legacy rollback file; do not edit existing migrations |
 | FV2-006 | Cloud gh Actions API read returns Forbidden while Git push works | P0 / environment delivery blocker | Restore authorized metadata access; read exact-head CI and create/verify draft PR without credential workarounds |
 
-| FV2-007 | Post-build runtime suite fails process-tree termination (22/23); cloud PID1 retains zombie Node processes, isProcessAlive uses kill(pid,0) | P1 / reproduced local failure; root cause unconfirmed | Reproduce unchanged baseline in a reaping Linux runner and distinguish terminated zombie from running child before proposing any runtime change |
+| FV2-007 | Post-build runtime 22/23; focused baseline/current both fail with killed zombie adopted by PID1 tail; both pass unchanged under external subreaper | P1 / cloud reaping limitation isolated; ordinary runner CI pending | Preserve original assertions/runtime semantics; verify exact-head normal-runner CI; see RUNTIME_PROCESS_TREE_EVIDENCE.md |
 
 Priorities express delivery order, not measured incident severity. Worker failure injection, actual vendor integrations and embedded PostgreSQL upgrade behavior require separate evidence before adding defects.
