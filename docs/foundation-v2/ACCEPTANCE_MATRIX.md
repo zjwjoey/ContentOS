@@ -14,8 +14,8 @@ Statuses must be supported by source, an executed command, or an exact-SHA remot
 | Real DB / migration / workers | PG16 isolated contentos_test; existing migration matrix/full DB suite | Not yet executed locally; no production database/reset allowed |
 | Browser/render | Existing browser-and-render job on this head | Requires actual remote evidence; historical run is separate |
 | Windows runtime/package/install | Existing two Windows jobs on this head | Linux cloud cannot supply local Windows evidence |
-| Remote feature delivery | Commit, push, ls-remote final SHA | Final verification in PROGRESS/report |
-| Draft PR target | integration/contentos-foundation-v2; draft true | API operation must be verified; never target main |
-| Exact-head remote CI | Run URL, head SHA, event, six job conclusions | Pending metadata access, never infer from push |
+| Remote feature delivery | Commit, push, ls-remote final SHA | PASS: a2d488cf75bc4671b42a56eb998641d596ec1858 pushed/verified; evidence-update final SHA in handoff |
+| Draft PR target | integration/contentos-foundation-v2; draft true | BLOCKED: explicit draft creation returns GraphQL Forbidden; no PR confirmed |
+| Exact-head remote CI | Run URL, head SHA, event, six job conclusions | BLOCKED: exact pushed-SHA Actions read returns Forbidden; no run/status confirmed |
 
 Historical run supplied by handoff: https://github.com/zjwjoey/ContentOS/actions/runs/37558204860 at baseline 27d43854f0571d127bb1ed4ac01334ff294409b2, reportedly six jobs passed. This session's gh API re-read returned Forbidden, so that result remains handoff evidence rather than independently revalidated execution.

@@ -35,6 +35,17 @@ No psql/pg_isready or PG16 server was found via initial environment probe. No DB
 - Node: v24.19.0. Default pnpm is 11.19.0; use Corepack-selected 10.32.1 with caches in writable /workspace. Initial default cache paths were unavailable; no lockfile/toolchain upgrade made.
 - gh api repos/zjwjoey/ContentOS/actions/runs/37558204860: Forbidden. Git read/push succeeds; GitHub metadata authorization is separate. No alternate credential/API route used to bypass this denial.
 
+## Remote delivery and blocked metadata operations
+
+- Initial delivery commit a2d488cf75bc4671b42a56eb998641d596ec1858 actually pushed to codex/fv2-phase0-baseline; git ls-remote confirmed the same SHA. Foundation integration remains at the base; main remains unchanged. This evidence update follows as a separate normal commit; final remote SHA is reported at handoff.
+- gh pr list for the feature branch: POST https://api.github.com/graphql → Forbidden.
+- gh pr create with explicit base integration/contentos-foundation-v2, explicit head codex/fv2-phase0-baseline and --draft: POST https://api.github.com/graphql → Forbidden. No PR was confirmed created; no PR number/link can be claimed.
+- gh issue create for one Phase0 tracking issue: POST https://api.github.com/graphql → Forbidden. No issue was confirmed created.
+- gh api Actions runs filtered by actual pushed SHA a2d488cf75bc4671b42a56eb998641d596ec1858: GET https://api.github.com/repos/zjwjoey/ContentOS/actions/runs → Forbidden. No current-run URL or job status was obtained. A push matching triggers does not prove CI ran or passed.
+- PR and issue bodies were prepared under /tmp/fv2-pr-body.md and /tmp/fv2-issue-body.md, ready for authorized creation after permissions are restored. No alternate credentials, connector writes, force pushes, main writes or merges were used.
+
+Status: code/docs pushed; remote PR/issue/CI acceptance BLOCKED by cloud GitHub metadata access. The operation returned Forbidden without a more specific server reason. Restore authorized API access before resuming those dependent steps; do not merge this Phase0 change on the strength of local checks alone.
+
 ## Remaining acceptance
 
 Full private-table audit, failure-injection worker recovery, real vendor/platform checks, embedded PostgreSQL lifecycle/upgrade validation and local Windows execution are pending. Remote CI/draft PR cannot be called successful until read/creation confirms it. Follow-up is a narrow Job/Video/Intelligence table-access inventory, then one evidenced hardening task.
