@@ -15,6 +15,8 @@
 | T07 | VERIFIED：additive项目分析历史Contract/API，limit1–100、created_at/id keyset保留PG微秒、输入校验/项目隔离；Job状态通过owner get读取并检查type/project/run，不直接SQL；UI重载恢复历史/结果，分页、持久Job状态、错误提示与busy finally；API1/1 + DB历史1/1 + Intelligence49/49 + Windows Edge browser1/1 + Web production build通过 |
 | T08 | IN_PROGRESS：核心三链组合5/5；全量质量、其他模块门禁、Desktop打包/Smoke及最终报告继续执行 |
 
+T08追加Windows进程身份修复：确定性模拟“owned child已exit但数字PID再次显示alive”，旧实现第二次taskkill（先红2≠1）；修复后不向已exit的owned child旧PID再次kill，原真实进程树关闭和12项host生命周期压测一起16/16通过。生命周期压测对所有已退出child handle做断言，避免将被Windows复用的历史数字PID当成owned进程；保留全部state/lock/restart-budget断言。新回归加入原Runtime gate。
+
 隔离 public schema 初始化后原 focused suite 17/17 PASS，无 skip。迁移矩阵的 schema 临时清理不初始化 public；该前置现已按 CI 脚本补齐。
 
 Windows bundled PostgreSQL 中文资源初始化故障已修复；最终2/2通过。中间实验：数据junction被initdb拒绝，因此放弃；30秒试验预算在中文路径刷盘阶段超时，恢复原Runtime默认60秒后完整通过。未移动、迁移或删除已有数据；TEMP无ASCII路径/短名称的环境仍提供明确诊断。运行产物与本地测试 URL 均在 ignored `.test-results/`。尚未 push、未创建 PR、未运行真实平台/付费API/GPU。

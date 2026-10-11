@@ -67,7 +67,9 @@ export class ProcessManager {
     }
     if (!exited) { forced = true; await this.terminateTree(pid); exited = await this.waitForExit(child, Math.min(timeoutMs, 5_000)); }
     if (!exited && pid && process.platform === 'win32') { await exec('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }).catch(() => undefined); await this.waitForExit(child, 2_000); }
-    if (pid && !(await this.waitForPidExit(pid, 2_000))) { await this.terminateTree(pid); await this.waitForPidExit(pid, 2_000); }
+    // Windows can recycle a numeric PID as soon as the owned child exits.
+    // The child handle is authoritative; never kill a new owner of that PID.
+    if (pid && (process.platform !== 'win32' || (child.exitCode === null && child.signalCode === null)) && !(await this.waitForPidExit(pid, 2_000))) { await this.terminateTree(pid); await this.waitForPidExit(pid, 2_000); }
     this.ready.delete(id); this.processes.delete(id); return { code: child.exitCode, signal: child.signalCode, ...(forced ? { forced: true } : {}) };
   }
   async stopAll(ids: string[], timeoutMs = 10_000): Promise<void> { for (const id of ids) await this.stop(id, timeoutMs); }
