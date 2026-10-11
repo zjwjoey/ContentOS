@@ -26,3 +26,4 @@
 | ADR | Decision | Status | Evidence/condition |
 | --- | --- | --- | --- |
 | [ADR-018](ADR-018-queued-media-analysis-cancellation.md) | Job-owned terminal fence for queued Media Analysis cancellation | Accepted with Conditions | Delegated technical review approved compatibility; scoped transaction/owner/fairness regressions and existing gates required |
+| [ADR-020](ADR-020-media-analysis-runtime-fencing.md) | Existing Job fences protect production Analysis stages, completion and recovery | Accepted for isolated local implementation | No schema or staged ADR019 activation; late-provider, transaction, cancellation, recovery and FFmpeg regressions required |

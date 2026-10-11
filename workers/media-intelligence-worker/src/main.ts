@@ -31,11 +31,9 @@ export class MediaIntelligenceWorkerRuntime extends WorkerRuntime {
     return this.activeConsumption;
   }
   private async reconcile(): Promise<void> {
-    await this.dependencies.jobs.reconcileExpiredLeases(new Date(), async (job: JobRecord) => {
+    await this.dependencies.jobs.reconcileExpiredLeases(new Date(), async (job: JobRecord, scope) => {
       if (job.type !== MEDIA_ANALYSIS) return false;
-      const payload = job.payload as Partial<MediaAnalysisJobPayload>;
-      if (typeof payload.runId === 'string') await this.dependencies.intelligence.markCancelled(payload.runId, { code: 'MEDIA_ANALYSIS_LEASE_CANCELLED', message: 'Media analysis lease expired after cancellation request' });
-      return true;
+      return this.dependencies.intelligence.markLeaseCancelledWithExecutor(scope, job);
     });
     await this.dependencies.intelligence.reconcileStaleRuns();
     await this.reconcileQueuedCancellations();

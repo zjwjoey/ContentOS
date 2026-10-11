@@ -15,6 +15,7 @@ export type JobAttemptFenceResult<T> = { executed: true; value: T } | { executed
 export type JobAttemptCommitResult<T> = { executed: true; value: T; job: JobRecord } | { executed: false; job: JobRecord };
 export type JobLeaseCancellationHandler = (job: JobRecord, scope: JobAttemptScope) => Promise<boolean>;
 export interface CancelledJobExpectation { type: string; projectId: string; attemptCount: number; }
+export interface InactiveJobExpectation extends CancelledJobExpectation { state: 'QUEUED' | 'RETRY_WAIT' | 'FAILED' | 'CANCELLED'; }
 export type JobCancellationFenceResult<T> = { executed: true; value: T } | { executed: false };
 const cancellationScopeBrand: unique symbol = Symbol('JobCancellationScope');
 export interface JobCancellationScope extends JobQueryExecutor {
@@ -91,14 +92,18 @@ function mapJob(row: Record<string, unknown>): JobRecord {
 export class JobService {
   constructor(private readonly db: Pool) {}
 
-  async withCancelledJobFence<T>(id: string, expected: CancelledJobExpectation, action: (scope: JobCancellationScope) => Promise<T>): Promise<JobCancellationFenceResult<T>> { assertOutsideCancellationCallback();
+  async withCancelledJobFence<T>(id: string, expected: CancelledJobExpectation, action: (scope: JobCancellationScope) => Promise<T>): Promise<JobCancellationFenceResult<T>> {
+    return this.withInactiveJobFence(id, { ...expected, state: 'CANCELLED' }, action);
+  }
+
+  async withInactiveJobFence<T>(id: string, expected: InactiveJobExpectation, action: (scope: JobCancellationScope) => Promise<T>): Promise<JobCancellationFenceResult<T>> { assertOutsideCancellationCallback();
     const client = await this.db.connect();
     let scope: ActiveJobCancellationScope | null = null;
     try {
       await client.query('begin');
       const selected = await client.query('select id, type, project_id, state, attempt_count from jobs where id = $1 for update', [id]);
       const row = selected.rows[0];
-      if (![id, expected.type, expected.projectId].every((value) => typeof value === 'string' && value.trim().length > 0) || !row || row.id !== id || row.type !== expected.type || row.project_id !== expected.projectId || row.state !== 'CANCELLED' || !Number.isSafeInteger(expected.attemptCount) || expected.attemptCount < 0 || Number(row.attempt_count) !== expected.attemptCount) {
+      if (![id, expected.type, expected.projectId].every((value) => typeof value === 'string' && value.trim().length > 0) || !['QUEUED', 'RETRY_WAIT', 'FAILED', 'CANCELLED'].includes(expected.state) || !row || row.id !== id || row.type !== expected.type || row.project_id !== expected.projectId || row.state !== expected.state || !Number.isSafeInteger(expected.attemptCount) || expected.attemptCount < 0 || Number(row.attempt_count) !== expected.attemptCount) {
         await client.query('commit');
         return { executed: false };
       }
