@@ -15,6 +15,8 @@
 | T07 | VERIFIED：additive项目分析历史Contract/API，limit1–100、created_at/id keyset保留PG微秒、输入校验/项目隔离；Job状态通过owner get读取并检查type/project/run，不直接SQL；UI重载恢复历史/结果，分页、持久Job状态、错误提示与busy finally；API1/1 + DB历史1/1 + Intelligence49/49 + Windows Edge browser1/1 + Web production build通过 |
 | T08 | IN_PROGRESS：核心三链组合5/5；全量质量、其他模块门禁、Desktop打包/Smoke及最终报告继续执行 |
 
+T08生产浏览器发现模板选择时序缺陷：11场景首轮10/11，初始preset GET迟到覆盖手动PUT所选片头。增加选择版本保护；原Auto Edit完整流程加入延迟旧GET的确定性断言，生产构建及focused 1/1通过，不放宽片头/manifest/渲染断言。完整11场景继续复验。
+
 T08追加Windows进程身份修复：确定性模拟“owned child已exit但数字PID再次显示alive”，旧实现第二次taskkill（先红2≠1）；修复后不向已exit的owned child旧PID再次kill，原真实进程树关闭和12项host生命周期压测一起16/16通过。生命周期压测对所有已退出child handle做断言，避免将被Windows复用的历史数字PID当成owned进程；保留全部state/lock/restart-budget断言。新回归加入原Runtime gate。
 
 T08历史诊断安全复验：从旧DB error字段读取原始凭证的Job/Analysis回归先红；mapJob/mapRun读取时复用redact，保留数据库原记录、不执行历史数据重写。Job+历史组合22/22通过；Runtime完整24/24、真实host14/14、第二次full301/301已通过。后续新增读取防线仍做最终门禁复验。

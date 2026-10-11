@@ -10,7 +10,7 @@ const baseUrl = process.env.CONTENTOS_OPERATOR_URL;
 const fixtureDir = process.env.CONTENTOS_BROWSER_FIXTURE_DIR;
 const databaseUrl = process.env.CONTENTOS_BROWSER_DATABASE_URL;
 
-test('Auto Edit V1 browser flow completes Script and Random local editing', async () => {
+test('Auto Edit V1 browser flow completes Script and Random local editing', { timeout: 240_000 }, async () => {
   assert.ok(baseUrl, 'browser harness must provide CONTENTOS_OPERATOR_URL');
   assert.ok(fixtureDir, 'browser harness must provide CONTENTOS_BROWSER_FIXTURE_DIR');
   assert.ok(databaseUrl, 'browser harness must provide CONTENTOS_BROWSER_DATABASE_URL');
@@ -20,6 +20,7 @@ test('Auto Edit V1 browser flow completes Script and Random local editing', asyn
   const brandingFixture = process.env.CONTENTOS_BROWSER_FIXTURE_VIDEO;
   assert.ok(brandingFixture, 'browser harness must provide CONTENTOS_BROWSER_FIXTURE_VIDEO');
   let presetId = '';
+  let releasePendingPreset = () => {};
   try {
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
     const created = await page.request.post(`${baseUrl}/api/v1/projects`, { data: { name: `自动剪辑浏览器验收 ${Date.now()}`, metadata: { createdBy: 'browser' } } });
@@ -53,8 +54,25 @@ test('Auto Edit V1 browser flow completes Script and Random local editing', asyn
     const draft = await director.createScriptRevision(projectId, aggregate.id, { origin: 'MANUAL', title: '五句中文脚本', titleCandidates: ['五句中文脚本'], coverText: '五句中文脚本', topicKeywords: ['零售', '门店'], hook: '欧洲零售扩张。', body: '折扣门店增长？数据图表变化！顾客购物增加。', cta: '收藏。', createdBy: 'browser' });
     await director.acceptScript(projectId, draft.id);
 
+    const presetUrl = `**/api/v1/projects/${projectId}/video/preset`;
+    let releaseInitialPreset!: () => void;
+    const initialPresetGate = new Promise<void>((done) => { releaseInitialPreset = done; });
+    releasePendingPreset = releaseInitialPreset;
+    let initialPresetRead!: () => void;
+    const initialPresetReady = new Promise<void>((done) => { initialPresetRead = done; });
+    let initialPresetDelivered!: () => void;
+    const presetDelivered = new Promise<void>((done) => { initialPresetDelivered = done; });
+    await page.route(presetUrl, async (route) => {
+      if (route.request().method() !== 'GET') { await route.continue(); return; }
+      const response = await route.fetch(); initialPresetRead(); await initialPresetGate;
+      await route.fulfill({ response }); initialPresetDelivered();
+    });
     await page.goto(`${baseUrl}/projects/${projectId}/video`, { waitUntil: 'domcontentloaded' });
+    await initialPresetReady;
+    const applied = page.waitForResponse((response) => response.request().method() === 'PUT' && response.url().endsWith(`/projects/${projectId}/video/preset`));
     await page.getByLabel('剪辑模板').selectOption(presetId);
+    assert.equal((await applied).status(), 200);
+    releaseInitialPreset(); await presetDelivered; await page.unrouteAll({ behavior: 'wait' });
     await page.getByText(/固定片头/).waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByRole('button', { name: /按脚本剪辑/ }).first().click();
     await page.getByText(/当前项目脚本 · 版本 1 · 已载入 5 句话/).waitFor({ state: 'visible', timeout: 15_000 });
@@ -144,6 +162,7 @@ test('Auto Edit V1 browser flow completes Script and Random local editing', asyn
     const body = await page.locator('body').innerText();
     for (const forbidden of ['Manifest Revision', 'Render Job', 'Standalone', 'Inspector', 'Generate Plan', 'Workspace', 'Video Worker', 'Random Montage']) assert.equal(body.includes(forbidden), false, `ordinary Video UI must hide ${forbidden}`);
   } finally {
+    releasePendingPreset();
     if (presetId) await db.query('delete from video_edit_presets where id = $1', [presetId]);
     await db.end();
     await browser.close();
