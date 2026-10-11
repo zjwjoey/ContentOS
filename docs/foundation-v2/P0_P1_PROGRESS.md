@@ -6,6 +6,9 @@
 
 | 任务 | 当前状态 |
 | --- | --- |
-| T01–T08 | PLANNED，详见执行计划；尚未声称开发完成 |
+| T01 | VERIFIED：复用 `05a8379` 的最小实现与回归，先红（5个新增 readiness/并发用例失败）后绿 Job 20/20；Date/string retry_at 保留毫秒精度；无 schema变化 |
+| T02–T08 | PLANNED，详见执行计划 |
+
+隔离 public schema 初始化后原 focused suite 17/17 PASS，无 skip。迁移矩阵的 schema 临时清理不初始化 public；该前置现已按 CI 脚本补齐。
 
 Windows bundled PostgreSQL 在中文路径初始化失败，ASCII对照路径成功；失败信息与测试命令记录于审计。运行产物与本地测试 URL 均在 ignored `.test-results/`。尚未 push、未创建 PR、未运行真实平台/付费API/GPU。
