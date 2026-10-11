@@ -9,7 +9,7 @@
     "dev": "pnpm --filter @contentos/api dev",
     "dev:operator": "tsx scripts/dev-operator.ts",
     "contentos": "tsx apps/cli/src/main.ts",
-    "test:runtime": "tsx --test --test-concurrency=1 tests/unit/runtime-core.test.ts tests/unit/process-manager.test.ts tests/unit/process-stop-ownership.test.ts tests/unit/runtime-client.test.ts tests/unit/runtime-launch-profile.test.ts",
+    "test:runtime": "tsx --test --test-concurrency=1 tests/unit/runtime-core.test.ts tests/unit/process-manager.test.ts tests/unit/process-stop-ownership.test.ts tests/unit/runtime-client.test.ts tests/unit/runtime-launch-profile.test.ts tests/unit/postgres-utf8-manifest.test.ts",
     "test:runtime:integration": "tsx --test --test-concurrency=1 tests/integration/runtime-host.test.ts tests/integration/runtime-host-lifecycle.test.ts tests/integration/runtime-lifecycle-windows.test.ts",
     "dev:digital-human": "pnpm --filter @contentos/digital-human-worker dev",
     "doctor": "tsx scripts/doctor.ts",
@@ -53,6 +53,7 @@
     "cross-env": "^7.0.3",
     "electron": "44.5.0",
     "electron-builder": "26.15.3",
+    "pe-library": "0.4.1",
     "tsx": "4.19.4",
     "typescript": "5.8.3"
   },

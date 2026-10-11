@@ -20,6 +20,7 @@ export interface PostgresRuntimeOptions {
   expectedMajor?: number;
   host?: string;
   startupTimeoutMs?: number;
+  initializationTimeoutMs?: number;
   stopTimeoutMs?: number;
 }
 
@@ -54,6 +55,7 @@ export class PostgresRuntimeManager {
   private readonly host: string;
   private readonly expectedMajor: number;
   private readonly startupTimeoutMs: number;
+  private readonly initializationTimeoutMs: number;
   private readonly stopTimeoutMs: number;
   private prepared = false;
   private versionValue: string | undefined;
@@ -65,6 +67,7 @@ export class PostgresRuntimeManager {
     this.host = options.host || '127.0.0.1';
     this.expectedMajor = options.expectedMajor || 18;
     this.startupTimeoutMs = options.startupTimeoutMs || 60_000;
+    this.initializationTimeoutMs = options.initializationTimeoutMs || options.startupTimeoutMs || 120_000;
     this.stopTimeoutMs = options.stopTimeoutMs || 15_000;
     safeIdentifier(options.user, 'user');
     safeIdentifier(options.database, 'database');
@@ -191,7 +194,7 @@ export class PostgresRuntimeManager {
     const nativeDataRoot = await this.nativePath(this.options.dataRoot);
     try {
       await writeFile(passwordFile, `${this.options.password}\n`, { encoding: 'utf8', flag: 'wx' });
-      await this.run(this.paths.initdb, ['--pgdata', nativeDataRoot, '--username', this.options.user, '--auth', 'scram-sha-256', '--pwfile', passwordFile, '--locale', 'C', '--encoding', 'UTF8']);
+      await this.run(this.paths.initdb, ['--pgdata', nativeDataRoot, '--username', this.options.user, '--auth', 'scram-sha-256', '--pwfile', passwordFile, '--locale', 'C', '--encoding', 'UTF8'], {}, this.initializationTimeoutMs);
       await appendFile(resolve(this.options.dataRoot, 'postgresql.conf'), "\nlisten_addresses = '127.0.0.1'\n", 'utf8');
       await appendFile(resolve(this.options.dataRoot, 'postgresql.conf'), `port = ${this.options.port}\n`, 'utf8');
       await appendFile(resolve(this.options.dataRoot, 'pg_hba.conf'), "\nhost all all 127.0.0.1/32 scram-sha-256\n", 'utf8');

@@ -13,7 +13,7 @@
 | T05 | VERIFIED：资源8.3路径不可用时使用本管理器拥有的ASCII临时资源junction；保留真实数据目录；Windows中文资源+ASCII/中文数据两组均完成真实初始化、SQL读写、关闭、重启、中文内容保留（2/2，无skip），加入原Windows CI job；默认60秒启动预算不变；不递归清理junction目标 |
 | T06 | VERIFIED：Hybrid命中缓存只建立Video workspace引用，保留Asset元数据及原始downloadedAt/provenance；先红后绿，Hybrid unit+真实FFmpeg integration 22/22无skip；新回归进入原full test；首次下载仍通过AssetService import；既有跨模块Asset只读SQL债务未宣称消除 |
 | T07 | VERIFIED：additive项目分析历史Contract/API，limit1–100、created_at/id keyset保留PG微秒、输入校验/项目隔离；Job状态通过owner get读取并检查type/project/run，不直接SQL；UI重载恢复历史/结果，分页、持久Job状态、错误提示与busy finally；API1/1 + DB历史1/1 + Intelligence49/49 + Windows Edge browser1/1 + Web production build通过 |
-| T08 | VERIFIED_LOCAL / CI_FIXING：核心三链组合5/5、full301/301、closure32/32、最终Intelligence51/51、全部production browser11/11；Runtime/Windows/剪辑/数字人/Production/packaged本地门禁完成；源码374bb2c已push，远端38107294536发现英文Windows路径编码缺陷，修复复验中 |
+| T08 | VERIFIED_LOCAL / CI_RECHECK_PENDING：核心三链组合5/5、full301/301、closure32/32、Intelligence51/51、Windows production browser11/11；最终UTF8/路径安全5/5、Runtime27/27、真实host14/14及typecheck/build/frozen install完成；修复两轮远端Unicode/异步断言失败后，再push完整CI |
 
 T08交付链补齐：原ContentOS E2E通过Publisher公开post端口接上FAKE指标采集与Review AI Job，报告引用精确post/snapshot并明确模拟；Publisher outcome fixture用显式requeue遵守retry_at。full最终301/301、closure32/32、全部剪辑/数字人/Production gates通过。clean acceptance增加可选unpacked executable保护本机既有安装；真实导入、2份MP4、crash恢复/多次重启/单cluster/无新增残留进程通过。原installer/portable builder成功、两种packaged smoke通过。验收包是较早源码快照；最终源码需远端重新打包，不冒充最终发布产物。
 
@@ -24,6 +24,8 @@ T08分析重试补验：首次attempt在保存ASR/视觉结果后失败，替代
 T08首轮远端CI：Quality/Build已通过，Windows Runtime的两个中文PG用例spawn ENOENT。英文cmd编码把中文输出转换为ASCII问号，被误判为短名称；修复为cmd /u + UTF-16LE解码并验证realpath为同一目标。原两个用例完整保留，本地2/2（中文真实SQL及restart）、Runtime24/24和typecheck通过，再push复验。额外emoji数据目录实验发现原生PG argv编码限制，仅记录，不计入原中文路径通过范围。
 
 T08两轮Linux浏览器10/11：失败在网络abort后alert刚出现时立即读取搜索按钮disabled状态；React操作finally尚未完成渲染。保留enabled=true及实际搜索score/后续plan/render断言，增加5秒有界等待finally状态完成。focused生产浏览器1/1通过，没有改动产品busy状态或移除失败恢复验收。
+
+T08英文Windows第二轮1/2：资源路径已修复，原生argv/文件API仍丢失中文数据目录。按ADR021在现有Desktop资源准备中为复制的3个PG程序增加UTF-8进程manifest；保留其他资源/声明，拒绝重写带证书的程序，原始依赖hash不变。没有SUBST、系统locale/registry修改或数据迁移。新增固定构建依赖pe-library0.4.1（原已有transitive版本），lock仅增3行importer，冻结重装通过。保留fsync，将首次init默认预算单独设120秒，服务启动60秒不变；embedded client readiness180秒，external60秒和显式deadline保留。中文+emoji资源/数据真实SQL和重启、3项manifest安全/重复执行回归最终5/5；Runtime27/27及typecheck/build通过，真实host门禁继续收尾。前两轮CI Desktop打包、unpacked/portable/installer smoke、卸载保留数据及clean render/restart均成功，但整轮尚不通过；最终源码再次CI后才可宣称全部门禁通过。
 
 T08追加Windows进程身份修复：确定性模拟“owned child已exit但数字PID再次显示alive”，旧实现第二次taskkill（先红2≠1）；修复后不向已exit的owned child旧PID再次kill，原真实进程树关闭和12项host生命周期压测一起16/16通过。生命周期压测对所有已退出child handle做断言，避免将被Windows复用的历史数字PID当成owned进程；保留全部state/lock/restart-budget断言。新回归加入原Runtime gate。
 

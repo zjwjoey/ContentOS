@@ -42,15 +42,15 @@
 
 | 命令/场景 | 实际结果 |
 | --- | --- |
-| install --frozen-lockfile | PASS，lockfile无变化 |
+| install --frozen-lockfile | 基线及最终PASS；最后为manifest准备显式声明已有transitive pe-library0.4.1，lock只增3行importer，没有升级其他包 |
 | format / lint / typecheck / build | PASS；format/lint本身只是现有轻量检查，不宣称全仓静态架构/凭证扫描 |
 | --dir apps/web build | PASS，完整Next生产构建；包括全部项目页面 |
 | test:intelligent-editing-v15 | 最终PASS51/51，无skip；实际DB/FFmpeg/fence/cancel/recovery/分页及替代结果/adapter路径回归 |
 | browser：intelligent-editing-v15 | PASS 1/1，本机Windows Edge headless；上传→分析→刷新恢复→网络失败重试→候选替换→渲染 |
-| Windows Unicode PostgreSQL | PASS 2/2，无skip；中文资源+ASCII/中文数据，真实SQL中文读写、关闭重启保留内容 |
+| Windows Unicode PostgreSQL | 最终PASS2/2，无skip；同生产资源准备函数，中文+emoji资源/数据，真实SQL中文读写、关闭重启保留内容，upstream binary hash不变；另manifest安全/幂等3/3 |
 | Hybrid focused | PASS 22/22，无skip，真实FFmpeg回归及缓存不可变 |
 | run doctor | PASS 7/7，显式调用package脚本；裸pnpm doctor未执行自定义脚本不计PASS |
-| test:runtime | PASS24/24，无skip，含新增owned PID回归 |
+| test:runtime | 最终PASS27/27，无skip，含owned PID及新增manifest声明保留/幂等/证书拒绝 |
 | CONTENTOS_RUNTIME_INTEGRATION=1 test:runtime:integration | PASS14/14，无skip，实际API/Web/core启动及关闭、20循环竞态 |
 | owned process/lifecycle focused | PASS16/16，无skip；包含真实进程树及12项RuntimeHost生命周期 |
 | test:desktop | PASS2/2，仅manager unit，不冒充Electron验收 |
@@ -66,7 +66,7 @@
 | packaged smoke | unpacked及portable PASS，PACKAGED/EMBEDDED，PG18.4、FFmpeg6.1.1及全部服务READY；未配置外部provider明确WARN |
 | clean acceptance（unpacked） | PASS；导入→两份真实MP4→模拟崩溃恢复→3次额外重启→同一PG cluster→无新增ContentOS/PG进程 |
 | 完整production browser | 最终PASS11/11，无skip；8个原browser文件、Windows Edge headless、Next生产版 |
-| 远端Actions | [38107294536](https://github.com/zjwjoey/ContentOS/actions/runs/38107294536)，源码374bb2c；Quality/Build通过；Windows Runtime中文路径spawn ENOENT失败，修复复验中；其余运行中 |
+| 远端Actions | [38107294536](https://github.com/zjwjoey/ContentOS/actions/runs/38107294536)及[38107613461](https://github.com/zjwjoey/ContentOS/actions/runs/38107613461)：Quality、Build、DB及Desktop全通过；Runtime Unicode和Linux browser各一项失败，修复后再次CI中，未计整轮PASS |
 
 ## 失败与处理（不计通过）
 
@@ -80,7 +80,9 @@
 - clean acceptance首轮port占用fixture socket未处理ECONNRESET，测试脚本崩溃；补socket error handler，仅关闭该次临时runtime；完整重跑通过，不影响原安装或其他PostgreSQL实例。
 - 完整生产浏览器首轮10/11；模板初始GET迟到覆盖用户选择。增加版本保护及延迟GET回归后focused1/1，最终完整11/11。
 - 远端英文Windows将cmd短路径输出中的中文转换成问号；原代码误判为有效ASCII文件名，两个Unicode资源用例spawn ENOENT。本地中文系统未复现这条错误；修复改用cmd Unicode/UTF-16LE输出，并核验realpath同一目标。原两个专项保留，远端复验中。
-- 额外非BMP（emoji）数据目录实验在本机PostgreSQL原生argv编码阶段失败；没有把它算入通过。测试范围仍为原两项中文资源/中文数据，不将“Unicode通过”扩张成任意字符均支持。
+- 非BMP（emoji）数据目录最初在PostgreSQL原生argv编码阶段失败。按ADR021为复制的PG程序准备UTF-8进程manifest后，中文+emoji两个原读写/restart场景及3项安全/幂等回归最终5/5。原始dependency不变，资源hash在准备后计算；不绕过证书拒绝，不修改系统locale/registry/drive。
+- F盘首次初始化在正常刷盘阶段超过60秒；新增独立120秒initialization预算，保留fsync，普通server startup仍60秒；embedded readiness180秒覆盖建库与服务启动，external及显式调用预算保持兼容。不是无限等待或关闭安全刷盘。
+- Linux浏览器两轮10/11，搜索错误alert出现时立即读disabled状态存在渲染时序；增加5秒有界等待finally完成，保留enabled=true、实际重试score及后续渲染断言。focused生产版1/1，最终Linux整组CI待记录。
 - 打包验收的资源快照在73a0f4b/7913ece/4c2d5ce之前生成；只作为packaged运行与关闭证据，不作为最终修复版本发布包。远端Windows CI须重新构建当前源码。没有运行本机installer/uninstaller改写既有安装。
 
 ## 剩余风险与集成边界
@@ -91,7 +93,8 @@
 | P1 | 部分Video/Intelligence仍直接读取其他模块Asset私表；本轮移除了缓存写入与分析Job私表读取，但未全仓替换读端口 | 按模块增加窄owner read ports和consumer tests，不用通用SQL helper隐藏权限 |
 | P1 | Intelligence search embedding仍同步API调用，provider实际超时/吞吐待验证；离线无Job analyzeRun保留兼容签名 | 后续明确search预算/取消，生产analysis必须经Job handler附带attempt context |
 | P1 | 原分阶段owner方案有历史drain/activation前置，本轮没有运行0053/历史回填 | 有数据副本的专门迁移演练与显式批准后再启用 |
-| 环境 | 本机已有ContentOS安装，运行安装器/卸载器可能改现有注册项 | 本轮只用unpacked/portable和临时userData；安装/卸载另在干净Windows VM运行 |
+| 环境 | 本机已有ContentOS安装，运行安装器/卸载器可能改现有注册项 | 本机只用unpacked/portable和临时userData；两轮干净Windows CI实际installer/uninstaller、数据保留和clean acceptance均通过；最新源码需重建 |
+| 环境 | UTF-8 process manifest依赖Windows10 1903及更新系统 | 本机与Windows latest CI覆盖；更旧Windows未验收，不改变系统locale以伪造通过 |
 | 环境 | TEMP若无法获得ASCII路径/短名称，资源alias会返回明确诊断；本机该路径可用 | 不同用户名、权限/杀毒软件策略的干净机矩阵 |
 | 外部 | GPU/真实ASR/Vision/数字人/付费模型及真实平台发布均未执行 | 账户、费用及审批边界明确后的独立真实环境验收 |
 
