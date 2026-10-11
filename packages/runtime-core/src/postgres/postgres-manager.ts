@@ -1,8 +1,8 @@
-import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
-import { resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import pg from 'pg';
 import { isPortOpen, isProcessAlive } from '../port.js';
@@ -57,6 +57,8 @@ export class PostgresRuntimeManager {
   private readonly stopTimeoutMs: number;
   private prepared = false;
   private versionValue: string | undefined;
+  private nativeAliasRoot: Promise<string> | null = null;
+  private readonly nativeAliases = new Map<string, { target: string; path: Promise<string> }>();
 
   constructor(private readonly options: PostgresRuntimeOptions) {
     this.paths = resolvePostgresResourcePaths(options.resourcesRoot);
@@ -70,13 +72,46 @@ export class PostgresRuntimeManager {
   }
 
   private async nativePath(file: string): Promise<string> {
-    if (process.platform !== 'win32' || !file.includes('\\') || /^[\x00-\x7F]*$/u.test(file)) return file;
+    if (process.platform !== 'win32' || /^[\x00-\x7F]*$/u.test(file)) return file;
     try {
       const command = `for %I in ("${file.replaceAll('"', '""')}") do @echo %~sI`;
       const result = await execFileAsync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', command], { timeout: 5_000, windowsHide: true, windowsVerbatimArguments: true, env: process.env });
       const shortPath = String(result.stdout).trim().split(/\r?\n/u).map((value) => value.trim()).find(Boolean);
-      return shortPath && !shortPath.includes('\uFFFD') ? shortPath : file;
-    } catch { return file; }
+      if (shortPath && /^[\x00-\x7F]*$/u.test(shortPath)) return shortPath;
+    } catch { /* NTFS short names may be unavailable; use an owned junction below. */ }
+    // initdb requires a real data directory rather than a junction. Unicode
+    // data paths remain valid once the executable/share root uses an ASCII alias.
+    if (resolve(file).toLowerCase() === resolve(this.options.dataRoot).toLowerCase()) return file;
+    const resourceRelative = relative(this.paths.root, resolve(file));
+    if (!isAbsolute(resourceRelative) && resourceRelative !== '..' && !resourceRelative.startsWith(`..${sep}`)) return join(await this.nativeAlias('resources', this.paths.root), resourceRelative);
+    throw Object.assign(new Error('PostgreSQL requires an ASCII native path for this resource'), { code: 'POSTGRES_NATIVE_PATH_UNSUPPORTED' });
+  }
+
+  private async nativeAlias(name: string, target: string): Promise<string> {
+    if (!this.nativeAliasRoot) {
+      const temporaryRoot = tmpdir();
+      if (!/^[\x00-\x7F]*$/u.test(temporaryRoot)) throw Object.assign(new Error('Set TEMP to a writable ASCII directory for bundled PostgreSQL'), { code: 'POSTGRES_ASCII_TEMP_REQUIRED' });
+      this.nativeAliasRoot = mkdtemp(join(temporaryRoot, 'contentos-pg-native-'));
+    }
+    let alias = this.nativeAliases.get(name);
+    if (!alias) {
+      const path = this.nativeAliasRoot.then(async (root) => { const entry = join(root, name); await symlink(resolve(target), entry, 'junction'); return entry; });
+      alias = { target: resolve(target), path }; this.nativeAliases.set(name, alias);
+    }
+    const path = await alias.path;
+    if ((await realpath(path)).toLowerCase() !== (await realpath(alias.target)).toLowerCase()) throw Object.assign(new Error('PostgreSQL native path alias ownership changed'), { code: 'POSTGRES_NATIVE_ALIAS_INVALID' });
+    return path;
+  }
+
+  private async releaseNativeAliases(): Promise<void> {
+    for (const alias of this.nativeAliases.values()) {
+      try {
+        const path = await alias.path;
+        if ((await lstat(path)).isSymbolicLink() && (await realpath(path)).toLowerCase() === (await realpath(alias.target)).toLowerCase()) await rmdir(path);
+      } catch { /* Keep diagnostic aliases on cleanup failure; never recurse into a target. */ }
+    }
+    if (this.nativeAliasRoot) await this.nativeAliasRoot.then((root) => rmdir(root)).catch(() => undefined);
+    this.nativeAliases.clear(); this.nativeAliasRoot = null;
   }
 
   private async run(file: string, args: string[], extraEnv: Record<string, string | undefined> = {}, timeout = this.startupTimeoutMs): Promise<{ stdout: string; stderr: string }> {
@@ -186,7 +221,7 @@ export class PostgresRuntimeManager {
 
   private async ensureDatabase(): Promise<void> {
     const escaped = this.options.database.replaceAll("'", "''");
-    const client = new pg.Client({ host: this.host, port: this.options.port, user: this.options.user, password: this.options.password, database: 'postgres', connectionTimeoutMillis: 10_000 });
+    const client = new pg.Client({ host: this.host, port: this.options.port, user: this.options.user, password: this.options.password, database: 'postgres', connectionTimeoutMillis: 10_000, query_timeout: this.startupTimeoutMs });
     await client.connect();
     try {
       const result = await client.query<{ exists: number }>('SELECT 1 AS exists FROM pg_database WHERE datname = $1', [this.options.database]);
@@ -202,7 +237,7 @@ export class PostgresRuntimeManager {
 
   async stop(): Promise<void> {
     const pid = await this.pid();
-    if (!pid && !(await isPortOpen(this.options.port, this.host))) return;
+    if (!pid && !(await isPortOpen(this.options.port, this.host))) { await this.releaseNativeAliases(); return; }
     try {
       await this.runDetached(this.paths.pgCtl, ['-D', await this.nativePath(this.options.dataRoot), '-m', 'fast', '-w', 'stop'], this.stopTimeoutMs);
     } catch (error) {
@@ -213,6 +248,8 @@ export class PostgresRuntimeManager {
         else { try { process.kill(runningPid, 'SIGKILL'); } catch { /* already stopped */ } }
       }
     }
+    const remainingPid = await this.pid();
+    if ((!remainingPid || !isProcessAlive(remainingPid)) && !(await isPortOpen(this.options.port, this.host))) await this.releaseNativeAliases();
   }
 
   async version(): Promise<string> {

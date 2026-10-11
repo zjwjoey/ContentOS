@@ -211,6 +211,8 @@ jobs:
       - run: pnpm test:runtime
       - name: Windows runtime lifecycle integration
         run: pnpm exec tsx --test tests/integration/runtime-lifecycle-windows.test.ts
+      - name: Bundled PostgreSQL Unicode paths and restart
+        run: pnpm exec tsx --test --test-concurrency=1 tests/integration/postgres-unicode-windows.test.ts
 
   desktop-windows-package:
     name: Desktop Windows package and smoke

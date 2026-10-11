@@ -10,8 +10,9 @@
 | T02 | VERIFIED：整合 `99d324a` 的 reviewed additive cancellation contract；本机先红 QUEUED→CANCELLED 未传播，再绿组合 33/33（20 Job + 12 cancel + 1 worker）；无 skip；typecheck通过；所有 DB fixtures 使用隔离 schema |
 | T03 | VERIFIED：真实隔离DB复现迟到技术结果999覆盖640、迟到异常覆盖SUCCEEDED；已修复全部 Worker analysis写入与终态fence、Job+域结果原子提交、attempt文件路径、同连接恢复/取消；原Intelligence门禁加8项回归 48/48 PASS；无migration，保留离线签名；ADR020 |
 | T04 | VERIFIED：新增4项安全测试先红后绿；统一redaction用于logger/shared errors/Job fail+defer/Analysis error和逐行Runtime日志（含跨chunk）；API生成请求correlation并保留400/422；unit 11/11、Job21/21、Runtime23/23、format/lint/typecheck通过；旧Job锁竞态fixture被其他suite残留VIDEO_RENDER前10条挤出，改用独立测试type保护场景，不放宽断言 |
-| T05–T08 | PLANNED，详见执行计划 |
+| T05 | VERIFIED：资源8.3路径不可用时使用本管理器拥有的ASCII临时资源junction；保留真实数据目录；Windows中文资源+ASCII/中文数据两组均完成真实初始化、SQL读写、关闭、重启、中文内容保留（2/2，无skip），加入原Windows CI job；默认60秒启动预算不变；不递归清理junction目标 |
+| T06–T08 | PLANNED，详见执行计划 |
 
 隔离 public schema 初始化后原 focused suite 17/17 PASS，无 skip。迁移矩阵的 schema 临时清理不初始化 public；该前置现已按 CI 脚本补齐。
 
-Windows bundled PostgreSQL 在中文路径初始化失败，ASCII对照路径成功；失败信息与测试命令记录于审计。运行产物与本地测试 URL 均在 ignored `.test-results/`。尚未 push、未创建 PR、未运行真实平台/付费API/GPU。
+Windows bundled PostgreSQL 中文资源初始化故障已修复；最终2/2通过。中间实验：数据junction被initdb拒绝，因此放弃；30秒试验预算在中文路径刷盘阶段超时，恢复原Runtime默认60秒后完整通过。未移动、迁移或删除已有数据；TEMP无ASCII路径/短名称的环境仍提供明确诊断。运行产物与本地测试 URL 均在 ignored `.test-results/`。尚未 push、未创建 PR、未运行真实平台/付费API/GPU。
