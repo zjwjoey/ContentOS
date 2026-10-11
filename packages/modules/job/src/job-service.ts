@@ -87,7 +87,7 @@ class ActiveJobAttemptScope implements JobAttemptScope {
 }
 
 function mapJob(row: Record<string, unknown>): JobRecord {
-  return { id: String(row.id), projectId: row.project_id ? String(row.project_id) : null, workspaceId: row.workspace_id ? String(row.workspace_id) : null, type: String(row.type), state: row.state as JobState, payload: row.payload, result: row.result, error: row.error, attemptCount: Number(row.attempt_count), maxAttempts: Number(row.max_attempts), leaseOwner: row.lease_owner ? String(row.lease_owner) : null, leaseExpiresAt: row.lease_expires_at ? new Date(String(row.lease_expires_at)) : null, progress: row.progress };
+  return { id: String(row.id), projectId: row.project_id ? String(row.project_id) : null, workspaceId: row.workspace_id ? String(row.workspace_id) : null, type: String(row.type), state: row.state as JobState, payload: row.payload, result: row.result, error: redact(row.error), attemptCount: Number(row.attempt_count), maxAttempts: Number(row.max_attempts), leaseOwner: row.lease_owner ? String(row.lease_owner) : null, leaseExpiresAt: row.lease_expires_at ? new Date(String(row.lease_expires_at)) : null, progress: row.progress };
 }
 
 export class JobService {

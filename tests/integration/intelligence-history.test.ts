@@ -24,7 +24,9 @@ test('persisted analysis history survives service recreation and pages without l
       await db.query('update media_analysis_runs set created_at=$2 where id=$1', [run.id, `2026-10-11T00:00:00.00100${i}Z`]);
     }
     const recreated = new MediaIntelligenceService(db, createFakeIntelligenceProviders());
+    await db.query('update media_analysis_runs set error=$2 where id=$1', [ids[3], { code: 'LEGACY_FAILURE', message: 'password=legacy-fixture-secret' }]);
     const first = await recreated.listRuns(project.id, { limit: 2 }); assert.ok(first.nextCursor);
+    assert.doesNotMatch(JSON.stringify(first), /legacy-fixture-secret/);
     const second = await recreated.listRuns(project.id, { limit: 2, cursor: first.nextCursor });
     assert.equal(second.nextCursor, null);
     assert.deepEqual([...first.items, ...second.items].map((run) => run.id), [...ids].reverse());

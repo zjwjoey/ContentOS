@@ -28,7 +28,7 @@ import {
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import type { IntelligenceProviders } from './providers.js';
 import { JobService, type JobQueryExecutor, type JobRecord } from '../../job/src/index.js';
-import { redactText } from '../../../logging/src/index.js';
+import { redact, redactText } from '../../../logging/src/index.js';
 import type { JobCancellationScope } from '../../job/src/index.js';
 
 export const MEDIA_ANALYSIS = 'MEDIA_ANALYSIS' as const;
@@ -54,7 +54,7 @@ function mapRun(row: Record<string, unknown>): MediaAnalysisRunV1 {
     capabilities: (Array.isArray(row.capabilities) ? row.capabilities : []) as MediaAnalysisCapability[], providerMode: String(row.provider_mode) as MediaAnalysisRunV1['providerMode'],
     analysisVersion: String(row.analysis_version), ...(row.analysis_fingerprint ? { analysisFingerprint: String(row.analysis_fingerprint) } : {}), ...(row.config_snapshot ? { configSnapshot: row.config_snapshot as NonNullable<MediaAnalysisRunV1['configSnapshot']> } : {}), sourceChecksum: row.source_checksum ? String(row.source_checksum) : null, ...(row.pipeline_version ? { pipelineVersion: String(row.pipeline_version) } : {}),
     idempotencyKey: String(row.idempotency_key), jobId: row.job_id ? String(row.job_id) : null, attemptCount: Number(row.attempt_count),
-    error: row.error && typeof row.error === 'object' ? row.error as MediaAnalysisRunV1['error'] : null,
+    error: row.error && typeof row.error === 'object' ? redact(row.error) as MediaAnalysisRunV1['error'] : null,
     createdAt: new Date(String(row.created_at)).toISOString(), startedAt: row.started_at ? new Date(String(row.started_at)).toISOString() : null, finishedAt: row.finished_at ? new Date(String(row.finished_at)).toISOString() : null,
   };
   validateMediaAnalysisRunV1(value);

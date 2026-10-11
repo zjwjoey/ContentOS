@@ -432,6 +432,8 @@ test('Job failures and deferred diagnostics redact credentials before persistenc
       const output = JSON.stringify({ error: result.error, attempts: attempts.rows });
       assert.doesNotMatch(output, /fixture-secret|fixture-bearer/);
       assert.match(output, /provider timeout/); assert.match(output, /REDACTED/);
+      await db.query('update jobs set error=$2 where id=$1', [id, { message: 'password=legacy-job-fixture' }]);
+      assert.doesNotMatch(JSON.stringify((await jobs.get(id))?.error), /legacy-job-fixture/);
     }
   } finally { await db.end(); }
 });

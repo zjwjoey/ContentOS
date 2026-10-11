@@ -17,6 +17,8 @@
 
 T08追加Windows进程身份修复：确定性模拟“owned child已exit但数字PID再次显示alive”，旧实现第二次taskkill（先红2≠1）；修复后不向已exit的owned child旧PID再次kill，原真实进程树关闭和12项host生命周期压测一起16/16通过。生命周期压测对所有已退出child handle做断言，避免将被Windows复用的历史数字PID当成owned进程；保留全部state/lock/restart-budget断言。新回归加入原Runtime gate。
 
+T08历史诊断安全复验：从旧DB error字段读取原始凭证的Job/Analysis回归先红；mapJob/mapRun读取时复用redact，保留数据库原记录、不执行历史数据重写。Job+历史组合22/22通过；Runtime完整24/24、真实host14/14、第二次full301/301已通过。后续新增读取防线仍做最终门禁复验。
+
 隔离 public schema 初始化后原 focused suite 17/17 PASS，无 skip。迁移矩阵的 schema 临时清理不初始化 public；该前置现已按 CI 脚本补齐。
 
 Windows bundled PostgreSQL 中文资源初始化故障已修复；最终2/2通过。中间实验：数据junction被initdb拒绝，因此放弃；30秒试验预算在中文路径刷盘阶段超时，恢复原Runtime默认60秒后完整通过。未移动、迁移或删除已有数据；TEMP无ASCII路径/短名称的环境仍提供明确诊断。运行产物与本地测试 URL 均在 ignored `.test-results/`。尚未 push、未创建 PR、未运行真实平台/付费API/GPU。
