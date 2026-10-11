@@ -1,7 +1,7 @@
 import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:net';
@@ -19,6 +19,8 @@ const root = await mkdtemp(join(tmpdir(), 'contentos-desktop-clean-acceptance-')
 const installRoot = join(root, 'install');
 const userDataRoot = join(root, 'user-data');
 const installer = resolve(process.env.CONTENTOS_ACCEPTANCE_INSTALLER || 'artifacts/desktop/ContentOS Setup.exe');
+const packagedExecutable = process.env.CONTENTOS_ACCEPTANCE_EXECUTABLE ? resolve(process.env.CONTENTOS_ACCEPTANCE_EXECUTABLE) : undefined;
+const packagedRoot = packagedExecutable ? dirname(packagedExecutable) : installRoot;
 const systemRoot = process.env.SystemRoot || 'C:\\Windows';
 const systemPath = `${join(systemRoot, 'System32')};${systemRoot}`;
 const statePath = join(userDataRoot, 'runtime', 'state', 'runtime.json');
@@ -79,8 +81,11 @@ async function apiRequest<T>(port: number, path: string, init: RequestInit = {})
 }
 
 async function install(): Promise<void> {
-  await access(installer);
   await mkdir(installRoot, { recursive: true });
+  // Validate an unpacked/portable build without writing installer registry keys
+  // on a development machine that already has ContentOS installed.
+  if (packagedExecutable) { await access(packagedExecutable); installedExecutable = packagedExecutable; return; }
+  await access(installer);
   await execFileAsync(installer, ['/S', `/D=${installRoot}`], { windowsHide: true, timeout: 300_000 });
   installedExecutable = await findFile(installRoot, 'ContentOS.exe') || '';
   if (!installedExecutable) throw new Error(`Installed ContentOS.exe was not found below ${installRoot}`);
@@ -109,9 +114,9 @@ async function startApp(): Promise<{ state: RuntimeState; status: RuntimeStatus 
 async function stopApp(): Promise<void> {
   const state = await readState();
   if (state) await fetch(`http://127.0.0.1:${state.controlPort}/runtime/stop`, { method: 'POST', headers: { authorization: `Bearer ${state.controlToken}` } }).catch(() => undefined);
-  await waitFor(readState, (value) => value.state === 'STOPPED', 30_000, 'runtime stop').catch(() => undefined);
+  await waitFor(async () => ({ removed: !(await readState()) }), (value) => value.removed, 30_000, 'runtime state removal').catch(() => undefined);
   const child = appProcess;
-  if (child?.pid && child.exitCode === null) {
+  if (child?.pid && child.exitCode === null && child.signalCode === null) {
     await execFileAsync(join(systemRoot, 'System32', 'taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 15_000 }).catch(() => undefined);
   }
   appProcess = undefined;
@@ -126,7 +131,7 @@ async function crashApp(): Promise<void> {
 }
 
 async function occupyPort(port: number): Promise<Server | undefined> {
-  const server = createServer();
+  const server = createServer((socket) => { socket.on('error', () => socket.destroy()); });
   try {
     await new Promise<void>((resolveListen, rejectListen) => { server.once('error', rejectListen); server.listen(port, '127.0.0.1', () => resolveListen()); });
     return server;
@@ -169,7 +174,7 @@ async function createAndRender(port: number, projectId: string, sourceAssetId: s
   await writeFile(outputPath, Buffer.from(await content.arrayBuffer()));
   const outputBytes = (await stat(outputPath)).size;
   if (outputBytes <= 0) throw new Error('Rendered MP4 is empty');
-  const ffprobe = await findFile(installRoot, 'ffprobe.exe');
+  const ffprobe = await findFile(packagedRoot, 'ffprobe.exe');
   if (!ffprobe) throw new Error('Bundled ffprobe.exe was not found in installed resources');
   const probe = await execFileAsync(ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', outputPath], { env: cleanRuntimeEnv(), windowsHide: true, timeout: 30_000 });
   const outputDuration = String(probe.stdout).trim();
@@ -225,11 +230,12 @@ try {
   await install();
   const blockedPorts = await Promise.all([3000, 3001, 3099, 55433].map((port) => occupyPort(port)));
   let running = await startApp();
+  const initialControlPort = running.state.controlPort;
   const servicePorts = Object.fromEntries(running.status.services.filter((service) => service.port).map((service) => [service.id, service.port]));
   for (const port of [servicePorts.api, servicePorts.web, running.state.controlPort, servicePorts.database]) if ([3000, 3001, 3099, 55433].includes(Number(port))) throw new Error(`Port conflict was not recovered: ${port}`);
   for (const server of blockedPorts) server?.close();
   const apiPort = Number(servicePorts.api);
-  const ffmpeg = await findFile(installRoot, 'ffmpeg.exe');
+  const ffmpeg = await findFile(packagedRoot, 'ffmpeg.exe');
   if (!ffmpeg) throw new Error('Bundled ffmpeg.exe was not found in installed resources');
   const sourcePath = join(root, 'source.mp4');
   await execFileAsync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=320x180:d=2', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', sourcePath], { env: cleanRuntimeEnv(), windowsHide: true, timeout: 60_000 });
@@ -257,11 +263,11 @@ try {
   const { contentOs: newContentOs, postgres: newPostgres } = await waitForNoNewProcesses(baselineContentOs, baselinePostgres);
   if (newContentOs.length > 0 || newPostgres.length > 0) throw new Error(`Orphan processes remain: ContentOS.exe=${newContentOs.join(',') || 'none'}, postgres.exe=${newPostgres.join(',') || 'none'}`);
   if (await clusterCount() !== 1) throw new Error(`Expected one PostgreSQL cluster, found ${await clusterCount()}`);
-  result = { projectId: first.projectId, sourceAssetId, firstOutputAssetId: first.outputAssetId, secondOutputAssetId: second.outputAssetId, apiPort: Number(servicePorts.api), webPort: Number(servicePorts.web), controlPort: running.state.controlPort, databasePort: Number(servicePorts.database), ...(running.status.postgresVersion ? { postgresVersion: running.status.postgresVersion } : {}), ...(running.status.ffmpegVersion ? { ffmpegVersion: running.status.ffmpegVersion } : {}), outputBytes: second.outputBytes, outputDuration: second.outputDuration };
-  console.log(JSON.stringify({ ok: true, acceptance: result }));
+  result = { projectId: first.projectId, sourceAssetId, firstOutputAssetId: first.outputAssetId, secondOutputAssetId: second.outputAssetId, apiPort: Number(servicePorts.api), webPort: Number(servicePorts.web), controlPort: initialControlPort, databasePort: Number(servicePorts.database), ...(running.status.postgresVersion ? { postgresVersion: running.status.postgresVersion } : {}), ...(running.status.ffmpegVersion ? { ffmpegVersion: running.status.ffmpegVersion } : {}), outputBytes: second.outputBytes, outputDuration: second.outputDuration };
+  console.log(JSON.stringify({ ok: true, packageKind: packagedExecutable ? 'UNPACKED' : 'INSTALLED', executable: installedExecutable, acceptance: result }));
 } finally {
   await stopApp().catch(() => undefined);
-  if (appProcess?.pid) await execFileAsync(join(systemRoot, 'System32', 'taskkill.exe'), ['/PID', String(appProcess.pid), '/T', '/F'], { windowsHide: true }).catch(() => undefined);
+  if (appProcess?.pid && appProcess.exitCode === null && appProcess.signalCode === null) await execFileAsync(join(systemRoot, 'System32', 'taskkill.exe'), ['/PID', String(appProcess.pid), '/T', '/F'], { windowsHide: true }).catch(() => undefined);
   if (appStdout || appStderr) console.error(JSON.stringify({ appStdout: appStdout.slice(-4000), appStderr: appStderr.slice(-4000) }));
   if (keepRoot) console.error(`clean acceptance root preserved at ${root}`);
   else await rm(root, { recursive: true, force: true });

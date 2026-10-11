@@ -15,6 +15,8 @@
 | T07 | VERIFIED：additive项目分析历史Contract/API，limit1–100、created_at/id keyset保留PG微秒、输入校验/项目隔离；Job状态通过owner get读取并检查type/project/run，不直接SQL；UI重载恢复历史/结果，分页、持久Job状态、错误提示与busy finally；API1/1 + DB历史1/1 + Intelligence49/49 + Windows Edge browser1/1 + Web production build通过 |
 | T08 | IN_PROGRESS：核心三链组合5/5；全量质量、其他模块门禁、Desktop打包/Smoke及最终报告继续执行 |
 
+T08交付链补齐：原ContentOS E2E通过Publisher公开post端口接上FAKE指标采集与Review AI Job，报告引用精确post/snapshot并明确模拟；Publisher outcome fixture用显式requeue遵守retry_at。full最终301/301、closure32/32、全部剪辑/数字人/Production gates通过。clean acceptance增加可选unpacked executable保护本机既有安装；真实导入、2份MP4、crash恢复/多次重启/单cluster/无新增残留进程通过。原installer/portable builder成功、两种packaged smoke通过。验收包是较早源码快照；最终源码需远端重新打包，不冒充最终发布产物。
+
 T08生产浏览器发现模板选择时序缺陷：11场景首轮10/11，初始preset GET迟到覆盖手动PUT所选片头。增加选择版本保护；原Auto Edit完整流程加入延迟旧GET的确定性断言，生产构建及focused 1/1通过，不放宽片头/manifest/渲染断言。完整11场景继续复验。
 
 T08分析重试补验：首次attempt在保存ASR/视觉结果后失败，替代attempt返回空数组，旧结果及向量仍出现在SUCCEEDED run（先红）。各stage收到新provider结果后，以现有attempt fence下同一SQL清理旧stage行/向量，替代成功结果不再混入旧片段；不修改其他run或SUCCEEDED缓存。另发现attempt关键帧目录必须传给Qwen视觉adapter，新增内部可选keyframePaths，并由实际生成路径传递，保留离线旧路径回退；adapter Mock先红后绿，无外部API调用。最终Intelligence51/51，无skip，typecheck通过。

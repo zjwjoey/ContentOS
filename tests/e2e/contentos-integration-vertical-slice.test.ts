@@ -20,6 +20,9 @@ import { createDirectorWorker } from '../../workers/director-worker/src/main.js'
 import { createVideoJobHandler } from '../../workers/video-worker/src/video-handler.js';
 import { createPublisherWorker } from '../../workers/publisher-worker/src/main.js';
 import type { ModelProfile } from '../../packages/contracts/src/index.js';
+import { ReviewAnalyticsService } from '../../packages/modules/review/src/index.js';
+import { FakeMetricsSource } from '../../packages/modules/review/src/fake-metrics-source.js';
+import { createReviewJobHandler } from '../../workers/review-worker/src/handler.js';
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://contentos_dev:change-me@127.0.0.1:55432/contentos_dev';
 const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
@@ -28,6 +31,8 @@ const fontFile = process.env.FFMPEG_FONT_FILE || 'C:\\Windows\\Fonts\\msyh.ttc';
 const profile: ModelProfile = { id: 'fake-integration-profile', providerId: 'fake', modelId: 'fake-zh-v1', displayName: 'Fake Integration', capabilities: ['TEXT', 'STRUCTURED'], maxInputCharacters: 20_000, maxOutputTokens: 2_000, enabled: true };
 
 async function cleanupProject(db: Awaited<ReturnType<typeof createDatabase>>, projectId: string): Promise<void> {
+  await db.query('delete from review_analysis_reports where project_id=$1', [projectId]);
+  await db.query('delete from review_metric_snapshots where project_id=$1', [projectId]);
   await db.query('delete from publisher_publication_states where account_id in (select id from publisher_accounts where project_id = $1)', [projectId]);
   await db.query('update publisher_requests set current_revision_id = null where project_id = $1', [projectId]);
   await db.query('delete from publisher_external_posts where request_id in (select id from publisher_requests where project_id = $1)', [projectId]);
@@ -136,6 +141,22 @@ test('ContentOS public services compose Director, Video, Approval, Publisher and
       assert.equal((await publisher.getRequest(request.request.id))?.status, 'PUBLISHED');
       assert.equal((await new ProjectService(db).get(project.id))?.status, 'PUBLISHED');
       assert.equal((await db.query('select id from publisher_external_posts where request_id = $1', [request.request.id])).rowCount, 1);
+      const posts = await publisher.listExternalPosts(request.request.id);
+      const post = posts.find((item) => item.requestId === request.request.id); assert.ok(post);
+      const analytics = new ReviewAnalyticsService(db, jobs, publisher);
+      const reviewHandler = createReviewJobHandler({ jobs, analytics, posts: publisher, metricsSource: new FakeMetricsSource(), ai });
+      const metricsJob = await analytics.createMetricCollectionJob({ projectId: project.id, externalPostId: post.id, source: 'FAKE', correlationId: `metrics-${project.id}`, idempotencyKey: `metrics-${post.id}` });
+      const collected = await new JobRunner(jobs, 'integration-review').run(metricsJob.id, reviewHandler);
+      assert.equal(collected.state, 'SUCCEEDED');
+      const snapshots = await analytics.listMetricSnapshots(project.id, post.id);
+      assert.equal(snapshots.length, 1); assert.equal(snapshots[0]!.source, 'FAKE');
+      const analysisJob = await analytics.createAnalysisJob({ projectId: project.id, externalPostId: post.id, metricSnapshotIds: snapshots.map((snapshot) => snapshot.id), correlationId: `review-${project.id}`, idempotencyKey: `review-${post.id}` });
+      assert.equal((await new JobRunner(jobs, 'integration-review').run(analysisJob.id, reviewHandler)).state, 'SUCCEEDED');
+      const reports = await analytics.listAnalysisReports(project.id, post.id);
+      assert.equal(reports.length, 1); assert.equal(reports[0]!.externalPostId, post.id);
+      assert.deepEqual(reports[0]!.metricSnapshotIds, [snapshots[0]!.id]);
+      assert.match(reports[0]!.summary, /模拟/);
+      assert.equal((await db.query('select provider_id from ai_runs where id=$1', [reports[0]!.aiRunId])).rows[0]?.provider_id, 'fake');
       await worker.shutdown('integration');
     } finally { await rm(fakeRoot, { recursive: true, force: true }); }
     assert.equal((await db.query('select status from renders where id = $1', [rendered.renderId])).rows[0]?.status, 'SUCCEEDED');

@@ -32,7 +32,7 @@ export class FakeAIProvider implements AIProvider {
     }
     if (request.promptKey === 'review.analysis.v1') {
       return { requestId: request.requestId, providerId: this.providerId, modelId: 'fake-zh-v1', output: {
-        summary: '当前内容获得稳定触达，互动仍有提升空间。',
+        summary: '模拟数据复盘：当前内容获得稳定触达，互动仍有提升空间。',
         highlights: [{ title: '触达稳定', detail: '播放量保持在健康区间。' }],
         risks: [{ title: '互动偏低', detail: '评论和分享率低于播放增长。' }],
         recommendations: [{ priority: 'HIGH', title: '强化互动钩子', detail: '在结尾加入明确问题，引导评论。' }],
