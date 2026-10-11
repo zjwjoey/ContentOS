@@ -1,6 +1,6 @@
 # ADR-021: Bundled PostgreSQL process encoding on Windows
 
-Status: Accepted for isolated implementation; packaged and English Windows CI gates required.
+Status: Accepted; local and English Windows path gates plus final installer/portable/clean acceptance passed for `617cf71` in [CI 38109321696](https://github.com/zjwjoey/ContentOS/actions/runs/38109321696). Older Windows and broader machine policies remain outside this acceptance.
 
 The first remote Windows run converted cmd short-path output to ASCII question marks. UTF-16 output and realpath validation fixed that case, but English Windows still failed `initdb` against a Chinese data directory because native ANSI command-line/file calls lost characters. Local Chinese Windows alone did not expose that failure. Direct data junction initialization and a SUBST-drive experiment also failed; neither is implemented.
 

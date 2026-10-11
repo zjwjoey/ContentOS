@@ -16,3 +16,5 @@
 执行顺序 T01→T02→T03，安全/Runtime阻断按证据可提前；T06/T07依赖前面的可靠状态。任何 test failure 先定位触发，不删除测试、不放宽安全断言。新 regression 先红后绿。每项完成后 diff --check、focused tests、类型检查和必要整体回归，分阶段 Git commit，避免混入 ignored 媒体与开发者原改动。
 
 未授权项独立保留：改变 lease-loss retry/defer 预算需要兼容策略 ADR；历史 RUNNING 数据 drain/回填、真实 GPU/平台验收、付费外部调用、main合并。它们不阻止其他安全任务。若本轮能力不足或环境阻断，以真实缺口和复现命令记录，不能把未跑/skip算通过。可将通过验证的开发分支正常 push 触发 Actions；读到实际结果后才报告远端通过。
+
+执行中发现的阻断仍归入原任务：T03补上替代attempt清理部分结果及视觉adapter实际关键帧路径；T05依据英文Windows CI补上短路径身份验证、复制资源的UTF-8进程声明及首次建库独立预算（ADR021）；T08补上退出child的PID复用保护、历史诊断读取脱敏、模板迟到读取保护与模拟Review闭环。没有扩展成第二套架构或P2产品。具体提交、失败记录、最终门禁与后续决策见P0_P1_ACCEPTANCE_REPORT.md；基线审计保留改动前事实。

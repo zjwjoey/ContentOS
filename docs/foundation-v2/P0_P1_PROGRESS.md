@@ -10,10 +10,12 @@
 | T02 | VERIFIED：整合 `99d324a` 的 reviewed additive cancellation contract；本机先红 QUEUED→CANCELLED 未传播，再绿组合 33/33（20 Job + 12 cancel + 1 worker）；无 skip；typecheck通过；所有 DB fixtures 使用隔离 schema |
 | T03 | VERIFIED：真实隔离DB复现迟到技术结果999覆盖640、迟到异常覆盖SUCCEEDED；已修复全部 Worker analysis写入与终态fence、Job+域结果原子提交、attempt文件路径、同连接恢复/取消；原Intelligence门禁加8项回归 48/48 PASS；无migration，保留离线签名；ADR020 |
 | T04 | VERIFIED：新增4项安全测试先红后绿；统一redaction用于logger/shared errors/Job fail+defer/Analysis error和逐行Runtime日志（含跨chunk）；API生成请求correlation并保留400/422；unit 11/11、Job21/21、Runtime23/23、format/lint/typecheck通过；旧Job锁竞态fixture被其他suite残留VIDEO_RENDER前10条挤出，改用独立测试type保护场景，不放宽断言 |
-| T05 | VERIFIED：资源8.3路径不可用时使用本管理器拥有的ASCII临时资源junction；保留真实数据目录；Windows中文资源+ASCII/中文数据两组均完成真实初始化、SQL读写、关闭、重启、中文内容保留（2/2，无skip），加入原Windows CI job；默认60秒启动预算不变；不递归清理junction目标 |
+| T05 | VERIFIED：资源8.3路径不可用时使用owned ASCII资源junction，cmd Unicode输出并核验目标身份；生产资源副本增加UTF-8进程声明（ADR021），保留真实数据和upstream文件；本机及英文Windows CI中文+emoji真实SQL/重启2/2，manifest安全/幂等3/3；首次init120秒、普通startup60秒、embedded readiness180秒有界预算；不递归清理junction目标 |
 | T06 | VERIFIED：Hybrid命中缓存只建立Video workspace引用，保留Asset元数据及原始downloadedAt/provenance；先红后绿，Hybrid unit+真实FFmpeg integration 22/22无skip；新回归进入原full test；首次下载仍通过AssetService import；既有跨模块Asset只读SQL债务未宣称消除 |
 | T07 | VERIFIED：additive项目分析历史Contract/API，limit1–100、created_at/id keyset保留PG微秒、输入校验/项目隔离；Job状态通过owner get读取并检查type/project/run，不直接SQL；UI重载恢复历史/结果，分页、持久Job状态、错误提示与busy finally；API1/1 + DB历史1/1 + Intelligence49/49 + Windows Edge browser1/1 + Web production build通过 |
-| T08 | VERIFIED_LOCAL / CI_RECHECK_PENDING：核心三链组合5/5、full301/301、closure32/32、Intelligence51/51、Windows production browser11/11；最终UTF8/路径安全5/5、Runtime27/27、真实host14/14及typecheck/build/frozen install完成；修复两轮远端Unicode/异步断言失败后，再push完整CI |
+| T08 | VERIFIED：核心三链组合5/5、full301/301、closure32/32、Intelligence51/51、本机及Linux production browser各11/11；最终UTF8/路径安全5/5、Runtime27/27、真实host14/14及typecheck/build/frozen install完成；617cf71远端CI 38109321696六个job全部SUCCESS，最终installer/portable及安装/卸载/clean render/restart通过，产物上传完成 |
+
+最终代码验收对象 `617cf71f3c024efd26b25a755353ce6feb1d29e7`，之后只提交文档收尾。[最终CI](https://github.com/zjwjoey/ContentOS/actions/runs/38109321696) 6/6整体SUCCESS；计划8项实际完成8项，剩余策略决策/边界债务及真实环境未验收见最终报告。仅正常push独立分支，没有PR/main合并。本轮隔离PG核验owned data/port/PID后正常关闭，测试数据保留；原工作区HEAD与local-media未变。下面过程记录保留先前失败和等待状态，以本表及最终报告为当前结论。
 
 T08交付链补齐：原ContentOS E2E通过Publisher公开post端口接上FAKE指标采集与Review AI Job，报告引用精确post/snapshot并明确模拟；Publisher outcome fixture用显式requeue遵守retry_at。full最终301/301、closure32/32、全部剪辑/数字人/Production gates通过。clean acceptance增加可选unpacked executable保护本机既有安装；真实导入、2份MP4、crash恢复/多次重启/单cluster/无新增残留进程通过。原installer/portable builder成功、两种packaged smoke通过。验收包是较早源码快照；最终源码需远端重新打包，不冒充最终发布产物。
 
