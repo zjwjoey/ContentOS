@@ -6,8 +6,9 @@
 
 | 任务 | 当前状态 |
 | --- | --- |
-| T01 | VERIFIED：复用 `05a8379` 的最小实现与回归，先红（5个新增 readiness/并发用例失败）后绿 Job 20/20；Date/string retry_at 保留毫秒精度；无 schema变化 |
-| T02–T08 | PLANNED，详见执行计划 |
+| T01 | VERIFIED：复用 `05a8379` 的最小实现与回归，先红（4个 readiness/并发用例失败）后绿 Job 20/20；Date/string retry_at 保留毫秒精度；无 schema变化；提交 5fcdc3c |
+| T02 | VERIFIED：整合 `99d324a` 的 reviewed additive cancellation contract；本机先红 QUEUED→CANCELLED 未传播，再绿组合 33/33（20 Job + 12 cancel + 1 worker）；无 skip；typecheck通过；所有 DB fixtures 使用隔离 schema |
+| T03–T08 | PLANNED，详见执行计划 |
 
 隔离 public schema 初始化后原 focused suite 17/17 PASS，无 skip。迁移矩阵的 schema 临时清理不初始化 public；该前置现已按 CI 脚本补齐。
 

@@ -27,10 +27,12 @@ import {
 } from '../../../contracts/src/index.js';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import type { IntelligenceProviders } from './providers.js';
+import type { JobCancellationScope } from '../../job/src/index.js';
 
 export const MEDIA_ANALYSIS = 'MEDIA_ANALYSIS' as const;
 export interface CreateMediaAnalysisInput { id?: string; projectId: string; assetId: string; capabilities?: MediaAnalysisCapability[]; providerMode?: 'FAKE' | 'REAL'; idempotencyKey?: string; }
 export interface MediaIntelligenceServiceOptions { analysisVersion?: string; pipelineVersion?: string; storage?: LocalStorageProvider; ffmpegPath?: string; keyframeRoot?: string; semanticWeight?: number; lexicalWeight?: number; embeddingModelVersion?: string; }
+export interface QueuedAnalysisCancellationCandidate { runId: string; jobId: string; projectId: string; throughId: string; }
 const DEFAULT_CAPABILITIES: MediaAnalysisCapability[] = ['TECHNICAL', 'SHOTS', 'KEYFRAMES', 'ASR', 'VISION', 'EMBEDDING'];
 type AssetRow = { id: string; metadata: Record<string, unknown>; storage_key: string; checksum: string | null };
 type RunRow = Record<string, unknown> & { metadata?: unknown; storage_key?: unknown; checksum?: unknown };
@@ -95,6 +97,22 @@ export class MediaIntelligenceService {
   async getRun(projectId: string, runId: string): Promise<MediaAnalysisRunV1 | null> { const result = await this.db.query('select * from media_analysis_runs where project_id = $1 and id = $2', [projectId, runId]); return result.rows[0] ? mapRun(result.rows[0] as Record<string, unknown>) : null; }
 
   async markCancelled(runId: string, error = { code: 'MEDIA_ANALYSIS_CANCELLED', message: 'Media analysis cancelled' }): Promise<void> { await this.db.query("update media_analysis_runs set status='CANCELLED', error=$2, finished_at=coalesce(finished_at,now()) where id=$1 and status not in ('SUCCEEDED','FAILED','STALE')", [runId, error]); }
+
+  async listQueuedCancellationCandidates(afterId: string | null, throughId: string | null, limit: number): Promise<QueuedAnalysisCancellationCandidate[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Queued cancellation batch size must be between 1 and 100');
+    const result = await this.db.query<{ id: string; job_id: string; project_id: string; through_id: string }>(`with bounds as (
+      select coalesce($2::text, max(id)) as through_id from media_analysis_runs where status='QUEUED' and job_id is not null
+    ) select r.id,r.job_id,r.project_id,b.through_id from media_analysis_runs r cross join bounds b
+      where r.status='QUEUED' and r.job_id is not null and ($1::text is null or r.id > $1) and r.id <= b.through_id
+      order by r.id limit $3`, [afterId, throughId, limit]);
+    return result.rows.map((row) => ({ runId: row.id, jobId: row.job_id, projectId: row.project_id, throughId: row.through_id }));
+  }
+
+  async markQueuedCancelledWithExecutor(scope: JobCancellationScope, runId: string, expectedJobId: string, expectedProjectId: string): Promise<boolean> {
+    if (scope.jobId !== expectedJobId || scope.projectId !== expectedProjectId || scope.type !== MEDIA_ANALYSIS) return false;
+    const result = await scope.query("update media_analysis_runs set status='CANCELLED', error=$4, finished_at=coalesce(finished_at,now()) where id=$1 and job_id=$2 and project_id=$3 and status='QUEUED' returning id", [runId, expectedJobId, expectedProjectId, { code: 'MEDIA_ANALYSIS_JOB_CANCELLED', message: 'Media analysis job was cancelled' }]);
+    return result.rowCount === 1;
+  }
 
   async reconcileStaleRuns(): Promise<number> {
     const result = await this.db.query(`update media_analysis_runs r
