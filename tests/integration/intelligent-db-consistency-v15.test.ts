@@ -4,7 +4,7 @@ import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { createDatabase } from '../../packages/database/src/client.js';
+import { createDatabase, migrateUp } from '../../packages/database/src/index.js';
 import { generateFixtureVideo } from '../../packages/infrastructure/ffmpeg/src/index.js';
 import { LocalStorageProvider } from '../../packages/infrastructure/storage/src/index.js';
 import { buildApi } from '../../apps/api/src/app.js';
@@ -15,7 +15,12 @@ import { createMediaIntelligenceWorker } from '../../workers/media-intelligence-
 const databaseUrl = process.env.CONTENTOS_TEST_DATABASE_URL || process.env.DATABASE_URL;
 
 test('API and Media Intelligence Worker consume MEDIA_ANALYSIS from the same DATABASE_URL', { skip: !databaseUrl }, async () => {
-  const db = await createDatabase(databaseUrl!);
+  const admin = await createDatabase(databaseUrl!);
+  const schema = `intelligence_consistency_${randomUUID().replaceAll('-', '')}`;
+  await admin.query(`create schema "${schema}"`);
+  const scoped = new URL(databaseUrl!); scoped.searchParams.set('options', `-c search_path=${schema}`);
+  const db = await createDatabase(scoped.toString());
+  await migrateUp(db);
   const root = await mkdtemp(join(tmpdir(), 'contentos-db-consistency-v15-'));
   const storage = new LocalStorageProvider(root);
   const suffix = randomUUID();
@@ -45,6 +50,7 @@ test('API and Media Intelligence Worker consume MEDIA_ANALYSIS from the same DAT
     await app.close();
   } finally {
     await db.end();
+    await admin.query(`drop schema "${schema}" cascade`); await admin.end();
     await rm(root, { recursive: true, force: true });
   }
 });

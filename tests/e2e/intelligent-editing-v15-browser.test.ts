@@ -52,8 +52,17 @@ test('Intelligent Editing V1.5 browser vertical slice uploads, analyzes, plans, 
 
     await page.getByText(/镜头 \/ 关键帧/).waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByText(/Shot [12] ·/).first().waitFor({ state: 'visible', timeout: 30_000 });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByTestId(`analysis-${runId}`).getByText(/SUCCEEDED/).first().waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByText(/Shot [12] ·/).first().waitFor({ state: 'visible', timeout: 30_000 });
     const search = page.locator('input[placeholder="例如：消费者正在选购产品"]');
     await search.fill('视频');
+    const blockedSearch = '**/intelligence/search?*';
+    await page.route(blockedSearch, (route) => route.abort());
+    await page.getByRole('button', { name: '搜索' }).click();
+    await page.getByRole('alert').first().waitFor({ state: 'visible', timeout: 15_000 });
+    assert.equal(await page.getByRole('button', { name: '搜索' }).isEnabled(), true);
+    await page.unroute(blockedSearch);
     await page.getByRole('button', { name: '搜索' }).click();
     await page.getByText(/score/).first().waitFor({ state: 'visible', timeout: 15_000 });
 

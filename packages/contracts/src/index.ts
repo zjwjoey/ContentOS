@@ -67,6 +67,8 @@ export type {
   MediaAnalysisProviderMode,
   MediaAnalysisRunStatus,
   MediaAnalysisRunV1,
+  MediaAnalysisHistoryItemV1,
+  MediaAnalysisHistoryPageV1,
   MediaAnalysisSearchResultV1,
   MediaAnalysisShotV1,
   MediaAnalysisVisionResultV1,

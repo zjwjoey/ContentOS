@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { MEDIA_ANALYSIS, type MediaIntelligenceService } from '../../../packages/modules/intelligence/src/index.js';
+import { MEDIA_ANALYSIS, parseAnalysisHistoryCursor, type MediaIntelligenceService } from '../../../packages/modules/intelligence/src/index.js';
+import type { MediaAnalysisHistoryPageV1 } from '../../../packages/contracts/src/index.js';
 import { JobService } from '../../../packages/modules/job/src/index.js';
 import { ProjectService } from '../../../packages/modules/project/src/index.js';
 
@@ -11,8 +12,22 @@ const createAnalysisInput = z.object({
   idempotencyKey: z.string().trim().min(1).max(300).optional(),
 }).strict();
 const searchInput = z.object({ q: z.string().max(2_000).default(''), limit: z.coerce.number().int().min(1).max(100).default(20) }).strict();
+const historyInput = z.object({ limit: z.coerce.number().int().min(1).max(100).default(20), cursor: z.string().min(1).max(500).refine((value) => { try { parseAnalysisHistoryCursor(value); return true; } catch { return false; } }).optional() }).strict();
 
 export function registerIntelligentEditingRoutes(app: FastifyInstance, dependencies: { projects: ProjectService; jobs: JobService; intelligence: MediaIntelligenceService }): void {
+  app.get('/api/v1/projects/:projectId/intelligence/analyses', async (request, reply) => {
+    const projectId = String((request.params as { projectId: string }).projectId);
+    if (!(await dependencies.projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });
+    const parsed = historyInput.safeParse(request.query || {});
+    if (!parsed.success) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid analysis history query', details: parsed.error.issues } });
+    const page = await dependencies.intelligence.listRuns(projectId, { limit: parsed.data.limit, ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {}) });
+    const items = await Promise.all(page.items.map(async (run) => {
+      const job = run.jobId ? await dependencies.jobs.get(run.jobId) : null;
+      const matches = job?.projectId === projectId && job.type === MEDIA_ANALYSIS && (job.payload as { runId?: unknown } | null)?.runId === run.id;
+      return { ...run, jobState: matches ? job.state : null, progress: matches ? job.progress : null };
+    }));
+    return { items, nextCursor: page.nextCursor } satisfies MediaAnalysisHistoryPageV1;
+  });
   app.post('/api/v1/projects/:projectId/intelligence/analyses', async (request, reply) => {
     const projectId = String((request.params as { projectId: string }).projectId);
     if (!(await dependencies.projects.get(projectId))) return reply.code(404).send({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found', details: [] } });

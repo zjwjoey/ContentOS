@@ -36,6 +36,13 @@ export interface CreateMediaAnalysisInput { id?: string; projectId: string; asse
 export interface MediaIntelligenceServiceOptions { analysisVersion?: string; pipelineVersion?: string; storage?: LocalStorageProvider; ffmpegPath?: string; keyframeRoot?: string; semanticWeight?: number; lexicalWeight?: number; embeddingModelVersion?: string; }
 export interface MediaAnalysisExecution { jobs: JobService; job: JobRecord; attemptId: string; }
 export interface QueuedAnalysisCancellationCandidate { runId: string; jobId: string; projectId: string; throughId: string; }
+export function parseAnalysisHistoryCursor(value: string): { createdAt: string; id: string } {
+  try {
+    const cursor = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as { createdAt?: unknown; id?: unknown };
+    if (typeof cursor.createdAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T/u.test(cursor.createdAt) || !Number.isFinite(Date.parse(cursor.createdAt)) || typeof cursor.id !== 'string' || !cursor.id || cursor.id.length > 200) throw new Error();
+    return { createdAt: cursor.createdAt, id: cursor.id };
+  } catch { throw new Error('MEDIA_ANALYSIS_CURSOR_INVALID'); }
+}
 const DEFAULT_CAPABILITIES: MediaAnalysisCapability[] = ['TECHNICAL', 'SHOTS', 'KEYFRAMES', 'ASR', 'VISION', 'EMBEDDING'];
 type AssetRow = { id: string; metadata: Record<string, unknown>; storage_key: string; checksum: string | null };
 type RunRow = Record<string, unknown> & { metadata?: unknown; storage_key?: unknown; checksum?: unknown };
@@ -116,6 +123,16 @@ export class MediaIntelligenceService {
 
   async attachJob(runId: string, jobId: string): Promise<void> { await this.db.query('update media_analysis_runs set job_id = $2 where id = $1', [runId, jobId]); }
   async getRun(projectId: string, runId: string): Promise<MediaAnalysisRunV1 | null> { const result = await this.db.query('select * from media_analysis_runs where project_id = $1 and id = $2', [projectId, runId]); return result.rows[0] ? mapRun(result.rows[0] as Record<string, unknown>) : null; }
+
+  async listRuns(projectId: string, input: { limit?: number; cursor?: string } = {}): Promise<{ items: MediaAnalysisRunV1[]; nextCursor: string | null }> {
+    const limit = input.limit ?? 20;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('MEDIA_ANALYSIS_LIMIT_INVALID');
+    const cursor = input.cursor ? parseAnalysisHistoryCursor(input.cursor) : null;
+    const result = await this.db.query(`select *,to_char(created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as cursor_created_at from media_analysis_runs where project_id=$1 and ($2::timestamptz is null or (created_at,id)<($2::timestamptz,$3::text)) order by created_at desc,id desc limit $4`, [projectId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1]);
+    const items = result.rows.slice(0, limit).map((row) => mapRun(row as Record<string, unknown>));
+    const last = items.at(-1);
+    return { items, nextCursor: result.rows.length > limit && last ? Buffer.from(JSON.stringify({ createdAt: String(result.rows[limit - 1]!.cursor_created_at), id: last.id })).toString('base64url') : null };
+  }
 
   async markCancelled(runId: string, error = { code: 'MEDIA_ANALYSIS_CANCELLED', message: 'Media analysis cancelled' }): Promise<void> { await this.db.query("update media_analysis_runs set status='CANCELLED', error=$2, finished_at=coalesce(finished_at,now()) where id=$1 and status not in ('SUCCEEDED','FAILED','STALE')", [runId, error]); }
 

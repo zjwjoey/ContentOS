@@ -12,8 +12,11 @@
 | T04 | VERIFIED：新增4项安全测试先红后绿；统一redaction用于logger/shared errors/Job fail+defer/Analysis error和逐行Runtime日志（含跨chunk）；API生成请求correlation并保留400/422；unit 11/11、Job21/21、Runtime23/23、format/lint/typecheck通过；旧Job锁竞态fixture被其他suite残留VIDEO_RENDER前10条挤出，改用独立测试type保护场景，不放宽断言 |
 | T05 | VERIFIED：资源8.3路径不可用时使用本管理器拥有的ASCII临时资源junction；保留真实数据目录；Windows中文资源+ASCII/中文数据两组均完成真实初始化、SQL读写、关闭、重启、中文内容保留（2/2，无skip），加入原Windows CI job；默认60秒启动预算不变；不递归清理junction目标 |
 | T06 | VERIFIED：Hybrid命中缓存只建立Video workspace引用，保留Asset元数据及原始downloadedAt/provenance；先红后绿，Hybrid unit+真实FFmpeg integration 22/22无skip；新回归进入原full test；首次下载仍通过AssetService import；既有跨模块Asset只读SQL债务未宣称消除 |
-| T07–T08 | PLANNED，详见执行计划 |
+| T07 | VERIFIED：additive项目分析历史Contract/API，limit1–100、created_at/id keyset保留PG微秒、输入校验/项目隔离；Job状态通过owner get读取并检查type/project/run，不直接SQL；UI重载恢复历史/结果，分页、持久Job状态、错误提示与busy finally；API1/1 + DB历史1/1 + Intelligence49/49 + Windows Edge browser1/1 + Web production build通过 |
+| T08 | IN_PROGRESS：核心三链组合5/5；全量质量、其他模块门禁、Desktop打包/Smoke及最终报告继续执行 |
 
 隔离 public schema 初始化后原 focused suite 17/17 PASS，无 skip。迁移矩阵的 schema 临时清理不初始化 public；该前置现已按 CI 脚本补齐。
 
 Windows bundled PostgreSQL 中文资源初始化故障已修复；最终2/2通过。中间实验：数据junction被initdb拒绝，因此放弃；30秒试验预算在中文路径刷盘阶段超时，恢复原Runtime默认60秒后完整通过。未移动、迁移或删除已有数据；TEMP无ASCII路径/短名称的环境仍提供明确诊断。运行产物与本地测试 URL 均在 ignored `.test-results/`。尚未 push、未创建 PR、未运行真实平台/付费API/GPU。
+
+T07首次整组的API→Worker一致性用例被之前测试留下的pending Job挤出单次consume范围，实际QUEUED；改为独立schema并保留全部成功断言后，单独2/2和整组49/49通过。浏览器dev与production build曾同时写.next导致ENOENT；停止dev后串行production build成功。以上失败均不计入通过。
