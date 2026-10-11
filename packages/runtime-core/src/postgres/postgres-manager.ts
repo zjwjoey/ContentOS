@@ -75,9 +75,9 @@ export class PostgresRuntimeManager {
     if (process.platform !== 'win32' || /^[\x00-\x7F]*$/u.test(file)) return file;
     try {
       const command = `for %I in ("${file.replaceAll('"', '""')}") do @echo %~sI`;
-      const result = await execFileAsync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', command], { timeout: 5_000, windowsHide: true, windowsVerbatimArguments: true, env: process.env });
+      const result = await execFileAsync(process.env.ComSpec || 'cmd.exe', ['/d', '/u', '/c', command], { timeout: 5_000, windowsHide: true, windowsVerbatimArguments: true, encoding: 'utf16le', env: process.env });
       const shortPath = String(result.stdout).trim().split(/\r?\n/u).map((value) => value.trim()).find(Boolean);
-      if (shortPath && /^[\x00-\x7F]*$/u.test(shortPath)) return shortPath;
+      if (shortPath && /^[\x00-\x7F]*$/u.test(shortPath) && (await realpath(shortPath)).toLowerCase() === (await realpath(file)).toLowerCase()) return shortPath;
     } catch { /* NTFS short names may be unavailable; use an owned junction below. */ }
     // initdb requires a real data directory rather than a junction. Unicode
     // data paths remain valid once the executable/share root uses an ASCII alias.

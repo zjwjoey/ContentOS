@@ -4,7 +4,7 @@
 
 ## 范围与结论
 
-计划共8项，T01–T07完成代码、回归与分阶段提交；T08持续验收中，新增Windows进程身份修复已提交。没有修改/合并main、重写远端历史、连接真实用户数据库、清理原素材、调用付费Provider或真实发布。
+计划共8项，T01–T07完成代码、回归与分阶段提交；T08本地验收完成，远端CI发现英文Windows路径编码缺陷，修复及复验中。新增Windows进程身份、模板时序及分析重试修复均已提交。没有修改/合并main、重写远端历史、连接真实用户数据库、清理原素材、调用付费Provider或真实发布。
 
 这轮验证的是现有模块的可靠衔接，不等于所有第三方/GPU能力已生产验收。保持模块化单体、唯一Job系统、PostgreSQL业务事实及冻结EDIT_MANIFEST_V0。没有增加业务数据库迁移或启用需要历史drain的分阶段attempt-owner方案。
 
@@ -24,6 +24,7 @@
 | 73a0f4b | Job/分析历史诊断读取时脱敏，不重写旧业务数据 |
 | 7913ece | 延迟初始模板读取不覆盖用户选择，保留正确片头；生产浏览器确定性回归 |
 | 4c2d5ce | 替代分析清理旧stage结果/向量；生成的attempt关键帧实际路径交给视觉adapter |
+| 374bb2c | 三链Review端到端、模拟数据标记、Desktop隔离验收脚本与报告；正常push独立远端分支 |
 
 原工作区 `F:/ai剪辑/ContentOS` 的 `codex/main-ci-hardening-final` 与未提交 `local-media/` 保持原样。工作目录 `F:/ai剪辑/.worktrees/contentos-foundation-v2-p0-p1`。基线审计是改动前快照，不回写为事后“全通过”。
 
@@ -64,7 +65,8 @@
 | Windows打包 | installer和portable实际构建成功；原builder/config未放宽，ASCII临时输出目录规避本机文件占用 |
 | packaged smoke | unpacked及portable PASS，PACKAGED/EMBEDDED，PG18.4、FFmpeg6.1.1及全部服务READY；未配置外部provider明确WARN |
 | clean acceptance（unpacked） | PASS；导入→两份真实MP4→模拟崩溃恢复→3次额外重启→同一PG cluster→无新增ContentOS/PG进程 |
-| 完整production browser / 远端Actions | 最终结果待补记 |
+| 完整production browser | 最终PASS11/11，无skip；8个原browser文件、Windows Edge headless、Next生产版 |
+| 远端Actions | [38107294536](https://github.com/zjwjoey/ContentOS/actions/runs/38107294536)，源码374bb2c；Quality/Build通过；Windows Runtime中文路径spawn ENOENT失败，修复复验中；其余运行中 |
 
 ## 失败与处理（不计通过）
 
@@ -76,14 +78,16 @@
 - Runtime旧压测对历史数字PID存活做断言，单次失败；20循环单独复验成功。确定性新增测试另复现已exit child旧PID被重复taskkill的风险并修复，生命周期改按全部owned child handle退出判断，不将可能被复用的历史PID当作owned进程。
 - 桌面打包先遇Electron解压rename EPERM及resource edit文件占用；使用新的ASCII临时输出目录复验原builder后installer+portable成功。不禁用签名/安全校验或更改Electron。
 - clean acceptance首轮port占用fixture socket未处理ECONNRESET，测试脚本崩溃；补socket error handler，仅关闭该次临时runtime；完整重跑通过，不影响原安装或其他PostgreSQL实例。
-- 完整生产浏览器首轮10/11；模板初始GET迟到覆盖用户选择。增加版本保护及延迟GET回归后focused1/1，完整重跑结果待补记。
+- 完整生产浏览器首轮10/11；模板初始GET迟到覆盖用户选择。增加版本保护及延迟GET回归后focused1/1，最终完整11/11。
+- 远端英文Windows将cmd短路径输出中的中文转换成问号；原代码误判为有效ASCII文件名，两个Unicode资源用例spawn ENOENT。本地中文系统未复现这条错误；修复改用cmd Unicode/UTF-16LE输出，并核验realpath同一目标。原两个专项保留，远端复验中。
+- 额外非BMP（emoji）数据目录实验在本机PostgreSQL原生argv编码阶段失败；没有把它算入通过。测试范围仍为原两项中文资源/中文数据，不将“Unicode通过”扩张成任意字符均支持。
 - 打包验收的资源快照在73a0f4b/7913ece/4c2d5ce之前生成；只作为packaged运行与关闭证据，不作为最终修复版本发布包。远端Windows CI须重新构建当前源码。没有运行本机installer/uninstaller改写既有安装。
 
 ## 剩余风险与集成边界
 
 | 级别 | 状态/具体限制 | 后续验收 |
 | --- | --- | --- |
-| P0/P1 | 普通lease连续丢失可持续重排队；原ADR/audit将失败预算列needsdecision。不能用总attempt_count上限破坏maxAttempts=1远程pending defer，也不能孤立终止Job留下域RUNNING | 确定失败次数、defer例外、人工重试及各owner同步策略后独立ADR+组合回归；未宣称已解决 |
+| P0（需架构决策） | 普通lease连续丢失可持续重排队；原ADR/audit将失败预算列needsdecision。不能用总attempt_count上限破坏maxAttempts=1远程pending defer，也不能孤立终止Job留下域RUNNING | 确定失败次数、defer例外、人工重试及各owner同步策略后独立ADR+组合回归；未宣称已解决 |
 | P1 | 部分Video/Intelligence仍直接读取其他模块Asset私表；本轮移除了缓存写入与分析Job私表读取，但未全仓替换读端口 | 按模块增加窄owner read ports和consumer tests，不用通用SQL helper隐藏权限 |
 | P1 | Intelligence search embedding仍同步API调用，provider实际超时/吞吐待验证；离线无Job analyzeRun保留兼容签名 | 后续明确search预算/取消，生产analysis必须经Job handler附带attempt context |
 | P1 | 原分阶段owner方案有历史drain/activation前置，本轮没有运行0053/历史回填 | 有数据副本的专门迁移演练与显式批准后再启用 |
