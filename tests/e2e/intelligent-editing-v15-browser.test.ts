@@ -61,6 +61,7 @@ test('Intelligent Editing V1.5 browser vertical slice uploads, analyzes, plans, 
     await page.route(blockedSearch, (route) => route.abort());
     await page.getByRole('button', { name: '搜索' }).click();
     await page.getByRole('alert').first().waitFor({ state: 'visible', timeout: 15_000 });
+    await waitFor(async () => page.getByRole('button', { name: '搜索' }).isEnabled(), (enabled) => enabled, 'Search busy reset after network failure', 5_000);
     assert.equal(await page.getByRole('button', { name: '搜索' }).isEnabled(), true);
     await page.unroute(blockedSearch);
     await page.getByRole('button', { name: '搜索' }).click();

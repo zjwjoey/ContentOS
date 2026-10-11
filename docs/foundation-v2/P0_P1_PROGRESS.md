@@ -23,6 +23,8 @@ T08分析重试补验：首次attempt在保存ASR/视觉结果后失败，替代
 
 T08首轮远端CI：Quality/Build已通过，Windows Runtime的两个中文PG用例spawn ENOENT。英文cmd编码把中文输出转换为ASCII问号，被误判为短名称；修复为cmd /u + UTF-16LE解码并验证realpath为同一目标。原两个用例完整保留，本地2/2（中文真实SQL及restart）、Runtime24/24和typecheck通过，再push复验。额外emoji数据目录实验发现原生PG argv编码限制，仅记录，不计入原中文路径通过范围。
 
+T08两轮Linux浏览器10/11：失败在网络abort后alert刚出现时立即读取搜索按钮disabled状态；React操作finally尚未完成渲染。保留enabled=true及实际搜索score/后续plan/render断言，增加5秒有界等待finally状态完成。focused生产浏览器1/1通过，没有改动产品busy状态或移除失败恢复验收。
+
 T08追加Windows进程身份修复：确定性模拟“owned child已exit但数字PID再次显示alive”，旧实现第二次taskkill（先红2≠1）；修复后不向已exit的owned child旧PID再次kill，原真实进程树关闭和12项host生命周期压测一起16/16通过。生命周期压测对所有已退出child handle做断言，避免将被Windows复用的历史数字PID当成owned进程；保留全部state/lock/restart-budget断言。新回归加入原Runtime gate。
 
 T08历史诊断安全复验：从旧DB error字段读取原始凭证的Job/Analysis回归先红；mapJob/mapRun读取时复用redact，保留数据库原记录、不执行历史数据重写。Job+历史组合22/22通过；Runtime完整24/24、真实host14/14、第二次full301/301已通过。后续新增读取防线仍做最终门禁复验。
