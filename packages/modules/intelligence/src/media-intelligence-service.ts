@@ -203,10 +203,11 @@ export class MediaIntelligenceService {
       for (const shot of shots) { validateMediaAnalysisShotV1(shot); await db.query('insert into media_analysis_shots (id,run_id,asset_id,shot_index,source_in_ms,source_out_ms,confidence,detection_version) values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict (id) do update set source_in_ms=excluded.source_in_ms,source_out_ms=excluded.source_out_ms,confidence=excluded.confidence,detection_version=excluded.detection_version', [shot.id, shot.runId, shot.assetId, shot.shotIndex, shot.sourceInMs, shot.sourceOutMs, shot.confidence, shot.detectionVersion]); }
       await db.query('delete from media_analysis_shots where run_id=$1 and id <> all($2::text[])', [runId, shots.map((shot) => shot.id)]);
 
-      if (capability(run.capabilities, 'KEYFRAMES')) await this.generateKeyframes(run, shots, source, signal, db, execution);
+      const keyframePaths = capability(run.capabilities, 'KEYFRAMES') ? await this.generateKeyframes(run, shots, source, signal, db, execution) : undefined;
       if (capability(run.capabilities, 'ASR')) {
         const segments = await this.providers.asr.transcribe({ assetId: run.assetId, runId, durationMs: technical.durationMs, metadata, ...(signal ? { signal } : {}) });
         signal?.throwIfAborted();
+        await db.query("with removed_embeddings as (delete from media_analysis_embeddings where run_id=$1 and content_type='ASR') delete from media_analysis_asr_segments where run_id=$1", [runId]);
         for (const [index, item] of segments.entries()) {
           signal?.throwIfAborted();
           const segmentIndex = item.segmentIndex ?? index;
@@ -217,8 +218,9 @@ export class MediaIntelligenceService {
         }
       }
       if (capability(run.capabilities, 'VISION')) {
-        const visionItems = await this.providers.vision.analyze({ assetId: run.assetId, runId, shots, metadata, ...(signal ? { signal } : {}) });
+        const visionItems = await this.providers.vision.analyze({ assetId: run.assetId, runId, shots, metadata, ...(keyframePaths ? { keyframePaths } : {}), ...(signal ? { signal } : {}) });
         signal?.throwIfAborted();
+        await db.query("with removed_embeddings as (delete from media_analysis_embeddings where run_id=$1 and content_type='VISION') delete from media_analysis_vision_results where run_id=$1", [runId]);
         for (const [index, item] of visionItems.entries()) {
           signal?.throwIfAborted();
           const shotId = item.shotId || shots[index]?.id || null;
@@ -256,9 +258,10 @@ export class MediaIntelligenceService {
     }
   }
 
-  private async generateKeyframes(run: MediaAnalysisRunV1, shots: MediaAnalysisShotV1[], source: string | undefined, signal?: AbortSignal, db: JobQueryExecutor = this.db, execution?: MediaAnalysisExecution): Promise<void> {
+  private async generateKeyframes(run: MediaAnalysisRunV1, shots: MediaAnalysisShotV1[], source: string | undefined, signal?: AbortSignal, db: JobQueryExecutor = this.db, execution?: MediaAnalysisExecution): Promise<Record<string, string>> {
     if (!source) throw Object.assign(new Error('MEDIA_ANALYSIS_SOURCE_PATH_REQUIRED'), { code: 'MEDIA_ANALYSIS_SOURCE_PATH_REQUIRED', retryable: false });
     const root = resolve(this.options.keyframeRoot || join(this.options.storage?.root || 'storage', 'intelligence-keyframes'));
+    const paths: Record<string, string> = {};
     for (const shot of shots) {
       signal?.throwIfAborted();
       const directory = execution ? `${run.id}/${execution.attemptId}` : run.id;
@@ -272,11 +275,13 @@ export class MediaIntelligenceService {
         const ready: MediaAnalysisKeyframeV1 = { ...keyframe, frameHash: createHash('sha256').update(bytes).digest('hex'), status: 'READY' };
         validateMediaAnalysisKeyframeV1(ready);
         await db.query("update media_analysis_keyframes set frame_hash=$2,status='READY',error=null where id=$1", [ready.id, ready.frameHash]);
+        paths[shot.id] = outputPath;
       } catch (error) {
         await db.query("update media_analysis_keyframes set status='FAILED',error=$2 where id=$1", [keyframe.id, errorValue(error)]).catch(() => undefined);
         throw error;
       }
     }
+    return paths;
   }
 
   private async persistEmbedding(run: MediaAnalysisRunV1, contentType: MediaAnalysisEmbeddingV1['contentType'], contentId: string, textSnapshot: string, provider: IntelligenceProviders['embedding'], shotId: string | null | undefined, signal?: AbortSignal, db: JobQueryExecutor = this.db): Promise<void> {

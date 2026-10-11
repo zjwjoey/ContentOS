@@ -30,6 +30,32 @@ async function fixture() {
   return { db, jobs, intelligence, project, assetId, run, jobId, close: async () => { await db.end(); await admin.query(`drop schema "${schema}" cascade`); await admin.end(); } };
 }
 
+test('successful replacement analysis removes obsolete ASR and vision rows and embeddings', async () => {
+  const f = await fixture();
+  try {
+    const partial = createFakeIntelligenceProviders();
+    // Seed results through the real analysis pipeline, then fail after vision persistence.
+    const embed = createFakeIntelligenceProviders().embedding.embed;
+    let calls = 0;
+    partial.embedding.embed = async (input) => { calls += 1; if (calls > 1) throw new Error('retry after derived rows'); return embed(input); };
+    const first = new MediaIntelligenceService(f.db, partial);
+    assert.equal((await new JobRunner(f.jobs, 'partial-analysis').run(f.jobId, createMediaAnalysisJobHandler({ jobs: f.jobs, intelligence: first }))).state, 'RETRY_WAIT');
+    const before = await f.intelligence.results(f.project.id, f.run.id);
+    assert.ok(before.asr.length > 0);
+    assert.ok(before.vision.length > 0);
+    await f.jobs.requeue(f.jobId);
+    const replacementProviders = createFakeIntelligenceProviders();
+    replacementProviders.asr.transcribe = async () => [];
+    replacementProviders.vision.analyze = async () => [];
+    const replacement = new MediaIntelligenceService(f.db, replacementProviders);
+    assert.equal((await new JobRunner(f.jobs, 'replacement-analysis').run(f.jobId, createMediaAnalysisJobHandler({ jobs: f.jobs, intelligence: replacement }))).state, 'SUCCEEDED');
+    const after = await replacement.results(f.project.id, f.run.id);
+    assert.deepEqual(after.asr, []);
+    assert.deepEqual(after.vision, []);
+    assert.equal((await f.db.query("select 1 from media_analysis_embeddings where run_id=$1 and content_type in ('ASR','VISION')", [f.run.id])).rowCount, 0);
+  } finally { await f.close(); }
+});
+
 for (const outcome of ['return', 'throw'] as const) {
   test(`late analysis provider ${outcome} cannot overwrite a replacement attempt`, { timeout: 20_000 }, async () => {
     const f = await fixture();

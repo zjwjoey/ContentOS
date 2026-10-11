@@ -17,6 +17,8 @@
 
 T08生产浏览器发现模板选择时序缺陷：11场景首轮10/11，初始preset GET迟到覆盖手动PUT所选片头。增加选择版本保护；原Auto Edit完整流程加入延迟旧GET的确定性断言，生产构建及focused 1/1通过，不放宽片头/manifest/渲染断言。完整11场景继续复验。
 
+T08分析重试补验：首次attempt在保存ASR/视觉结果后失败，替代attempt返回空数组，旧结果及向量仍出现在SUCCEEDED run（先红）。各stage收到新provider结果后，以现有attempt fence下同一SQL清理旧stage行/向量，替代成功结果不再混入旧片段；不修改其他run或SUCCEEDED缓存。另发现attempt关键帧目录必须传给Qwen视觉adapter，新增内部可选keyframePaths，并由实际生成路径传递，保留离线旧路径回退；adapter Mock先红后绿，无外部API调用。最终Intelligence51/51，无skip，typecheck通过。
+
 T08追加Windows进程身份修复：确定性模拟“owned child已exit但数字PID再次显示alive”，旧实现第二次taskkill（先红2≠1）；修复后不向已exit的owned child旧PID再次kill，原真实进程树关闭和12项host生命周期压测一起16/16通过。生命周期压测对所有已退出child handle做断言，避免将被Windows复用的历史数字PID当成owned进程；保留全部state/lock/restart-budget断言。新回归加入原Runtime gate。
 
 T08历史诊断安全复验：从旧DB error字段读取原始凭证的Job/Analysis回归先红；mapJob/mapRun读取时复用redact，保留数据库原记录、不执行历史数据重写。Job+历史组合22/22通过；Runtime完整24/24、真实host14/14、第二次full301/301已通过。后续新增读取防线仍做最终门禁复验。
