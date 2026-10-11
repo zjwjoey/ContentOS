@@ -172,8 +172,9 @@ test('Job claim rechecks retry_at after waiting for a concurrent state change', 
   try {
     const service = new JobService(db);
     const id = 'job-integration-retry-lock-race';
-    await service.create({ id, type: 'VIDEO_RENDER', projectId: null, payload: {}, idempotencyKey: id, maxAttempts: 3 });
-    const runnable = await service.listRunnable(['VIDEO_RENDER']);
+    const type = 'FV2_RETRY_LOCK_RACE';
+    await service.create({ id, type, projectId: null, payload: {}, idempotencyKey: id, maxAttempts: 3 });
+    const runnable = await service.listRunnable([type]);
     assert.ok(runnable.some((job) => job.id === id));
     await blocker.query('begin');
     transactionOpen = true;
@@ -417,4 +418,20 @@ test('pg-boss is a delivery adapter over the database Job contract', async () =>
     const id = await delivery.send('contentos.integration', { jobId: 'job-integration-delivery' });
     assert.equal(typeof id, 'string');
   } finally { await delivery.stop(); }
+});
+
+test('Job failures and deferred diagnostics redact credentials before persistence', async () => {
+  const db = await setup();
+  try {
+    const jobs = new JobService(db);
+    for (const defer of [false, true]) {
+      const id = `job-integration-redaction-${defer}`;
+      await jobs.create({ id, type: 'MEDIA_ANALYSIS', projectId: null, payload: {}, idempotencyKey: id, maxAttempts: 2 });
+      const result = await new JobRunner(jobs, 'safe-errors').run(id, async () => { throw Object.assign(new Error('provider timeout password=fixture-secret Bearer fixture-bearer'), { defer }); });
+      const attempts = await db.query('select error from job_attempts where job_id=$1', [id]);
+      const output = JSON.stringify({ error: result.error, attempts: attempts.rows });
+      assert.doesNotMatch(output, /fixture-secret|fixture-bearer/);
+      assert.match(output, /provider timeout/); assert.match(output, /REDACTED/);
+    }
+  } finally { await db.end(); }
 });

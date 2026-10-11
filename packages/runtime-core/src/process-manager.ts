@@ -5,6 +5,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import type { RuntimePaths } from './paths.js';
 import { isProcessAlive } from './port.js';
+import { StringDecoder } from 'node:string_decoder';
+import { redactText } from '../../logging/src/index.js';
 
 const exec = promisify(execFile);
 
@@ -22,7 +24,20 @@ export class ProcessManager {
     if (existing) this.processes.delete(id);
     await mkdir(this.paths.logsRoot, { recursive: true }); const logPath = join(this.paths.logsRoot, `${id}.log`); const child = spawn(command, args, { cwd: this.paths.appRoot, env: { ...process.env, ...env }, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
     const managed: ManagedProcess = { id, ...(child.pid ? { pid: child.pid } : {}), child, startedAt: new Date().toISOString() }; this.processes.set(id, managed); this.stdoutBuffers.set(id, '');
-    const write = (chunk: Buffer, level: string) => { void appendFile(logPath, `${new Date().toISOString()} ${level} ${chunk.toString()}`, 'utf8').catch((error) => { try { process.stderr.write(`[runtime-log:${id}] ${error instanceof Error ? error.message : String(error)}\n`); } catch { /* stderr is best effort */ } }); };
+    const logChannels = new Map<string, { decoder: StringDecoder; buffer: string; discarded: boolean }>();
+    const append = (line: string, level: string) => { void appendFile(logPath, `${new Date().toISOString()} ${level} ${redactText(line)}\n`, 'utf8').catch((error) => { try { process.stderr.write(redactText(`[runtime-log:${id}] ${error instanceof Error ? error.message : String(error)}\n`)); } catch { /* stderr is best effort */ } }); };
+    const write = (chunk: Buffer, level: string) => {
+      const channel = logChannels.get(level) || { decoder: new StringDecoder('utf8'), buffer: '', discarded: false };
+      logChannels.set(level, channel);
+      const lines = `${channel.buffer}${channel.decoder.write(chunk)}`.split('\n');
+      channel.buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (channel.discarded) { channel.discarded = false; continue; }
+        append(line.length > 65_536 ? '[PROCESS_LOG_LINE_TRUNCATED]' : line, level);
+      }
+      if (channel.buffer.length > 65_536) { if (!channel.discarded) append('[PROCESS_LOG_LINE_TRUNCATED]', level); channel.buffer = ''; channel.discarded = true; }
+    };
+    child.once('close', () => { for (const [level, channel] of logChannels) { const tail = `${channel.buffer}${channel.decoder.end()}`; if (tail && !channel.discarded) append(tail, level); } });
     child.stdout?.on('data', (chunk: Buffer) => { const text = chunk.toString(); let buffer = `${this.stdoutBuffers.get(id) || ''}${text}`; if (buffer.length > 65_536) buffer = buffer.slice(-65_536); const lines = buffer.split(/\n/u); this.stdoutBuffers.set(id, lines.pop() || ''); for (const line of lines) { try { const payload = JSON.parse(line.trim()) as { status?: unknown }; if (payload.status === 'READY') this.ready.add(id); } catch { /* ordinary worker logs are not readiness messages */ } } write(chunk, 'INFO'); }); child.stderr?.on('data', (chunk: Buffer) => write(chunk, 'ERROR'));
     child.once('exit', () => { this.ready.delete(id); this.stdoutBuffers.delete(id); if (this.processes.get(id)?.child === child) this.processes.delete(id); });
     return managed;

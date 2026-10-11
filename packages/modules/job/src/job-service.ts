@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
+import { redact } from '../../../logging/src/index.js';
 
 export type JobState = 'QUEUED' | 'RUNNING' | 'RETRY_WAIT' | 'FAILED' | 'SUCCEEDED' | 'CANCEL_REQUESTED' | 'CANCELLED' | 'BLOCKED';
 export interface JobRecord { id: string; projectId: string | null; workspaceId: string | null; type: string; state: JobState; payload: unknown; result: unknown; error: unknown; attemptCount: number; maxAttempts: number; leaseOwner: string | null; leaseExpiresAt: Date | null; progress: unknown; }
@@ -240,6 +241,7 @@ export class JobService {
   }
 
   async fail(id: string, attemptId: string, error: unknown, retryable: boolean, action?: (scope: JobAttemptScope) => Promise<void>): Promise<JobRecord> { assertOutsideCancellationCallback();
+    error = redact(error);
     const client = await this.db.connect();
     let scope: ActiveJobAttemptScope | null = null;
     try {
@@ -269,6 +271,7 @@ export class JobService {
   }
 
   async defer(id: string, attemptId: string, error: unknown, retryDelayMs = 1_000): Promise<JobRecord> { assertOutsideCancellationCallback();
+    error = redact(error);
     const client = await this.db.connect();
     try {
       await client.query('begin');

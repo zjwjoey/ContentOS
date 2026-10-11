@@ -50,6 +50,8 @@ import { MediaIntelligenceService, createFakeIntelligenceProviders } from '../..
 import { IntelligentPlanningService } from '../../../packages/modules/intelligence/src/index.js';
 import { registerIntelligentPlanningRoutes } from './intelligent-planning-routes.js';
 import { IntelligentDecisionService } from '../../../packages/modules/intelligence/src/index.js';
+import { randomUUID } from 'node:crypto';
+import { redact } from '../../../packages/logging/src/index.js';
 import { registerIntelligentDecisionRoutes } from './intelligent-decision-routes.js';
 import type { EmbeddingProvider } from '../../../packages/modules/intelligence/src/providers.js';
 
@@ -68,7 +70,18 @@ export interface ApiRuntimeDependencies { db: Pool; storage?: LocalStorageProvid
 export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<FastifyInstance> {
   const db = 'query' in input ? input : input.db;
   const runtime: ApiRuntimeDependencies = 'query' in input ? { db } : input;
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, genReqId: () => randomUUID(), requestIdHeader: false });
+  app.addHook('onRequest', async (request, reply) => { reply.header('x-correlation-id', request.id); });
+  app.addHook('onSend', async (request, reply, payload) => {
+    if (reply.statusCode < 400 || typeof payload !== 'string') return payload;
+    try {
+      const value = JSON.parse(payload) as { error?: unknown };
+      if (!value || typeof value !== 'object' || !value.error) return payload;
+      const error = value.error;
+      value.error = redact(error && typeof error === 'object' && !Array.isArray(error) ? { ...error, correlationId: request.id } : error);
+      return JSON.stringify(value);
+    } catch { return payload; }
+  });
   const storage = runtime.storage || new LocalStorageProvider(process.env.STORAGE_ROOT || 'storage');
   const uploadMaxBytes = runtime.uploadMaxBytes || 500 * 1024 * 1024;
   await app.register(multipart, { limits: { files: 1, fileSize: uploadMaxBytes } });
@@ -212,6 +225,10 @@ export async function buildApi(input: Pool | ApiRuntimeDependencies): Promise<Fa
     if (!targetType.success || !parsed.success || !parsed.data.reason) return reply.code(422).send({ error: { code: 'VALIDATION_ERROR', message: 'A rejection reason is required', details: [...(targetType.success ? [] : targetType.error.issues), ...(parsed.success ? [] : parsed.error.issues)] } });
     return reply.code(410).send({ error: { code: 'REVIEW_LEGACY_READ_ONLY', message: 'Pre-publish decisions must use the Approval Gate', details: [] } });
   });
-  app.setErrorHandler((error, _request, reply) => reply.code(500).send({ error: serializeError(error, 'InfrastructureError', 'api') }));
+  app.setErrorHandler((error, request, reply) => {
+    const candidate = (error as { statusCode?: number }).statusCode;
+    const status = candidate && candidate >= 400 && candidate < 500 ? candidate : 500;
+    return reply.code(status).send({ error: serializeError(error, status < 500 ? 'ValidationError' : 'InfrastructureError', request.id) });
+  });
   return app;
 }

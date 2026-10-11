@@ -28,6 +28,7 @@ import {
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import type { IntelligenceProviders } from './providers.js';
 import { JobService, type JobQueryExecutor, type JobRecord } from '../../job/src/index.js';
+import { redactText } from '../../../logging/src/index.js';
 import type { JobCancellationScope } from '../../job/src/index.js';
 
 export const MEDIA_ANALYSIS = 'MEDIA_ANALYSIS' as const;
@@ -55,7 +56,7 @@ function mapRun(row: Record<string, unknown>): MediaAnalysisRunV1 {
 
 function capability(input: MediaAnalysisCapability[], name: MediaAnalysisCapability): boolean { return input.includes(name); }
 function safeMetadata(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
-function errorValue(error: unknown): { code: string; message: string } { const candidate = error as { code?: unknown }; return { code: typeof candidate?.code === 'string' ? candidate.code : 'MEDIA_ANALYSIS_FAILED', message: error instanceof Error ? error.message : 'Media analysis failed' }; }
+function errorValue(error: unknown): { code: string; message: string } { const candidate = error as { code?: unknown }; return { code: typeof candidate?.code === 'string' ? redactText(candidate.code) : 'MEDIA_ANALYSIS_FAILED', message: error instanceof Error ? redactText(error.message) : 'Media analysis failed' }; }
 function jsonArray(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
 function containedPath(root: string, relativePath: string): string {
   const absoluteRoot = resolve(root);
