@@ -278,7 +278,8 @@ test('requeue wins first: real queued row locks make terminal fence reject witho
     const backend = await blocker.query<{ pid: number }>('select pg_backend_pid() as pid');
     await blocker.query('select id from jobs where id=$1 for update', [f.jobId]);
     requeue = f.jobs.requeueTerminal(f.jobId);
-    const requeuePid = await waitBlocked(f.db, backend.rows[0]!.pid, "update jobs set state = 'QUEUED'");
+    // Explicit retry now locks before resetting its durable streak and recording the event.
+    const requeuePid = await waitBlocked(f.db, backend.rows[0]!.pid, 'select * from jobs where id=$1 for update');
     fence = f.jobs.withCancelledJobFence(f.jobId, expected(f), async (scope) => { calls += 1; return cancelOwnedRun(f, scope); });
     await waitBlocked(f.db, requeuePid, 'select id, type, project_id, state, attempt_count from jobs');
     await blocker.query('commit'); transactionOpen = false;
@@ -312,7 +313,7 @@ test('fence wins first: observed requeue row lock waits until owner commit befor
     });
     const pid = await entered;
     requeue = f.jobs.requeueTerminal(f.jobId);
-    await waitBlocked(f.db, pid, "update jobs set state = 'QUEUED'");
+    await waitBlocked(f.db, pid, 'select * from jobs where id=$1 for update');
     releaseOwner();
     assert.deepEqual(await fence, { executed: true, value: true });
     assert.equal((await requeue).state, 'QUEUED');
