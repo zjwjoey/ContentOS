@@ -27,7 +27,7 @@ import {
 } from '../../../contracts/src/index.js';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import type { IntelligenceProviders } from './providers.js';
-import { JobService, type JobQueryExecutor, type JobRecord } from '../../job/src/index.js';
+import { JobService, type JobQueryExecutor, type JobRecord, type JobLeaseRecoveryContext } from '../../job/src/index.js';
 import { redact, redactText } from '../../../logging/src/index.js';
 import type { JobCancellationScope } from '../../job/src/index.js';
 
@@ -139,6 +139,16 @@ export class MediaIntelligenceService {
   async markLeaseCancelledWithExecutor(scope: JobQueryExecutor, job: JobRecord): Promise<boolean> {
     if (job.type !== MEDIA_ANALYSIS || !job.projectId) return false;
     await scope.query("update media_analysis_runs set status='CANCELLED',error=$3,finished_at=coalesce(finished_at,now()) where job_id=$1 and project_id=$2 and status in ('QUEUED','RUNNING')", [job.id, job.projectId, { code: 'MEDIA_ANALYSIS_LEASE_CANCELLED', message: 'Media analysis lease expired after cancellation request' }]);
+    return true;
+  }
+
+  async recoverLeaseWithExecutor(scope: JobQueryExecutor, job: JobRecord, context: JobLeaseRecoveryContext): Promise<boolean> {
+    const payload = job.payload as { projectId?: unknown; runId?: unknown; assetId?: unknown } | null;
+    if (job.type !== MEDIA_ANALYSIS || !job.projectId || !payload || payload.projectId !== job.projectId || typeof payload.runId !== 'string' || typeof payload.assetId !== 'string') return false;
+    const selected = await scope.query<{ status: string }>('select status from media_analysis_runs where id=$1 and job_id=$2 and project_id=$3 and asset_id=$4 for update', [payload.runId, job.id, job.projectId, payload.assetId]);
+    const run = selected.rows[0];
+    if (!run || ['SUCCEEDED', 'STALE', 'CANCELLED'].includes(run.status)) return false;
+    await scope.query("update media_analysis_runs set status=$5,error=$6,finished_at=case when $5='FAILED' then coalesce(finished_at,now()) else null end where id=$1 and job_id=$2 and project_id=$3 and asset_id=$4", [payload.runId, job.id, job.projectId, payload.assetId, context.outcome === 'FAILED' ? 'FAILED' : 'QUEUED', context.error]);
     return true;
   }
 

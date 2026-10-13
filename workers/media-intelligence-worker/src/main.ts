@@ -34,7 +34,7 @@ export class MediaIntelligenceWorkerRuntime extends WorkerRuntime {
     await this.dependencies.jobs.reconcileExpiredLeases(new Date(), async (job: JobRecord, scope) => {
       if (job.type !== MEDIA_ANALYSIS) return false;
       return this.dependencies.intelligence.markLeaseCancelledWithExecutor(scope, job);
-    });
+    }, { types: [MEDIA_ANALYSIS], recover: (job, scope, context) => this.dependencies.intelligence.recoverLeaseWithExecutor(scope, job, context) });
     await this.dependencies.intelligence.reconcileStaleRuns();
     await this.reconcileQueuedCancellations();
   }

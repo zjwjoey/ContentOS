@@ -470,7 +470,7 @@ export class JobService {
         const recoveryScope = new ActiveJobLeaseRecoveryScope(mapJob(row), active.id, Number(active.attempt_number), client);
         scope = recoveryScope;
         const context: { failure?: Error } = {};
-        handled = await cancellationCallback.run(context, () => options.recover!(mapJob(row), recoveryScope, { outcome: exhausted ? 'FAILED' : 'RETRY_WAIT', consecutiveFailures, limit: MAX_CONSECUTIVE_LEASE_FAILURES, error }));
+        handled = (await cancellationCallback.run(context, () => options.recover!(mapJob(row), recoveryScope, { outcome: exhausted ? 'FAILED' : 'RETRY_WAIT', consecutiveFailures, limit: MAX_CONSECUTIVE_LEASE_FAILURES, error }))) === true;
         if (context.failure) throw context.failure;
         await recoveryScope.finish();
         if (!handled) await client.query('rollback to savepoint lease_owner_recovery');

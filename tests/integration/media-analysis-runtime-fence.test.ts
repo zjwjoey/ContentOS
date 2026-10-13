@@ -30,6 +30,41 @@ async function fixture() {
   return { db, jobs, intelligence, project, assetId, run, jobId, close: async () => { await db.end(); await admin.query(`drop schema "${schema}" cascade`); await admin.end(); } };
 }
 
+test('analysis crash exhaustion closes its owner atomically and stale completion cannot reopen it', async () => {
+  const f = await fixture();
+  try {
+    let oldAttempt = '';
+    for (let loss = 1; loss <= 3; loss += 1) {
+      const active = await f.jobs.claim(f.jobId, 'crash-analysis', 30_000); assert.ok(active); oldAttempt = active.attemptId;
+      await f.db.query("update media_analysis_runs set status='RUNNING' where id=$1", [f.run.id]);
+      await f.db.query("update jobs set lease_expires_at=now()-interval '1 second' where id=$1", [f.jobId]);
+      assert.equal(await f.jobs.reconcileExpiredLeases(new Date(), undefined, { types: ['MEDIA_ANALYSIS'], recover: (job, scope, context) => f.intelligence.recoverLeaseWithExecutor(scope, job, context) }), 1);
+      assert.equal((await f.jobs.get(f.jobId))?.state, loss < 3 ? 'RETRY_WAIT' : 'FAILED');
+      assert.equal((await f.intelligence.getRun(f.project.id, f.run.id))?.status, loss < 3 ? 'QUEUED' : 'FAILED');
+    }
+    assert.equal((await f.jobs.succeedWithCurrentAttempt(f.jobId, oldAttempt, async (scope) => { await scope.query("update media_analysis_runs set status='SUCCEEDED' where id=$1", [f.run.id]); return { late: true }; })).executed, false);
+    assert.equal((await f.intelligence.getRun(f.project.id, f.run.id))?.status, 'FAILED');
+    assert.equal(await f.jobs.claim(f.jobId, 'fourth-analysis', 30_000), null);
+  } finally { await f.close(); }
+});
+
+test('analysis recovery veto rolls back Job and owner together and preserves completed output', async () => {
+  const f = await fixture();
+  try {
+    await f.jobs.claim(f.jobId, 'crash-analysis', 30_000);
+    await f.db.query("update jobs set lease_expires_at=now()-interval '1 second' where id=$1", [f.jobId]);
+    await f.db.query("update media_analysis_runs set status='RUNNING' where id=$1", [f.run.id]);
+    assert.equal(await f.jobs.reconcileExpiredLeases(new Date(), undefined, { types: ['MEDIA_ANALYSIS'], recover: async (job, scope, context) => { await f.intelligence.recoverLeaseWithExecutor(scope, job, context); throw new Error('fixture failure after owner write'); } }), 0);
+    assert.equal((await f.jobs.get(f.jobId))?.state, 'RUNNING');
+    assert.equal((await f.intelligence.getRun(f.project.id, f.run.id))?.status, 'RUNNING');
+    await f.db.query("update jobs set consecutive_lease_failures=2 where id=$1", [f.jobId]);
+    await f.db.query("update media_analysis_runs set status='SUCCEEDED' where id=$1", [f.run.id]);
+    assert.equal(await f.jobs.reconcileExpiredLeases(new Date(), undefined, { types: ['MEDIA_ANALYSIS'], recover: (job, scope, context) => f.intelligence.recoverLeaseWithExecutor(scope, job, context) }), 1);
+    assert.equal((await f.jobs.get(f.jobId))?.state, 'BLOCKED');
+    assert.equal((await f.intelligence.getRun(f.project.id, f.run.id))?.status, 'SUCCEEDED');
+  } finally { await f.close(); }
+});
+
 test('successful replacement analysis removes obsolete ASR and vision rows and embeddings', async () => {
   const f = await fixture();
   try {

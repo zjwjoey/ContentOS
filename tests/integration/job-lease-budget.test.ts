@@ -163,6 +163,18 @@ test('lease recovery scope rejects control, nested Job APIs, unawaited queries a
   } finally { await f.close(); }
 });
 
+test('owner recovery requires literal true and rolls back a truthy malformed confirmation', async () => {
+  const f = await fixture();
+  try {
+    const id = await f.create();
+    for (let loss = 0; loss < 2; loss += 1) { await f.jobs.claim(id, 'crash', 30_000); await f.expire(id); await f.recover(); }
+    await f.jobs.claim(id, 'third-crash', 30_000); await f.expire(id);
+    assert.equal(await f.recover(f.jobs, async (job, scope, context) => { await f.owner(job, scope, context); return { handled: true } as unknown as boolean; }), 1);
+    assert.equal((await f.jobs.get(id))?.state, 'BLOCKED');
+    assert.equal((await f.db.query('select state from lease_owner_fixture where job_id=$1', [id])).rows[0].state, 'RETRY_WAIT');
+  } finally { await f.close(); }
+});
+
 test('throwing recovery closes its captured scope before rollback can permit autocommit writes', async () => {
   const f = await fixture();
   try {
