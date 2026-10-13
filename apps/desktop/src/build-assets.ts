@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { preparePostgresUtf8Manifests } from './postgres-utf8-manifest.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -59,6 +60,7 @@ async function stageWindowsResources(): Promise<void> {
   await rm(ffmpegTargetRoot, { recursive: true, force: true });
   await mkdir(resourcesRoot, { recursive: true });
   await cp(postgresSource, postgresTarget, { recursive: true });
+  await preparePostgresUtf8Manifests(postgresTarget);
   await mkdir(ffmpegTargetRoot, { recursive: true });
   await copyFile(ffmpegSource, resolve(ffmpegTargetRoot, 'ffmpeg.exe'));
   await copyFile(ffprobeSource, resolve(ffmpegTargetRoot, 'ffprobe.exe'));

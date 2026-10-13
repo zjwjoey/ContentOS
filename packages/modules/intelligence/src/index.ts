@@ -1,5 +1,5 @@
-export { MediaIntelligenceService, MEDIA_ANALYSIS } from './media-intelligence-service.js';
-export type { CreateMediaAnalysisInput, MediaIntelligenceServiceOptions } from './media-intelligence-service.js';
+export { MediaIntelligenceService, MEDIA_ANALYSIS, parseAnalysisHistoryCursor } from './media-intelligence-service.js';
+export type { CreateMediaAnalysisInput, MediaAnalysisExecution, MediaIntelligenceServiceOptions } from './media-intelligence-service.js';
 export { FakeAsrProvider, FakeEmbeddingProvider, FakeTechnicalMediaProvider, FakeVisionProvider, FakeShotDetectionProvider, FfprobeTechnicalMediaProvider, FfmpegShotDetectionProvider, createFakeIntelligenceProviders, createIntelligenceProviders } from './providers.js';
 export type { AsrProvider, EmbeddingProvider, IntelligenceProviderConfig, IntelligenceProviders, ShotDetectionProvider, TechnicalMediaProvider, VisionProvider } from './providers.js';
 export { evaluateIntelligentManifest, planIntelligentEdit } from './intelligent-planner.js';

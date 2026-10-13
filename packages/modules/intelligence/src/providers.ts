@@ -15,7 +15,7 @@ export interface AsrProvider {
   transcribe(input: { assetId: string; runId: string; durationMs: number; metadata: Record<string, unknown>; signal?: AbortSignal }): Promise<Array<Omit<MediaAnalysisAsrSegmentV1, 'id' | 'runId' | 'assetId'>>>;
 }
 export interface VisionProvider {
-  analyze(input: { assetId: string; runId: string; shots: MediaAnalysisShotV1[]; metadata: Record<string, unknown>; signal?: AbortSignal }): Promise<Array<Omit<MediaAnalysisVisionResultV1, 'id' | 'runId' | 'assetId'>>>;
+  analyze(input: { assetId: string; runId: string; shots: MediaAnalysisShotV1[]; metadata: Record<string, unknown>; keyframePaths?: Readonly<Record<string, string>>; signal?: AbortSignal }): Promise<Array<Omit<MediaAnalysisVisionResultV1, 'id' | 'runId' | 'assetId'>>>;
 }
 export interface EmbeddingProvider {
   embed(input: { text: string; modelVersion: string; signal?: AbortSignal }): Promise<{ vector: number[]; provider: string; modelVersion: string }>;
@@ -86,11 +86,11 @@ class UnconfiguredRealVisionProvider implements VisionProvider {
 class QwenShotVisionProvider implements VisionProvider {
   private readonly provider = new QwenVisualAnalysisProvider();
   constructor(private readonly keyframeRoot: string) {}
-  async analyze(input: { assetId: string; runId: string; shots: MediaAnalysisShotV1[]; metadata: Record<string, unknown>; signal?: AbortSignal }): Promise<Array<Omit<MediaAnalysisVisionResultV1, 'id' | 'runId' | 'assetId'>>> {
+  async analyze(input: { assetId: string; runId: string; shots: MediaAnalysisShotV1[]; metadata: Record<string, unknown>; keyframePaths?: Readonly<Record<string, string>>; signal?: AbortSignal }): Promise<Array<Omit<MediaAnalysisVisionResultV1, 'id' | 'runId' | 'assetId'>>> {
     const results: Array<Omit<MediaAnalysisVisionResultV1, 'id' | 'runId' | 'assetId'>> = [];
     for (const shot of input.shots) {
       input.signal?.throwIfAborted();
-      const framePath = join(resolve(this.keyframeRoot), input.runId, `${shot.id}.jpg`);
+      const framePath = input.keyframePaths?.[shot.id] || join(resolve(this.keyframeRoot), input.runId, `${shot.id}.jpg`);
       const profile = await this.provider.analyzeAssetFrames({ assetId: `${input.assetId}:${shot.id}`, framePaths: [framePath], frameTimestampsMs: [Math.floor((shot.sourceInMs + shot.sourceOutMs) / 2)], ...(input.signal ? { signal: input.signal } : {}) });
       results.push({ shotId: shot.id, summary: profile.summary, tags: profile.tags.map((tag) => ({ tag: tag.tag, confidence: tag.confidence, evidenceTimestampsMs: tag.timestampsMs })), objects: profile.tags.map((tag) => tag.tag), actions: [], location: null, shotType: 'unknown', cameraMotion: 'unknown', peopleCount: null, qualitySignals: {}, provider: profile.modelProvider, modelVersion: profile.modelVersion, promptVersion: profile.promptVersion });
     }

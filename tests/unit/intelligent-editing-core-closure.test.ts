@@ -5,7 +5,18 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { concatDraftPreviewFragments, generateFixtureVideo, probeMedia } from '../../packages/infrastructure/ffmpeg/src/index.js';
 import { FfmpegShotDetectionProvider, FfprobeTechnicalMediaProvider, createIntelligenceProviders } from '../../packages/modules/intelligence/src/index.js';
-import { cosineSimilarity, hybridSemanticScore, semanticTokens } from '../../packages/modules/video/src/index.js';
+import { cosineSimilarity, hybridSemanticScore, semanticTokens, QwenVisualAnalysisProvider } from '../../packages/modules/video/src/index.js';
+
+test('real vision adapter uses the current attempt keyframe path', async (t) => {
+  const expected = join(tmpdir(), 'analysis-attempt', 'frame.jpg');
+  t.mock.method(QwenVisualAnalysisProvider.prototype, 'analyzeAssetFrames', async (input: { framePaths: string[] }) => {
+    assert.deepEqual(input.framePaths, [expected]);
+    throw new Error('verified path without an external API call');
+  });
+  const providers = createIntelligenceProviders({ realProvidersEnabled: true, visionProvider: 'qwen', keyframeRoot: tmpdir() });
+  const input = { assetId: 'asset', runId: 'run', shots: [{ id: 'shot', runId: 'run', assetId: 'asset', shotIndex: 0, sourceInMs: 0, sourceOutMs: 1000, confidence: 1, detectionVersion: 'test' }], metadata: {}, keyframePaths: { shot: expected } };
+  await assert.rejects(providers.vision.analyze(input), /verified path without an external API call/);
+});
 
 test('real FFmpeg scene detector finds boundaries in a red/blue/green fixture', async () => {
   const root = await mkdtemp(join(tmpdir(), 'contentos-shot-detection-v15-')); const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg'; const ffprobePath = process.env.FFPROBE_PATH || 'ffprobe';

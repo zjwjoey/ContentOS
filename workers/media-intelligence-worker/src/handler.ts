@@ -11,11 +11,11 @@ function payloadOf(job: JobRecord): MediaAnalysisJobPayload {
 }
 
 export function createMediaAnalysisJobHandler(deps: MediaIntelligenceWorkerDependencies): (job: JobRecord, attemptId: string, signal: AbortSignal) => Promise<unknown> {
-  return async (job, _attemptId, signal) => {
+  return async (job, attemptId, signal) => {
     if (job.type !== MEDIA_ANALYSIS) throw Object.assign(new Error(`Unexpected Media Analysis Job type: ${job.type}`), { code: 'MEDIA_ANALYSIS_JOB_TYPE_INVALID', retryable: false });
     const payload = payloadOf(job);
     signal.throwIfAborted();
-    const run = await deps.intelligence.analyzeRun(payload.runId, signal);
+    const run = await deps.intelligence.analyzeRun(payload.runId, signal, { jobs: deps.jobs, job, attemptId });
     return { runId: run.id, assetId: run.assetId, status: run.status, schemaVersion: 'MEDIA_ANALYSIS_RESULT_V1' };
   };
 }

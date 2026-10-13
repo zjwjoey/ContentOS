@@ -4,7 +4,7 @@ import type { LocalStorageProvider } from '../../../infrastructure/storage/src/i
 import { assembleBrandedTimeline, buildRandomSentenceMontageManifest, buildScriptMontageManifest, type PlannerAsset, type ResolvedVisualAssignment, type TimedScriptSentence } from './planner.js';
 import { segmentScriptSentences } from './sentence-segmenter.js';
 import { cleanAndSegmentScriptV1 } from './script-cleaner.js';
-import type { PresentationSettingsV1 } from '../../../contracts/src/index.js';
+import type { EditManifestV0, PresentationSettingsV1 } from '../../../contracts/src/index.js';
 import type { VideoAdjustmentService } from './quick-edit-service.js';
 import type { VideoEditPreset, VideoEditPresetService } from './preset-service.js';
 import type { VideoService } from './video-service.js';
@@ -86,6 +86,17 @@ export async function prepareEditingWorkbenchItem(
   dependencies: EditingWorkbenchPreparationDependencies,
   input: EditingWorkbenchPreparationInput,
 ): Promise<EditingWorkbenchPreparationResult> {
+  const planned = await planEditingWorkbenchItem(dependencies, input);
+  const manifest = await dependencies.quickEdit.createPlannedManifest({ workspaceId: input.workspaceId, manifest: planned.manifest, createdBy: 'operator' });
+  const job = await dependencies.video.createManifestRenderJobForWorkspace(input.workspaceId, manifest.id, input.renderIdempotencySuffix);
+  return { ...(planned.voiceAssetId ? { voiceAssetId: planned.voiceAssetId } : {}), manifestId: manifest.id, renderJobId: job.id, renderJobState: job.state };
+}
+
+/** Resolve provider inputs before entering the short durable publication transaction. */
+export async function planEditingWorkbenchItem(
+  dependencies: EditingWorkbenchPreparationDependencies,
+  input: EditingWorkbenchPreparationInput,
+): Promise<{ manifest: EditManifestV0; voiceAssetId?: string }> {
   const preset: VideoEditPreset | null = input.templateId
     ? await dependencies.presets?.get(input.templateId) || null
     : await dependencies.presets?.getDefault() || null;
@@ -121,7 +132,5 @@ export async function prepareEditingWorkbenchItem(
     };
     planned.manifest = assembleBrandedTimeline(planned.manifest, branding);
   }
-  const manifest = await dependencies.quickEdit.createPlannedManifest({ workspaceId: input.workspaceId, manifest: planned.manifest, createdBy: 'operator' });
-  const job = await dependencies.video.createManifestRenderJobForWorkspace(input.workspaceId, manifest.id, input.renderIdempotencySuffix);
-  return { ...(voiceAssetId ? { voiceAssetId } : {}), manifestId: manifest.id, renderJobId: job.id, renderJobState: job.state };
+  return { ...(voiceAssetId ? { voiceAssetId } : {}), manifest: planned.manifest };
 }

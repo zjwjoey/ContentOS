@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -32,7 +32,8 @@ test('local media scan resolves source_path from scan files and persists a real 
     assert.ok(thumbnail);
     await access(thumbnail.path);
     const row = (await db.query<{ source_path: string; thumbnail_status: string; thumbnail_error: string | null }>('select f.source_path,i.thumbnail_status,i.thumbnail_error from local_media_index i join local_media_scan_files f on f.file_id=i.file_id where i.file_id=$1', [fileId])).rows[0];
-    assert.equal(row?.source_path, videoPath);
+    assert.ok(row);
+    assert.equal(await realpath(row.source_path), await realpath(videoPath));
     assert.equal(row?.thumbnail_status, 'READY');
     assert.equal(row?.thumbnail_error, null);
   } finally {

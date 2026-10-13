@@ -147,7 +147,16 @@ export class HybridMediaService {
   }
   private async importExternal(workspaceId: string, result: ExternalVideoResult, signal: AbortSignal | undefined): Promise<PlannerAsset> {
     const file = pickPexelsFile(result); const stableProvenance = { provider: result.provider, providerAssetId: result.assetId, providerFileId: file.id, providerPageUrl: result.pageUrl || null, creatorName: result.creator || null, creatorUrl: result.creatorUrl || null, originalWidth: file.width || result.width, originalHeight: file.height || result.height, durationMs: result.durationMs || file.durationMs, downloadedAt: new Date().toISOString() };
-    if (this.db) { const row = (await this.db.query('select e.asset_id,a.storage_key,a.metadata from external_media_assets e join assets a on a.id=e.asset_id where e.provider=$1 and e.provider_asset_id=$2 and e.provider_file_id=$3 and a.lifecycle=\'READY\'', [result.provider, result.assetId, file.id])).rows[0] as { asset_id: string; storage_key: string; metadata?: Record<string, unknown> } | undefined; if (row && await this.storage.exists(String(row.storage_key))) { const previousMetadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : {}; const metadata = { ...previousMetadata, durationMs: Number(previousMetadata.durationMs || stableProvenance.durationMs), width: Number(previousMetadata.width || stableProvenance.originalWidth), height: Number(previousMetadata.height || stableProvenance.originalHeight), external: { ...(previousMetadata.external && typeof previousMetadata.external === 'object' ? previousMetadata.external : {}), ...stableProvenance } }; await this.db.query('update assets set metadata=$2 where id=$1', [row.asset_id, metadata]); await this.db.query('insert into video_workspace_assets(workspace_id,asset_id,role) values($1,$2,\'SOURCE\') on conflict do nothing', [workspaceId, row.asset_id]); return { id: row.asset_id, storageKey: String(row.storage_key), sourcePath: this.storage.objectPath(String(row.storage_key)), durationMs: result.durationMs || file.durationMs, metadata }; } }
+    if (this.db) {
+      const row = (await this.db.query('select e.asset_id,a.storage_key,a.metadata from external_media_assets e join assets a on a.id=e.asset_id where e.provider=$1 and e.provider_asset_id=$2 and e.provider_file_id=$3 and a.lifecycle=\'READY\'', [result.provider, result.assetId, file.id])).rows[0] as { asset_id: string; storage_key: string; metadata?: Record<string, unknown> } | undefined;
+      if (row && await this.storage.exists(String(row.storage_key))) {
+        // Reuse the canonical Asset as imported. Association is Video-owned;
+        // another retrieval must not rewrite Asset metadata or download provenance.
+        const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+        await this.db.query('insert into video_workspace_assets(workspace_id,asset_id,role) values($1,$2,\'SOURCE\') on conflict do nothing', [workspaceId, row.asset_id]);
+        return { id: row.asset_id, storageKey: String(row.storage_key), sourcePath: this.storage.objectPath(String(row.storage_key)), durationMs: Number(metadata.durationMs || result.durationMs || file.durationMs), metadata };
+      }
+    }
     const temp = join(this.storage.root, 'staging', `hybrid-${hash(`${workspaceId}:${result.provider}:${result.assetId}:${file.id}`)}${extname(file.url) || '.mp4'}`);
     try {
       await this.provider!.download(result, temp, signal);

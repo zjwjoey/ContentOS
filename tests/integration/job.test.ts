@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import pg from 'pg';
 import { createDatabase, migrateUp } from '../../packages/database/src/index.js';
 import { JobService, JobRunner } from '../../packages/modules/job/src/index.js';
 import { PgBossDelivery } from '../../packages/infrastructure/queue/src/index.js';
@@ -76,6 +77,136 @@ test('deferred external work is rescheduled without consuming the terminal retry
     assert.equal(completed.state, 'SUCCEEDED'); assert.equal(completed.attemptCount, 2);
     assert.equal((await db.query("select 1 from job_events where job_id = 'job-integration-deferred' and event_type = 'job.deferred'")).rowCount, 1);
   } finally { await db.end(); }
+});
+
+test('Job claim refuses future retry_at without creating another attempt', async () => {
+  const db = await setup();
+  try {
+    const service = new JobService(db);
+    const id = 'job-integration-retry-not-due';
+    await service.create({ id, type: 'VIDEO_RENDER', projectId: null, payload: {}, idempotencyKey: id, maxAttempts: 3 });
+    const first = await service.claim(id, 'worker-first', 30_000);
+    assert.ok(first);
+    await service.defer(id, first.attemptId, { code: 'EXTERNAL_TASK_PENDING' }, 60_000);
+    const eventsBefore = await db.query('select count(*)::int as count from job_events where job_id = $1', [id]);
+
+    assert.equal(await service.claim(id, 'worker-too-early', 30_000), null);
+    const current = await service.get(id);
+    assert.equal(current?.state, 'RETRY_WAIT');
+    assert.equal(current?.attemptCount, 1);
+    assert.equal((await service.attempts(id)).length, 1);
+    const eventsAfter = await db.query('select count(*)::int as count from job_events where job_id = $1', [id]);
+    assert.deepEqual(eventsAfter.rows, eventsBefore.rows);
+  } finally { await db.end(); }
+});
+
+test('Job claim accepts due and null retry_at without changing defer attempt policy', async () => {
+  const db = await setup();
+  try {
+    const service = new JobService(db);
+    for (const ready of ['due', 'null'] as const) {
+      const id = `job-integration-retry-ready-${ready}`;
+      await service.create({ id, type: 'AVATAR_LIPSYNC_GENERATE', projectId: null, payload: {}, idempotencyKey: id, maxAttempts: 1 });
+      const first = await service.claim(id, 'worker-first', 30_000);
+      assert.ok(first);
+      await service.defer(id, first.attemptId, { code: 'EXTERNAL_TASK_PENDING' }, 60_000);
+      await db.query("update jobs set retry_at = case when $2 = 'due' then now() - interval '1 second' else null end where id = $1", [id, ready]);
+
+      const next = await service.claim(id, 'worker-ready', 30_000);
+      assert.ok(next);
+      assert.equal(next.job.attemptCount, 2);
+      assert.equal(next.job.state, 'RUNNING');
+      assert.equal((await service.attempts(id)).length, 2);
+    }
+  } finally { await db.end(); }
+});
+
+for (const timestampType of ['Date', 'string'] as const) {
+  test(`Job claim preserves subsecond retry_at returned as ${timestampType}`, async (context) => {
+    const db = await setup();
+    const queryDb = timestampType === 'Date' ? db : new pg.Pool({
+      connectionString: databaseUrl,
+      types: { getTypeParser: (oid, format) => oid === 1184 && format !== 'binary' ? (value: string) => value : pg.types.getTypeParser(oid, format) },
+    });
+    try {
+      const service = new JobService(queryDb);
+      const id = `job-integration-retry-subsecond-${timestampType}`;
+      const secondStart = Math.floor(Date.now() / 1_000) * 1_000 + 60_000;
+      let applicationNow = secondStart + 500;
+      context.mock.method(Date, 'now', () => applicationNow);
+      await service.create({ id, type: 'AVATAR_LIPSYNC_GENERATE', projectId: null, payload: {}, idempotencyKey: id, maxAttempts: 1 });
+      const first = await service.claim(id, 'worker-first', 30_000);
+      assert.ok(first);
+      await service.defer(id, first.attemptId, { code: 'EXTERNAL_TASK_PENDING' }, 60_000);
+      await queryDb.query('update jobs set retry_at = $2 where id = $1', [id, new Date(secondStart + 900)]);
+      const stored = await queryDb.query<{ retry_at: Date | string }>('select retry_at from jobs where id = $1', [id]);
+      const retryAt = stored.rows[0]!.retry_at;
+      assert.equal(retryAt instanceof Date ? 'Date' : typeof retryAt, timestampType);
+      assert.equal(retryAt instanceof Date ? retryAt.getTime() : Date.parse(retryAt), secondStart + 900);
+      const eventsBefore = await queryDb.query('select count(*)::int as count from job_events where job_id = $1', [id]);
+
+      assert.equal(await service.claim(id, 'worker-400ms-early', 30_000), null);
+      assert.equal((await service.get(id))?.state, 'RETRY_WAIT');
+      assert.equal((await service.get(id))?.attemptCount, 1);
+      assert.equal((await service.attempts(id)).length, 1);
+      const eventsAfter = await queryDb.query('select count(*)::int as count from job_events where job_id = $1', [id]);
+      assert.deepEqual(eventsAfter.rows, eventsBefore.rows);
+
+      applicationNow = secondStart + 900;
+      const due = await service.claim(id, 'worker-at-deadline', 30_000);
+      assert.ok(due);
+      assert.equal(due.job.attemptCount, 2);
+      assert.equal(due.job.state, 'RUNNING');
+    } finally {
+      if (queryDb !== db) await queryDb.end();
+      await db.end();
+    }
+  });
+}
+
+test('Job claim rechecks retry_at after waiting for a concurrent state change', async () => {
+  const db = await setup();
+  const blocker = await db.connect();
+  let transactionOpen = false;
+  let pendingClaim: ReturnType<JobService['claim']> | undefined;
+  try {
+    const service = new JobService(db);
+    const id = 'job-integration-retry-lock-race';
+    const type = 'FV2_RETRY_LOCK_RACE';
+    await service.create({ id, type, projectId: null, payload: {}, idempotencyKey: id, maxAttempts: 3 });
+    const runnable = await service.listRunnable([type]);
+    assert.ok(runnable.some((job) => job.id === id));
+    await blocker.query('begin');
+    transactionOpen = true;
+    const backend = await blocker.query<{ pid: number }>('select pg_backend_pid() as pid');
+    const claimSql = 'select * from jobs where id = $1 for update';
+    await blocker.query(claimSql, [id]);
+    pendingClaim = service.claim(id, 'worker-stale-runnable', 30_000);
+
+    let waitingOnLock = false;
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const waiting = await db.query<{ waiting: boolean }>('select exists(select 1 from pg_stat_activity where $1::integer = any(pg_blocking_pids(pid)) and query = $2) as waiting', [backend.rows[0]!.pid, claimSql]);
+      if (waiting.rows[0]?.waiting) { waitingOnLock = true; break; }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(waitingOnLock, true, 'claim must be blocked on the real PostgreSQL row lock');
+    await blocker.query("update jobs set state = 'RETRY_WAIT', retry_at = now() + interval '1 minute' where id = $1", [id]);
+    await blocker.query('commit');
+    transactionOpen = false;
+
+    assert.equal(await pendingClaim, null);
+    assert.equal((await service.get(id))?.state, 'RETRY_WAIT');
+    assert.equal((await service.get(id))?.attemptCount, 0);
+    assert.deepEqual(await service.attempts(id), []);
+    const events = await db.query('select count(*)::int as count from job_events where job_id = $1', [id]);
+    assert.equal(events.rows[0]?.count, 0);
+  } finally {
+    if (transactionOpen) await blocker.query('rollback');
+    if (pendingClaim) await pendingClaim.catch(() => undefined);
+    blocker.release();
+    await db.end();
+  }
 });
 
 test('cooperative cancellation is durable and lease reconciliation recovers crashed work', async () => {
@@ -287,4 +418,22 @@ test('pg-boss is a delivery adapter over the database Job contract', async () =>
     const id = await delivery.send('contentos.integration', { jobId: 'job-integration-delivery' });
     assert.equal(typeof id, 'string');
   } finally { await delivery.stop(); }
+});
+
+test('Job failures and deferred diagnostics redact credentials before persistence', async () => {
+  const db = await setup();
+  try {
+    const jobs = new JobService(db);
+    for (const defer of [false, true]) {
+      const id = `job-integration-redaction-${defer}`;
+      await jobs.create({ id, type: 'MEDIA_ANALYSIS', projectId: null, payload: {}, idempotencyKey: id, maxAttempts: 2 });
+      const result = await new JobRunner(jobs, 'safe-errors').run(id, async () => { throw Object.assign(new Error('provider timeout password=fixture-secret Bearer fixture-bearer'), { defer }); });
+      const attempts = await db.query('select error from job_attempts where job_id=$1', [id]);
+      const output = JSON.stringify({ error: result.error, attempts: attempts.rows });
+      assert.doesNotMatch(output, /fixture-secret|fixture-bearer/);
+      assert.match(output, /provider timeout/); assert.match(output, /REDACTED/);
+      await db.query('update jobs set error=$2 where id=$1', [id, { message: 'password=legacy-job-fixture' }]);
+      assert.doesNotMatch(JSON.stringify((await jobs.get(id))?.error), /legacy-job-fixture/);
+    }
+  } finally { await db.end(); }
 });

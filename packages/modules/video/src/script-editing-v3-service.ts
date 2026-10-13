@@ -3,6 +3,8 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import type { Pool } from 'pg';
+import type { JobAttemptScope, JobQueryExecutor, JobRecord } from '../../job/src/index.js';
+import { redact } from '../../../logging/src/index.js';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import { probeMedia } from '../../../infrastructure/ffmpeg/src/index.js';
 import { DEFAULT_PRESENTATION_SETTINGS_V1, normalizeControlledVisualTagsV3, normalizePresentationSettings, SCRIPT_EDITING_V3_SCORING_WEIGHTS, validateEditManifest, type CandidateV3, type ClipInstanceV3, type EditManifestV0, type EditOperationV3, type ManifestClip, type MaterialPoolHealthV3, type MaterialPoolItemV3, type MaterialPoolSnapshotV3, type PresentationSettingsV1, type SentenceEditingCardV3 } from '../../../contracts/src/index.js';
@@ -230,15 +232,68 @@ export class ScriptEditingV3Service {
     if (!result.rowCount) throw new Error('MATERIAL_NOT_FOUND');
   }
 
-  async persistVisualProfile(profile: AssetVisualProfileV3, sourceFingerprint?: string): Promise<void> {
-    await this.db.query('insert into asset_visual_profiles (asset_id,summary,profile,provider,model_name,model_version,prompt_version,analysis_version,status,error,source_fingerprint) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,null,$10) on conflict (asset_id) do update set summary=excluded.summary,profile=excluded.profile,provider=excluded.provider,model_name=excluded.model_name,model_version=excluded.model_version,prompt_version=excluded.prompt_version,analysis_version=excluded.analysis_version,status=excluded.status,error=null,source_fingerprint=excluded.source_fingerprint,updated_at=now()', [profile.assetId, profile.summary, profile, profile.modelProvider, profile.modelName, profile.modelVersion, profile.promptVersion, profile.analysisVersion, 'READY', sourceFingerprint || null]);
-    await this.db.query("delete from asset_tag_evidence where asset_id=$1 and evidence_kind='QWEN_VL'", [profile.assetId]);
-    for (const tag of profile.tags) await this.db.query('insert into asset_tag_evidence (id,asset_id,tag,evidence_kind,confidence,timestamps_ms) values ($1,$2,$3,$4,$5,$6) on conflict (asset_id,tag,evidence_kind) do update set confidence=excluded.confidence,timestamps_ms=excluded.timestamps_ms', [`tag-evidence-${randomUUID()}`, profile.assetId, tag.tag, 'QWEN_VL', tag.confidence, JSON.stringify(tag.timestampsMs)]);
+  async readVisualJobSource(executor: JobQueryExecutor, job: JobRecord, snapshotId: string, assetId: string, expectedFingerprint?: string): Promise<{ sourcePath: string; durationMs: number; fingerprint: string }> {
+    const workspaceId = job.workspaceId || (job.projectId ? `workspace-project-${job.projectId}` : null);
+    if (!workspaceId || !['ANALYZE_ASSET_VISUAL', 'GENERATE_REPRESENTATIVE_FRAMES'].includes(job.type)) throw new Error('VISUAL_JOB_WORKSPACE_MISSING');
+    const row = (await executor.query<{ source_path: string; duration_ms: number; file_size: number | null; modified_at: string | null }>(`select i.source_path,i.duration_ms,i.file_size,i.modified_at
+      from material_pool_items i join material_pool_snapshots s on s.id=i.snapshot_id
+      where i.snapshot_id=$1 and i.asset_id=$2 and s.workspace_id=$3`, [snapshotId, assetId, workspaceId])).rows[0];
+    if (!row?.source_path || !row.duration_ms) throw new Error('VISUAL_JOB_SOURCE_MISMATCH');
+    const fingerprint = materialSourceFingerprint({ fileSize: row.file_size, modifiedAt: row.modified_at, durationMs: Number(row.duration_ms) });
+    if (expectedFingerprint !== undefined && fingerprint !== expectedFingerprint) throw new Error('VISUAL_JOB_SOURCE_CHANGED');
+    return { sourcePath: row.source_path, durationMs: Number(row.duration_ms), fingerprint };
   }
 
-  async persistSemanticEmbedding(input: { assetId: string; sourceFingerprint: string; provider: string; model: string; vector: number[] }): Promise<void> {
+  async beginVisualAttempt(scope: JobAttemptScope, job: JobRecord, assetId: string, fingerprint: string, modelName: string, modelVersion: string): Promise<Record<string, unknown> | null> {
+    if (job.type !== 'ANALYZE_ASSET_VISUAL' || scope.jobId !== job.id || scope.attemptNumber !== job.attemptCount) throw new Error('VISUAL_JOB_ATTEMPT_MISMATCH');
+    const ready = await scope.query<{ status: string; source_fingerprint: string; model_name: string; model_version: string; prompt_version: string; analysis_version: string; profile: Record<string, unknown> }>('select status,source_fingerprint,model_name,model_version,prompt_version,analysis_version,profile from asset_visual_profiles where asset_id=$1 for update', [assetId]);
+    const cached = ready.rows[0];
+    if (cached?.status === 'READY' && cached.source_fingerprint === fingerprint && cached.model_name === modelName && cached.model_version === modelVersion && cached.prompt_version === 'qwen-visual-v2' && cached.analysis_version === 'asset-profile-v2') return cached.profile;
+    const profile = { leaseAuthority: { jobId: job.id, attemptId: scope.attemptId, attemptNumber: scope.attemptNumber } };
+    const registered = await scope.query(`insert into asset_visual_profiles(asset_id,summary,profile,provider,model_name,model_version,prompt_version,analysis_version,status,error,source_fingerprint)
+      values($1,'视觉分析排队中',$2,'QWEN_VL',$3,$4,'qwen-visual-v2','asset-profile-v2','PENDING',null,$5)
+      on conflict(asset_id) do update set summary=excluded.summary,profile=excluded.profile,provider=excluded.provider,model_name=excluded.model_name,
+        model_version=excluded.model_version,prompt_version=excluded.prompt_version,analysis_version=excluded.analysis_version,status='PENDING',error=null,source_fingerprint=excluded.source_fingerprint,updated_at=now()
+      where not (asset_visual_profiles.status='READY' and asset_visual_profiles.source_fingerprint is not distinct from excluded.source_fingerprint
+        and asset_visual_profiles.model_name=excluded.model_name and asset_visual_profiles.model_version=excluded.model_version
+        and asset_visual_profiles.prompt_version=excluded.prompt_version and asset_visual_profiles.analysis_version=excluded.analysis_version)
+      returning asset_id`, [assetId, profile, modelName, modelVersion, fingerprint]);
+    if (!registered.rowCount) return (await scope.query<{ profile: Record<string, unknown> }>('select profile from asset_visual_profiles where asset_id=$1 for update', [assetId])).rows[0]!.profile;
+    return null;
+  }
+
+  async assertPendingVisualOwner(scope: JobAttemptScope, job: JobRecord, assetId: string, fingerprint: string, analysisConfig: string): Promise<void> {
+    if (job.type !== 'ANALYZE_ASSET_VISUAL' || scope.jobId !== job.id || scope.attemptNumber !== job.attemptCount) throw new Error('VISUAL_JOB_ATTEMPT_MISMATCH');
+    const result = await scope.query(`select asset_id from asset_visual_profiles where asset_id=$1 and source_fingerprint=$2 and status='PENDING'
+      and concat(model_name,':',model_version,':',prompt_version,':',analysis_version)=$3
+      and profile->'leaseAuthority'->>'jobId'=$4 and profile->'leaseAuthority'->>'attemptId'=$5
+      and profile->'leaseAuthority'->>'attemptNumber'=$6 for update`, [assetId, fingerprint, analysisConfig, job.id, scope.attemptId, String(scope.attemptNumber)]);
+    if (!result.rowCount) throw new Error('VISUAL_JOB_OWNER_REVOKED');
+  }
+
+  async assertReadyVisualProfile(scope: JobAttemptScope, assetId: string, fingerprint: string, profile: unknown): Promise<void> {
+    const result = await scope.query("select asset_id from asset_visual_profiles where asset_id=$1 and source_fingerprint=$2 and status='READY' and profile=$3::jsonb for update", [assetId, fingerprint, JSON.stringify(profile)]);
+    if (!result.rowCount) throw new Error('VISUAL_JOB_READY_PROFILE_CHANGED');
+  }
+
+  async persistRepresentativeFrames(executor: JobQueryExecutor, input: { assetId: string; fingerprint: string; version: string; frames: Array<{ index: number; timestampMs: number; frameKey: string }> }): Promise<void> {
+    for (const frame of input.frames) await executor.query('insert into asset_representative_frames (asset_id,source_fingerprint,frame_generation_version,frame_index,timestamp_ms,frame_key) values ($1,$2,$3,$4,$5,$6) on conflict (asset_id,source_fingerprint,frame_index) do update set frame_generation_version=excluded.frame_generation_version,timestamp_ms=excluded.timestamp_ms,frame_key=excluded.frame_key', [input.assetId, input.fingerprint, input.version, frame.index, frame.timestampMs, frame.frameKey]);
+  }
+
+  async failPendingVisualAttempt(scope: JobAttemptScope, job: JobRecord, assetId: string, fingerprint: string, analysisConfig: string, error: { code: string; message: string }): Promise<void> {
+    await this.assertPendingVisualOwner(scope, job, assetId, fingerprint, analysisConfig);
+    await scope.query("update asset_visual_profiles set status='FAILED',error=$2,updated_at=now() where asset_id=$1", [assetId, redact(error)]);
+  }
+
+  async persistVisualProfile(profile: AssetVisualProfileV3, sourceFingerprint?: string, executor: JobQueryExecutor = this.db): Promise<void> {
+    await executor.query('insert into asset_visual_profiles (asset_id,summary,profile,provider,model_name,model_version,prompt_version,analysis_version,status,error,source_fingerprint) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,null,$10) on conflict (asset_id) do update set summary=excluded.summary,profile=excluded.profile,provider=excluded.provider,model_name=excluded.model_name,model_version=excluded.model_version,prompt_version=excluded.prompt_version,analysis_version=excluded.analysis_version,status=excluded.status,error=null,source_fingerprint=excluded.source_fingerprint,updated_at=now()', [profile.assetId, profile.summary, profile, profile.modelProvider, profile.modelName, profile.modelVersion, profile.promptVersion, profile.analysisVersion, 'READY', sourceFingerprint || null]);
+    await executor.query("delete from asset_tag_evidence where asset_id=$1 and evidence_kind='QWEN_VL'", [profile.assetId]);
+    for (const tag of profile.tags) await executor.query('insert into asset_tag_evidence (id,asset_id,tag,evidence_kind,confidence,timestamps_ms) values ($1,$2,$3,$4,$5,$6) on conflict (asset_id,tag,evidence_kind) do update set confidence=excluded.confidence,timestamps_ms=excluded.timestamps_ms', [`tag-evidence-${randomUUID()}`, profile.assetId, tag.tag, 'QWEN_VL', tag.confidence, JSON.stringify(tag.timestampsMs)]);
+  }
+
+  async persistSemanticEmbedding(input: { assetId: string; sourceFingerprint: string; provider: string; model: string; vector: number[] }, executor: JobQueryExecutor = this.db): Promise<void> {
     if (!input.vector.length || input.vector.some((value) => !Number.isFinite(value))) throw new Error('SEMANTIC_EMBEDDING_INVALID');
-    await this.db.query('insert into asset_semantic_embeddings (asset_id,source_fingerprint,provider,model_name,dimensions,vector) values ($1,$2,$3,$4,$5,$6) on conflict (asset_id) do update set source_fingerprint=excluded.source_fingerprint,provider=excluded.provider,model_name=excluded.model_name,dimensions=excluded.dimensions,vector=excluded.vector,updated_at=now()', [input.assetId, input.sourceFingerprint, input.provider, input.model, input.vector.length, JSON.stringify(input.vector)]);
+    await executor.query('insert into asset_semantic_embeddings (asset_id,source_fingerprint,provider,model_name,dimensions,vector) values ($1,$2,$3,$4,$5,$6) on conflict (asset_id) do update set source_fingerprint=excluded.source_fingerprint,provider=excluded.provider,model_name=excluded.model_name,dimensions=excluded.dimensions,vector=excluded.vector,updated_at=now()', [input.assetId, input.sourceFingerprint, input.provider, input.model, input.vector.length, JSON.stringify(input.vector)]);
   }
 
   async setManualTags(snapshotId: string, assetId: string, tags: string[]): Promise<string[]> {

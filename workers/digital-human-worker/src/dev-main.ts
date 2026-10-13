@@ -6,7 +6,7 @@ import { JobService } from '../../../packages/modules/job/src/index.js';
 import { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
 import { probeMedia } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 import { createDigitalHumanWorker } from './main.js';
-import { createDigitalHumanLeaseCancellationHandler, type DigitalHumanWorkerDependencies } from './handler.js';
+import { createDigitalHumanLeaseCancellationHandler, createDigitalHumanLeaseRecoveryHandler, type DigitalHumanWorkerDependencies } from './handler.js';
 import { DIGITAL_HUMAN_JOB_TYPES } from './job-types.js';
 
 export interface DigitalHumanDevRunnerOptions { pollIntervalMs?: number; batchSize?: number; recoveryIntervalMs?: number; }
@@ -17,7 +17,7 @@ export function createDigitalHumanDevRunner(dependencies: DigitalHumanWorkerDepe
   if (!Number.isInteger(pollIntervalMs) || pollIntervalMs <= 0 || !Number.isInteger(batchSize) || batchSize <= 0 || !Number.isInteger(recoveryIntervalMs) || recoveryIntervalMs <= 0) throw new Error('Digital Human runner options must be positive integers');
   const runtime = createDigitalHumanWorker(dependencies); const cancellation = createDigitalHumanLeaseCancellationHandler(dependencies); let pollTimer: NodeJS.Timeout | undefined; let recoveryTimer: NodeJS.Timeout | undefined; let started = false; let pollingPass: Promise<void> | null = null; let recoveryPass: Promise<void> | null = null;
   const pollOnce = async (): Promise<void> => { if (pollingPass) return pollingPass; pollingPass = (async () => { const jobs = await dependencies.jobs.listRunnable(DIGITAL_HUMAN_JOB_TYPES, batchSize); await Promise.all(jobs.map((job) => runtime.execute(job.type, { jobId: job.id }))); })().finally(() => { pollingPass = null; }); return pollingPass; };
-  const recoverOnce = async (): Promise<void> => { if (recoveryPass) return recoveryPass; recoveryPass = dependencies.jobs.reconcileExpiredLeases(new Date(), cancellation).then(() => undefined).finally(() => { recoveryPass = null; }); return recoveryPass; };
+  const recoverOnce = async (): Promise<void> => { if (recoveryPass) return recoveryPass; recoveryPass = dependencies.jobs.reconcileExpiredLeases(new Date(), cancellation, { types: DIGITAL_HUMAN_JOB_TYPES, recover: createDigitalHumanLeaseRecoveryHandler(dependencies) }).then(() => undefined).finally(() => { recoveryPass = null; }); return recoveryPass; };
   return {
     pollOnce, recoverOnce,
     async start() { if (started) return; await recoverOnce(); await runtime.start(); started = true; await pollOnce(); pollTimer = setInterval(() => { void pollOnce().catch(() => undefined); }, pollIntervalMs); recoveryTimer = setInterval(() => { void recoverOnce().catch(() => undefined); }, recoveryIntervalMs); pollTimer.unref(); recoveryTimer.unref(); },

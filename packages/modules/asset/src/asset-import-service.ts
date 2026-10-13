@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { AssetImportKind, AssetImportState } from '../../../contracts/src/index.js';
+import type { JobAttemptScope, JobLeaseRecoveryContext, JobRecord } from '../../job/src/index.js';
 
 export interface AssetImportRecord {
   id: string; projectId: string; workspaceId: string; jobId: string | null; originalName: string; kind: AssetImportKind; byteSize: number; stagedPath: string; state: AssetImportState; outputAssetId: string | null; errorCode: string | null; errorMessage: string | null; correlationId: string; createdAt: string; updatedAt: string;
@@ -47,8 +48,31 @@ export class AssetImportService {
     throw new Error('Asset import can only attach a Job from STAGED');
   }
 
-  async markProcessing(projectId: string, id: string): Promise<AssetImportRecord> { const result = await this.db.query("update asset_imports set state = 'PROCESSING', updated_at = now() where project_id = $1 and id = $2 and state = 'QUEUED' returning *", [projectId, id]); if (!result.rows[0]) throw new Error('Asset import must be QUEUED before PROCESSING'); return map(result.rows[0] as Record<string, unknown>); }
-  async markWorkspaceProcessing(workspaceId: string, id: string): Promise<AssetImportRecord> { const result = await this.db.query("update asset_imports set state = 'PROCESSING', updated_at = now() where workspace_id = $1 and id = $2 and state = 'QUEUED' returning *", [workspaceId, id]); if (!result.rows[0]) throw new Error('Asset import must be QUEUED before PROCESSING'); return map(result.rows[0] as Record<string, unknown>); }
+  async markProcessing(projectId: string, id: string, transaction?: AssetImportTransaction): Promise<AssetImportRecord> { const result = await (transaction || this.db).query("update asset_imports set state = 'PROCESSING', error_code=null,error_message=null,updated_at = now() where project_id = $1 and id = $2 and state in ('QUEUED','FAILED') returning *", [projectId, id]); if (!result.rows[0]) throw new Error('Asset import must be QUEUED or explicitly retried before PROCESSING'); return map(result.rows[0] as Record<string, unknown>); }
+  async markWorkspaceProcessing(workspaceId: string, id: string, transaction?: AssetImportTransaction): Promise<AssetImportRecord> { const result = await (transaction || this.db).query("update asset_imports set state = 'PROCESSING', error_code=null,error_message=null,updated_at = now() where workspace_id = $1 and id = $2 and state in ('QUEUED','FAILED') returning *", [workspaceId, id]); if (!result.rows[0]) throw new Error('Asset import must be QUEUED or explicitly retried before PROCESSING'); return map(result.rows[0] as Record<string, unknown>); }
+
+  async markProcessingForJobWithExecutor(scope: JobAttemptScope, job: JobRecord, importId: string): Promise<AssetImportRecord> {
+    if (scope.jobId !== job.id || job.type !== 'ASSET_IMPORT' || (job.projectId && job.workspaceId && job.workspaceId !== `workspace-project-${job.projectId}`)) throw new Error('ASSET_IMPORT_OWNER_JOB_MISMATCH');
+    const result = await scope.query(`update asset_imports set state='PROCESSING',error_code=null,error_message=null,updated_at=now()
+      where id=$1 and job_id=$2 and (($3::text is not null and project_id=$3 and workspace_id is null)
+        or ($3::text is null and project_id is null and workspace_id=$4)) and state in ('QUEUED','FAILED') returning *`, [importId, job.id, job.projectId, job.workspaceId]);
+    if (!result.rows[0]) throw Object.assign(new Error('Asset import does not belong to this Job'), { code: 'ASSET_IMPORT_OWNER_JOB_MISMATCH', retryable: false });
+    return map(result.rows[0] as Record<string, unknown>);
+  }
+
+  async recoverLeaseWithExecutor(scope: JobAttemptScope, job: JobRecord, context: JobLeaseRecoveryContext): Promise<boolean> {
+    if (job.type !== 'ASSET_IMPORT' || scope.jobId !== job.id) return false;
+    const payload = job.payload as { schemaVersion?: string; importId?: string; projectId?: string; workspaceId?: string };
+    if (payload?.schemaVersion !== 'ASSET_IMPORT_V0' || !payload.importId || (job.projectId ? payload.projectId !== job.projectId || Boolean(payload.workspaceId) || Boolean(job.workspaceId && job.workspaceId !== `workspace-project-${job.projectId}`) : payload.workspaceId !== job.workspaceId || Boolean(payload.projectId))) return false;
+    const selected = await scope.query<{ state: string }>(`select state from asset_imports where id=$1 and job_id=$2
+      and (($3::text is not null and project_id=$3 and workspace_id is null) or ($3::text is null and project_id is null and workspace_id=$4)) for update`, [payload.importId, job.id, job.projectId, job.workspaceId]);
+    if (!selected.rows[0] || !['QUEUED', 'PROCESSING'].includes(selected.rows[0].state)) return false;
+    await scope.query(`update asset_imports set state=$5,error_code=$6,error_message=$7,updated_at=now()
+      where id=$1 and job_id=$2
+        and (($3::text is not null and project_id=$3 and workspace_id is null) or ($3::text is null and project_id is null and workspace_id=$4))
+        and state in ('QUEUED','PROCESSING')`, [payload?.importId || '', job.id, job.projectId, job.workspaceId, context.outcome === 'FAILED' ? 'FAILED' : 'QUEUED', context.error.code, context.error.message]);
+    return true;
+  }
 
   async complete(projectId: string, id: string, input: { outputAssetId: string; state: 'READY' | 'DEDUPED' }, transaction?: AssetImportTransaction): Promise<AssetImportRecord> {
     const db = transaction || this.db;

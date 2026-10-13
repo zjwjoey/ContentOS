@@ -1,0 +1,1 @@
+alter table script_editing_v3_shot_detection_runs drop column lease_authority;

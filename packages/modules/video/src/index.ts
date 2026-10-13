@@ -18,7 +18,7 @@ export type { RandomSentenceMontageInput, ScriptMontageInput, SentenceMontageAss
 export type { BrandingAsset, BrandingConfig } from './planner.js';
 export { planVisuals, classifyVisualEntities, dedupeExternalQueries, rankLocalCandidates, rankExternalCandidates, pickPexelsFile, PexelsVideoProvider, FakeExternalVideoProvider, HybridMediaService, createExternalVideoProvider, getProviderHealth, recordProviderHealth } from './hybrid-media.js';
 export type { VisualPlanV1, VisualPlanSegmentV1, ResolvedVisualPlanV1, ResolvedVisualPlanSegmentV1, VisualEntityDetail, KnownVisualEntity, KnownEntityType, HybridSourcePolicy, ExternalVideoProvider, ExternalVideoResult, ExternalVideoFile, ExternalVideoSearchOptions, RateLimitInfo, HybridRetrievalResult } from './hybrid-media.js';
-export { prepareEditingWorkbenchItem, prepareVoiceTiming, fitSentencesToVoiceDuration } from './edit-workbench-preparation.js';
+export { planEditingWorkbenchItem, prepareEditingWorkbenchItem, prepareVoiceTiming, fitSentencesToVoiceDuration } from './edit-workbench-preparation.js';
 export type { EditingWorkbenchPreparationDependencies, EditingWorkbenchPreparationInput, EditingWorkbenchPreparationResult } from './edit-workbench-preparation.js';
 export type { EditManifestV0, ManifestClip } from '../../../contracts/src/index.js';
 export { planEditorialScript, resolveEditorialPlan, compileEditorialManifest, rerollEditorialClip, getEditorialTemplateConfig, EDITORIAL_TEMPLATES } from './editorial-plan.js';
@@ -26,7 +26,7 @@ export type { EditorialAssetV1, EditorialPaceV1, EditorialPlanInput, EditorialPl
 export { applyQuickEditOperations, digestEditManifest, parseQuickEditOperations, rankAdjustmentAssets } from './quick-edit.js';
 export type { QuickEditOperation } from './quick-edit.js';
 export { VideoAdjustmentService, VideoQuickEditService } from './quick-edit-service.js';
-export type { CreateQuickEditVersionInput, QuickEditManifestRecord } from './quick-edit-service.js';
+export type { CreatePlannedManifestInput, CreateQuickEditVersionInput, QuickEditManifestRecord } from './quick-edit-service.js';
 export { StandaloneQuickEditService } from './standalone-quick-edit-service.js';
 export type { CreateStandaloneQuickEditInput, StandaloneQuickEditSession } from './standalone-quick-edit-service.js';
 export { buildVisualQueriesV3, ensureStandaloneWorkspace, JianyingDraftImporter, JianyingEncryptedDraftAdapter, JianyingRuntimeLocator, JianyingVideoEditorDllAdapter, CompositeReadableDraftAdapter, PlainJsonDraftAdapter, materialSourceFingerprint, rankMaterialCandidateV3, ScriptEditingV3Service } from './script-editing-v3-service.js';

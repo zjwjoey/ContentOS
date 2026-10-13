@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { relative } from 'node:path';
 import type { Pool } from 'pg';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 
@@ -50,8 +51,16 @@ export class AssetService {
     const row = result.rows[0] as Record<string, unknown>;
     return { id, projectId: input.projectId || '', ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}), checksum: prepared.checksum, storageKey: String(row.storage_key), byteSize: prepared.byteSize, status: 'READY', associationCreated };
   }
-  async prepareStagedUpload(input: ImportAssetInput & { stagedPath: string; originalName: string; checksum: string; byteSize: number; probe?: AssetProbe }): Promise<PreparedAssetImport> {
-    const promoted = await this.storage.promote({ tempPath: this.storage.stagedPath(input.stagedPath), checksum: input.checksum, byteSize: input.byteSize, originalName: input.originalName });
+  async prepareStagedUpload(input: ImportAssetInput & { stagedPath: string; originalName: string; checksum: string; byteSize: number; probe?: AssetProbe; preserveStagedInput?: boolean }): Promise<PreparedAssetImport> {
+    const staged = input.preserveStagedInput ? await this.storage.stage(this.storage.stagedPath(input.stagedPath)) : { tempPath: this.storage.stagedPath(input.stagedPath), checksum: input.checksum, byteSize: input.byteSize, originalName: input.originalName };
+    if (input.preserveStagedInput) {
+      const bytes = await readFile(staged.tempPath);
+      if (bytes.byteLength !== input.byteSize || createHash('sha256').update(bytes).digest('hex') !== input.checksum.replace(/^sha256:/u, '')) {
+        await this.storage.removeStaged(relative(this.storage.root, staged.tempPath).replaceAll('\\', '/'));
+        throw Object.assign(new Error('Staged input changed before Asset preparation'), { code: 'ASSET_STAGED_INPUT_CHANGED', retryable: false });
+      }
+    }
+    const promoted = await this.storage.promote({ ...staged, checksum: input.checksum, byteSize: input.byteSize, originalName: input.originalName });
     return new ActivePreparedAssetImport(input.checksum, input.byteSize, promoted.storageKey, input.originalName, this.storage, input.probe, promoted.deduped);
   }
   async importFile(input: ImportAssetInput, transaction?: AssetTransaction): Promise<AssetResult> {

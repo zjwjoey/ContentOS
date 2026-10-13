@@ -45,6 +45,15 @@ export interface MediaAnalysisRunV1 {
   finishedAt: string | null;
 }
 
+export interface MediaAnalysisHistoryItemV1 extends MediaAnalysisRunV1 {
+  jobState: string | null;
+  progress: unknown;
+}
+export interface MediaAnalysisHistoryPageV1 {
+  items: MediaAnalysisHistoryItemV1[];
+  nextCursor: string | null;
+}
+
 export interface TechnicalMediaAnalysisV1 {
   runId: string;
   assetId: string;

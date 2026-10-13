@@ -73,6 +73,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [preset, setPreset] = useState<Preset | null>(null);
   const [introAssetId, setIntroAssetId] = useState("");
+  const presetSelectionVersion = useRef(0);
   const [outroAssetId, setOutroAssetId] = useState("");
   const [brandingAssets, setBrandingAssets] = useState<MediaItem[]>([]);
   const [preferUnused, setPreferUnused] = useState(true);
@@ -126,6 +127,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
     }
   }, [projectId]);
   const loadPresets = useCallback(async () => {
+    const selectionVersion = ++presetSelectionVersion.current;
     const response = await fetch("/api/v1/video/presets");
     if (response.ok) {
       const data = (await response.json()) as { items: Preset[] };
@@ -139,7 +141,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
     const current = await fetch(`/api/v1/projects/${projectId}/video/preset`);
     if (current.ok) {
       const data = (await current.json()) as { preset: Preset | null };
-      applyPresetToUi(data.preset);
+      if (selectionVersion === presetSelectionVersion.current) applyPresetToUi(data.preset);
     }
   }, [projectId]);
   const loadIndex = useCallback(async () => {
@@ -584,7 +586,7 @@ export default function VideoPage({ params }: { params: { id: string } }) {
           <Link href={`/projects/${projectId}/approvals`}>审批</Link>
         </nav>
       </header>
-      {step === 1 && <ScriptStep preset={preset} presets={presets} mode={mode || "RANDOM"} scriptSource={scriptSource} script={script} scriptInfo={scriptInfo} scriptCount={scriptCount} describePreset={describePreset} onPresetChange={async (selected) => { const previous = preset; const response = await fetch(`/api/v1/projects/${projectId}/video/preset`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ presetId: selected.id }) }); if (!response.ok) { applyPresetToUi(previous); setMessage("模板应用失败，请重试。"); return; } applyPresetToUi(selected); }} onModeChange={chooseMode} onScriptSourceChange={(source) => { setScriptSource(source); if (source === "PROJECT") void loadScript(); else setScript(""); }} onScriptChange={setScript} onNext={() => setStep(2)} />}
+      {step === 1 && <ScriptStep preset={preset} presets={presets} mode={mode || "RANDOM"} scriptSource={scriptSource} script={script} scriptInfo={scriptInfo} scriptCount={scriptCount} describePreset={describePreset} onPresetChange={async (selected) => { ++presetSelectionVersion.current; const previous = preset; const response = await fetch(`/api/v1/projects/${projectId}/video/preset`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ presetId: selected.id }) }); if (!response.ok) { applyPresetToUi(previous); setMessage("模板应用失败，请重试。"); return; } applyPresetToUi(selected); }} onModeChange={chooseMode} onScriptSourceChange={(source) => { setScriptSource(source); if (source === "PROJECT") void loadScript(); else setScript(""); }} onScriptChange={setScript} onNext={() => setStep(2)} />}
       {step === 2 && <MediaStep assets={mediaAssets} brandingAssets={brandingAssets} selectedAssets={selectedAssets} sourceRoot={sourceRoot} scan={scan} busy={busy} query={query} orientation={orientation} category={category} usage={usage} sort={sort} mediaPage={mediaPage} indexTotal={indexTotal} mediaHasNext={mediaHasNext} introAssetId={introAssetId} outroAssetId={outroAssetId} preferUnused={preferUnused} detailsAsset={detailsAsset} tagDraft={tagDraft} tagInput={tagInput} categoryDraft={categoryDraft} onToggleAsset={toggleAsset} onSourceRootChange={setSourceRoot} onScan={() => void scanFolder()} onQueryChange={setQuery} onOrientationChange={setOrientation} onCategoryChange={setCategory} onUsageChange={setUsage} onSortChange={setSort} onPreviousPage={() => setMediaPage((page) => Math.max(1, page - 1))} onNextPage={() => setMediaPage((page) => page + 1)} onToggleIntro={(id) => setIntroAssetId((current) => current === id ? "" : id)} onToggleOutro={(id) => setOutroAssetId((current) => current === id ? "" : id)} onPreferUnusedChange={setPreferUnused} onNext={() => setStep(3)} onSelectDetails={selectDetails} onTagDraftChange={setTagDraft} onTagInputChange={setTagInput} onCategoryDraftChange={setCategoryDraft} onSaveDetails={() => void saveMediaDetails()} onCloseDetails={() => setDetailsAsset(null)} />}
       {step === 3 && <GenerateStep scriptCount={scriptCount} mediaCount={indexTotal || mediaAssets.length} selectedCount={selectedAssets.length} presetName={preset?.name || "默认短视频"} presetDescription={describePreset(preset)} preferUnused={preferUnused} onPreferUnusedChange={setPreferUnused} busy={busy} mode={mode || "RANDOM"} script={script} onGenerate={() => void createPlan()} />}
       {step === 4 && <ReviewStep manifest={manifest} visibleClipIndexes={visibleClipIndexes} reviewCount={reviewCount} manualCount={manualCount} reviewFilter={reviewFilter} setReviewFilter={setReviewFilter} selectedClips={selectedClips} setSelectedClips={setSelectedClips} currentClip={currentClip} selectedClip={selectedClip} setSelectedClip={setSelectedClip} clipSource={clipSource} mediaAssets={reviewAssets} busy={busy} mode={manifest?.manifest.metadata?.editMode || mode || "RANDOM"} operations={operations} setOperations={setOperations} onBulk={(type) => void bulkAdjust(type)} onSave={() => void createVersion()} onNext={() => setStep(5)} history={manifestHistory} onRegenerate={() => void createPlan()} thumbnailFor={clipThumbnail} onModeChange={chooseMode} />}

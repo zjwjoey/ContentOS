@@ -51,5 +51,5 @@ test('structured logger redacts password, token, cookie and authorization values
 
 test('errors serialize into safe stable envelopes', () => {
   const result = serializeError(new Error('database password=secret'), 'InfrastructureError', 'corr-1');
-  assert.deepEqual(result, { code: 'INFRASTRUCTURE_ERROR', message: 'database password=secret', correlationId: 'corr-1', details: [] });
+  assert.deepEqual(result, { code: 'INFRASTRUCTURE_ERROR', message: 'database password=[REDACTED]', correlationId: 'corr-1', details: [] });
 });

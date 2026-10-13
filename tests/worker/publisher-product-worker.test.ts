@@ -307,6 +307,7 @@ test('Publisher Worker applies a changed development Fake outcome on the next at
     const first = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
     assert.equal(first.state, 'RETRY_WAIT');
     await simulations.set(projectId, accountId, 'SUCCESS');
+    await data.jobs.requeue(data.job.id);
     const second = await worker.execute('PUBLISH', { jobId: data.job.id }) as { state: string };
     assert.equal(second.state, 'SUCCEEDED');
     assert.equal((await data.publisher.getRequest(data.requestId))?.status, 'PUBLISHED');

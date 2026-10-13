@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
+import { redact } from '../../../logging/src/index.js';
 
 export type JobState = 'QUEUED' | 'RUNNING' | 'RETRY_WAIT' | 'FAILED' | 'SUCCEEDED' | 'CANCEL_REQUESTED' | 'CANCELLED' | 'BLOCKED';
 export interface JobRecord { id: string; projectId: string | null; workspaceId: string | null; type: string; state: JobState; payload: unknown; result: unknown; error: unknown; attemptCount: number; maxAttempts: number; leaseOwner: string | null; leaseExpiresAt: Date | null; progress: unknown; }
@@ -13,6 +15,60 @@ export type JobHeartbeat = 'ACTIVE' | 'CANCEL_REQUESTED' | 'STALE';
 export type JobAttemptFenceResult<T> = { executed: true; value: T } | { executed: false };
 export type JobAttemptCommitResult<T> = { executed: true; value: T; job: JobRecord } | { executed: false; job: JobRecord };
 export type JobLeaseCancellationHandler = (job: JobRecord, scope: JobAttemptScope) => Promise<boolean>;
+export const MAX_CONSECUTIVE_LEASE_FAILURES = 3;
+export interface JobLeaseRecoveryContext { outcome: 'RETRY_WAIT' | 'FAILED'; consecutiveFailures: number; limit: number; error: { code: string; message: string }; }
+export type JobLeaseRecoveryHandler = (job: JobRecord, scope: JobAttemptScope, context: JobLeaseRecoveryContext) => Promise<boolean>;
+export interface JobLeaseRecoveryOptions { types?: readonly string[]; recover?: JobLeaseRecoveryHandler; }
+export interface CancelledJobExpectation { type: string; projectId: string; attemptCount: number; }
+export interface InactiveJobExpectation extends CancelledJobExpectation { state: 'QUEUED' | 'RETRY_WAIT' | 'FAILED' | 'CANCELLED'; }
+export type JobCancellationFenceResult<T> = { executed: true; value: T } | { executed: false };
+const cancellationScopeBrand: unique symbol = Symbol('JobCancellationScope');
+export interface JobCancellationScope extends JobQueryExecutor {
+  readonly [cancellationScopeBrand]: true;
+  readonly jobId: string;
+  readonly type: string;
+  readonly projectId: string;
+  readonly attemptCount: number;
+}
+const cancellationCallback = new AsyncLocalStorage<{ failure?: Error }>();
+function assertOutsideCancellationCallback(): void {
+  const context = cancellationCallback.getStore();
+  if (context) {
+    const error = Object.assign(new Error('Job APIs cannot be nested inside a cancellation callback; use its executor'), { code: 'JOB_CANCELLATION_NESTED_JOB_CALL' });
+    context.failure = error;
+    throw error;
+  }
+}
+
+class ActiveJobCancellationScope implements JobCancellationScope {
+  readonly [cancellationScopeBrand] = true;
+  private active = true;
+  private failure: Error | null = null;
+  private readonly pending = new Set<Promise<unknown>>();
+  constructor(readonly jobId: string, readonly type: string, readonly projectId: string, readonly attemptCount: number, private readonly client: PoolClient) {}
+  query<T extends QueryResultRow = QueryResultRow>(text: string, values: unknown[] = []): Promise<QueryResult<T>> {
+    if (!this.active) return Promise.reject(Object.assign(new Error('Job cancellation transaction is no longer active'), { code: 'JOB_CANCELLATION_SCOPE_CLOSED' }));
+    const statement = text.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/--[^\n]*/gu, '').trim().replace(/;$/u, '').trim();
+    if (statement.includes(';') || !/^(?:select|insert|update|delete|with)\b/iu.test(statement)) {
+      this.failure = Object.assign(new Error('Cancellation callbacks require a single data statement'), { code: 'JOB_CANCELLATION_QUERY_FORBIDDEN' });
+      return Promise.reject(this.failure);
+    }
+    const operation = this.client.query<T>(text, values);
+    this.pending.add(operation);
+    void operation.then(() => { this.pending.delete(operation); }, (error: unknown) => { this.failure = error instanceof Error ? error : new Error('Cancellation query failed'); this.pending.delete(operation); });
+    return operation;
+  }
+  close(): void { this.active = false; }
+  async finish(): Promise<void> {
+    this.close();
+    if (this.failure) { await this.drain(); throw this.failure; }
+    if (this.pending.size) {
+      await this.drain();
+      throw Object.assign(new Error('Cancellation callback left queries in flight'), { code: 'JOB_CANCELLATION_QUERY_NOT_AWAITED' });
+    }
+  }
+  async drain(): Promise<void> { await Promise.allSettled([...this.pending]); }
+}
 
 const jobAttemptScopeBrand: unique symbol = Symbol('JobAttemptScope');
 export interface JobAttemptScope {
@@ -34,21 +90,59 @@ class ActiveJobAttemptScope implements JobAttemptScope {
   close(): void { this.active = false; }
 }
 
+class ActiveJobLeaseRecoveryScope extends ActiveJobCancellationScope implements JobAttemptScope {
+  readonly [jobAttemptScopeBrand] = true;
+  constructor(job: JobRecord, readonly attemptId: string, readonly attemptNumber: number, client: PoolClient) {
+    super(job.id, job.type, job.projectId ?? '', attemptNumber, client);
+  }
+}
+
 function mapJob(row: Record<string, unknown>): JobRecord {
-  return { id: String(row.id), projectId: row.project_id ? String(row.project_id) : null, workspaceId: row.workspace_id ? String(row.workspace_id) : null, type: String(row.type), state: row.state as JobState, payload: row.payload, result: row.result, error: row.error, attemptCount: Number(row.attempt_count), maxAttempts: Number(row.max_attempts), leaseOwner: row.lease_owner ? String(row.lease_owner) : null, leaseExpiresAt: row.lease_expires_at ? new Date(String(row.lease_expires_at)) : null, progress: row.progress };
+  return { id: String(row.id), projectId: row.project_id ? String(row.project_id) : null, workspaceId: row.workspace_id ? String(row.workspace_id) : null, type: String(row.type), state: row.state as JobState, payload: row.payload, result: row.result, error: redact(row.error), attemptCount: Number(row.attempt_count), maxAttempts: Number(row.max_attempts), leaseOwner: row.lease_owner ? String(row.lease_owner) : null, leaseExpiresAt: row.lease_expires_at ? new Date(String(row.lease_expires_at)) : null, progress: row.progress };
 }
 
 export class JobService {
   constructor(private readonly db: Pool) {}
 
-  async createWithExecutor(executor: JobQueryExecutor, input: CreateJobInput): Promise<JobRecord> {
+  async withCancelledJobFence<T>(id: string, expected: CancelledJobExpectation, action: (scope: JobCancellationScope) => Promise<T>): Promise<JobCancellationFenceResult<T>> {
+    return this.withInactiveJobFence(id, { ...expected, state: 'CANCELLED' }, action);
+  }
+
+  async withInactiveJobFence<T>(id: string, expected: InactiveJobExpectation, action: (scope: JobCancellationScope) => Promise<T>): Promise<JobCancellationFenceResult<T>> { assertOutsideCancellationCallback();
+    const client = await this.db.connect();
+    let scope: ActiveJobCancellationScope | null = null;
+    try {
+      await client.query('begin');
+      const selected = await client.query('select id, type, project_id, state, attempt_count from jobs where id = $1 for update', [id]);
+      const row = selected.rows[0];
+      if (![id, expected.type, expected.projectId].every((value) => typeof value === 'string' && value.trim().length > 0) || !['QUEUED', 'RETRY_WAIT', 'FAILED', 'CANCELLED'].includes(expected.state) || !row || row.id !== id || row.type !== expected.type || row.project_id !== expected.projectId || row.state !== expected.state || !Number.isSafeInteger(expected.attemptCount) || expected.attemptCount < 0 || Number(row.attempt_count) !== expected.attemptCount) {
+        await client.query('commit');
+        return { executed: false };
+      }
+      scope = new ActiveJobCancellationScope(id, expected.type, expected.projectId, expected.attemptCount, client);
+      const activeScope = scope;
+      const context: { failure?: Error } = {};
+      const value = await cancellationCallback.run(context, () => action(activeScope));
+      if (context.failure) throw context.failure;
+      await scope.finish();
+      await client.query('commit');
+      return { executed: true, value };
+    } catch (error) {
+      scope?.close();
+      if (scope) await scope.drain();
+      await client.query('rollback');
+      throw error;
+    } finally { scope?.close(); client.release(); }
+  }
+
+  async createWithExecutor(executor: JobQueryExecutor, input: CreateJobInput): Promise<JobRecord> { assertOutsideCancellationCallback();
     const result = await executor.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts, scheduled_at) values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now())) returning *', [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts, input.scheduledAt || null]);
     return mapJob(result.rows[0] as Record<string, unknown>);
   }
 
-  async create(input: CreateJobInput): Promise<JobRecord> { return this.createWithExecutor(this.db, input); }
+  async create(input: CreateJobInput): Promise<JobRecord> { assertOutsideCancellationCallback(); return this.createWithExecutor(this.db, input); }
 
-  async createIdempotentWithExecutor(executor: JobQueryExecutor, input: CreateJobInput): Promise<JobRecord> {
+  async createIdempotentWithExecutor(executor: JobQueryExecutor, input: CreateJobInput): Promise<JobRecord> { assertOutsideCancellationCallback();
     const values = [input.id, input.projectId, input.workspaceId || null, input.type, 'QUEUED', input.idempotencyKey, input.payload, input.maxAttempts, input.scheduledAt || null];
     const result = await executor.query('insert into jobs (id, project_id, workspace_id, type, state, idempotency_key, payload, max_attempts, scheduled_at) values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now())) on conflict do nothing returning *', values);
     if (result.rows[0]) return mapJob(result.rows[0] as Record<string, unknown>);
@@ -57,17 +151,17 @@ export class JobService {
     throw new Error(`JOB_ID_CONFLICT: ${input.id}`);
   }
 
-  async createIdempotent(input: CreateJobInput): Promise<JobRecord> { return this.createIdempotentWithExecutor(this.db, input); }
+  async createIdempotent(input: CreateJobInput): Promise<JobRecord> { assertOutsideCancellationCallback(); return this.createIdempotentWithExecutor(this.db, input); }
 
-  async get(id: string): Promise<JobRecord | null> {
+  async get(id: string): Promise<JobRecord | null> { assertOutsideCancellationCallback();
     const result = await this.db.query('select * from jobs where id = $1', [id]);
     return result.rows[0] ? mapJob(result.rows[0] as Record<string, unknown>) : null;
   }
-  async getByIdempotencyKey(idempotencyKey: string): Promise<JobRecord | null> {
+  async getByIdempotencyKey(idempotencyKey: string): Promise<JobRecord | null> { assertOutsideCancellationCallback();
     const result = await this.db.query('select * from jobs where idempotency_key = $1', [idempotencyKey]);
     return result.rows[0] ? mapJob(result.rows[0] as Record<string, unknown>) : null;
   }
-  async listProjectSummaries(projectId: string, limit = 8): Promise<JobSummary[]> {
+  async listProjectSummaries(projectId: string, limit = 8): Promise<JobSummary[]> { assertOutsideCancellationCallback();
     if (!projectId || limit <= 0) return [];
     const result = await this.db.query('select id, project_id, type, state, attempt_count, max_attempts, created_at from jobs where project_id = $1 order by created_at desc, id desc limit $2', [projectId, Math.min(limit, 20)]);
     return result.rows.map((row) => ({
@@ -80,7 +174,7 @@ export class JobService {
       createdAt: new Date(String(row.created_at)).toISOString(),
     }));
   }
-  async listProjectFailedSummaries(projectId: string, limit = 8): Promise<JobSummary[]> {
+  async listProjectFailedSummaries(projectId: string, limit = 8): Promise<JobSummary[]> { assertOutsideCancellationCallback();
     if (!projectId || limit <= 0) return [];
     const result = await this.db.query("select id, project_id, type, state, attempt_count, max_attempts, created_at from jobs where project_id = $1 and state in ('FAILED', 'BLOCKED') order by created_at desc, id desc limit $2", [projectId, Math.min(limit, 20)]);
     return result.rows.map((row) => ({
@@ -93,7 +187,7 @@ export class JobService {
       createdAt: new Date(String(row.created_at)).toISOString(),
     }));
   }
-  async getProjectStateSummary(projectId: string): Promise<ProjectJobStateSummary> {
+  async getProjectStateSummary(projectId: string): Promise<ProjectJobStateSummary> { assertOutsideCancellationCallback();
     const result = await this.db.query("select type, state, count(*)::text as count from jobs where project_id = $1 and state in ('QUEUED', 'RUNNING', 'RETRY_WAIT', 'FAILED', 'BLOCKED') group by type, state", [projectId]);
     const stateCounts: Record<string, number> = {};
     const videoStateCounts: Record<string, number> = {};
@@ -105,13 +199,13 @@ export class JobService {
     return { stateCounts, videoStateCounts };
   }
 
-  async listRunnable(types: string[], limit = 10): Promise<JobRecord[]> {
+  async listRunnable(types: string[], limit = 10): Promise<JobRecord[]> { assertOutsideCancellationCallback();
     if (types.length === 0 || limit <= 0) return [];
     const result = await this.db.query("select * from jobs where type = any($1::text[]) and scheduled_at <= now() and (state = 'QUEUED' or (state = 'RETRY_WAIT' and (retry_at is null or retry_at <= now()))) order by created_at, id limit $2", [types, limit]);
     return result.rows.map((row) => mapJob(row as Record<string, unknown>));
   }
 
-  async claim(id: string, workerId: string, leaseMs: number): Promise<{ job: JobRecord; attemptId: string } | null> {
+  async claim(id: string, workerId: string, leaseMs: number): Promise<{ job: JobRecord; attemptId: string } | null> { assertOutsideCancellationCallback();
     const client = await this.db.connect();
     try {
       await client.query('begin');
@@ -119,6 +213,10 @@ export class JobService {
       const row = selected.rows[0] as Record<string, unknown> | undefined;
       if (!row || !['QUEUED', 'RETRY_WAIT'].includes(String(row.state))) { await client.query('rollback'); return null; }
       if (row.scheduled_at && new Date(String(row.scheduled_at)).getTime() > Date.now()) { await client.query('rollback'); return null; }
+      if (row.state === 'RETRY_WAIT' && row.retry_at) {
+        const retryAtMs = row.retry_at instanceof Date ? row.retry_at.getTime() : typeof row.retry_at === 'string' ? Date.parse(row.retry_at) : NaN;
+        if (retryAtMs > Date.now()) { await client.query('rollback'); return null; }
+      }
       const attemptNumber = Number(row.attempt_count) + 1;
       const attemptId = randomUUID();
       const leaseExpires = new Date(Date.now() + leaseMs);
@@ -131,7 +229,7 @@ export class JobService {
     finally { client.release(); }
   }
 
-  async succeed(id: string, attemptId: string, result: unknown): Promise<JobRecord> {
+  async succeed(id: string, attemptId: string, result: unknown): Promise<JobRecord> { assertOutsideCancellationCallback();
     const client = await this.db.connect();
     try {
       await client.query('begin');
@@ -145,7 +243,7 @@ export class JobService {
         return mapJob(current);
       }
       await client.query('update job_attempts set status = $2, finished_at = now() where id = $1', [attemptId, 'SUCCEEDED']);
-      const updated = await client.query('update jobs set state = $2, result = $3, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 returning *', [id, 'SUCCEEDED', result]);
+      const updated = await client.query('update jobs set state = $2, result = $3, consecutive_lease_failures = 0, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 returning *', [id, 'SUCCEEDED', result]);
       await client.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [id, 'job.succeeded', { attemptId }]);
       await client.query('commit');
       return mapJob(updated.rows[0] as Record<string, unknown>);
@@ -153,7 +251,8 @@ export class JobService {
     finally { client.release(); }
   }
 
-  async fail(id: string, attemptId: string, error: unknown, retryable: boolean, action?: (scope: JobAttemptScope) => Promise<void>): Promise<JobRecord> {
+  async fail(id: string, attemptId: string, error: unknown, retryable: boolean, action?: (scope: JobAttemptScope) => Promise<void>): Promise<JobRecord> { assertOutsideCancellationCallback();
+    error = redact(error);
     const client = await this.db.connect();
     let scope: ActiveJobAttemptScope | null = null;
     try {
@@ -174,7 +273,7 @@ export class JobService {
       const retry = retryable && Number(current.attempt_count) < Number(current.max_attempts);
       const state: JobState = retry ? 'RETRY_WAIT' : 'FAILED';
       await client.query('update job_attempts set status = $2, error = $3, finished_at = now() where id = $1', [attemptId, 'FAILED', error]);
-      const result = await client.query('update jobs set state = $2, error = $3, retry_at = case when $2 = \'RETRY_WAIT\' then now() + interval \'1 second\' else null end, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 returning *', [id, state, error]);
+      const result = await client.query('update jobs set state = $2, error = $3, consecutive_lease_failures = 0, retry_at = case when $2 = \'RETRY_WAIT\' then now() + interval \'1 second\' else null end, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 returning *', [id, state, error]);
       await client.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [id, retry ? 'job.retry_scheduled' : 'job.failed', { attemptId, retryable }]);
       await client.query('commit');
       return mapJob(result.rows[0] as Record<string, unknown>);
@@ -182,7 +281,8 @@ export class JobService {
     finally { scope?.close(); client.release(); }
   }
 
-  async defer(id: string, attemptId: string, error: unknown, retryDelayMs = 1_000): Promise<JobRecord> {
+  async defer(id: string, attemptId: string, error: unknown, retryDelayMs = 1_000): Promise<JobRecord> { assertOutsideCancellationCallback();
+    error = redact(error);
     const client = await this.db.connect();
     try {
       await client.query('begin');
@@ -195,7 +295,7 @@ export class JobService {
       const delay = Number.isSafeInteger(retryDelayMs) && retryDelayMs > 0 ? Math.min(retryDelayMs, 3_600_000) : 1_000;
       const retryAt = new Date(Date.now() + delay);
       await client.query('update job_attempts set status = $2, error = $3, finished_at = now() where id = $1', [attemptId, 'FAILED', error]);
-      const result = await client.query('update jobs set state = $2, error = $3, retry_at = $4, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 returning *', [id, 'RETRY_WAIT', error, retryAt]);
+      const result = await client.query('update jobs set state = $2, error = $3, consecutive_lease_failures = 0, retry_at = $4, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 returning *', [id, 'RETRY_WAIT', error, retryAt]);
       await client.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [id, 'job.deferred', { attemptId, retryDelayMs: delay }]);
       await client.query('commit');
       return mapJob(result.rows[0] as Record<string, unknown>);
@@ -203,24 +303,29 @@ export class JobService {
     finally { client.release(); }
   }
 
-  async requeue(id: string): Promise<void> { await this.db.query("update jobs set state = 'QUEUED', retry_at = null, updated_at = now() where id = $1 and state = 'RETRY_WAIT'", [id]); }
+  async requeue(id: string): Promise<void> { assertOutsideCancellationCallback(); await this.db.query("update jobs set state = 'QUEUED', retry_at = null, updated_at = now() where id = $1 and state = 'RETRY_WAIT'", [id]); }
 
-  async requeueTerminal(id: string): Promise<JobRecord> {
-    const updated = await this.db.query("update jobs set state = 'QUEUED', scheduled_at = now(), retry_at = null, result = null, error = null, progress = '{}'::jsonb, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 and state in ('FAILED','CANCELLED') returning *", [id]);
-    if (updated.rows[0]) {
-      await this.db.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [id, 'job.requeued', { reason: 'explicit_retry' }]);
-      return mapJob(updated.rows[0] as Record<string, unknown>);
-    }
-    const current = await this.get(id);
-    if (!current) throw new Error(`Job ${id} not found`);
-    return current;
+  async requeueTerminal(id: string): Promise<JobRecord> { assertOutsideCancellationCallback();
+    const client = await this.db.connect();
+    try {
+      await client.query('begin');
+      const selected = await client.query('select * from jobs where id=$1 for update', [id]);
+      const current = selected.rows[0];
+      if (!current) throw new Error(`Job ${id} not found`);
+      if (!['FAILED', 'CANCELLED'].includes(String(current.state))) { await client.query('commit'); return mapJob(current); }
+      const updated = await client.query("update jobs set state='QUEUED',scheduled_at=now(),retry_at=null,result=null,error=null,progress='{}'::jsonb,consecutive_lease_failures=0,lease_owner=null,lease_expires_at=null,updated_at=now() where id=$1 returning *", [id]);
+      await client.query('insert into job_events(job_id,event_type,details) values($1,$2,$3)', [id, 'job.requeued', { reason: 'explicit_retry', attemptCount: Number(current.attempt_count) }]);
+      await client.query('commit');
+      return mapJob(updated.rows[0]);
+    } catch (error) { await client.query('rollback'); throw error; }
+    finally { client.release(); }
   }
 
-  async requestCancel(id: string): Promise<void> {
-    await this.db.query("update jobs set state = case when state = 'RUNNING' then 'CANCEL_REQUESTED' else 'CANCELLED' end, retry_at = null, lease_owner = case when state = 'RUNNING' then lease_owner else null end, lease_expires_at = case when state = 'RUNNING' then lease_expires_at else null end, updated_at = now() where id = $1 and state in ('QUEUED','RUNNING','RETRY_WAIT')", [id]);
+  async requestCancel(id: string): Promise<void> { assertOutsideCancellationCallback();
+    await this.db.query("update jobs set state = case when state = 'RUNNING' then 'CANCEL_REQUESTED' else 'CANCELLED' end, retry_at = null, consecutive_lease_failures = case when state = 'RUNNING' then consecutive_lease_failures else 0 end, lease_owner = case when state = 'RUNNING' then lease_owner else null end, lease_expires_at = case when state = 'RUNNING' then lease_expires_at else null end, updated_at = now() where id = $1 and state in ('QUEUED','RUNNING','RETRY_WAIT')", [id]);
   }
 
-  async heartbeat(id: string, attemptId: string, leaseMs: number): Promise<JobHeartbeat> {
+  async heartbeat(id: string, attemptId: string, leaseMs: number): Promise<JobHeartbeat> { assertOutsideCancellationCallback();
     if (leaseMs <= 0) return 'STALE';
     const leaseExpires = new Date(Date.now() + leaseMs);
     const renewed = await this.db.query("update jobs j set lease_expires_at = $3, updated_at = now() where j.id = $1 and j.state = 'RUNNING' and exists (select 1 from job_attempts a where a.id = $2 and a.job_id = j.id and a.status = 'RUNNING' and a.attempt_number = j.attempt_count) returning j.id", [id, attemptId, leaseExpires]);
@@ -229,16 +334,16 @@ export class JobService {
     return cancellation.rowCount ? 'CANCEL_REQUESTED' : 'STALE';
   }
 
-  async updateProgress(id: string, attemptId: string, progress: unknown): Promise<boolean> {
+  async updateProgress(id: string, attemptId: string, progress: unknown): Promise<boolean> { assertOutsideCancellationCallback();
     const result = await this.db.query("update jobs set progress = $3, updated_at = now() where id = $1 and state = 'RUNNING' and attempt_count = (select attempt_number from job_attempts where id = $2 and job_id = $1 and status = 'RUNNING')", [id, attemptId, progress]);
     return Boolean(result.rowCount);
   }
 
-  async renewLease(id: string, attemptId: string, leaseMs: number): Promise<boolean> {
+  async renewLease(id: string, attemptId: string, leaseMs: number): Promise<boolean> { assertOutsideCancellationCallback();
     return (await this.heartbeat(id, attemptId, leaseMs)) === 'ACTIVE';
   }
 
-  async withCurrentAttemptFence<T>(id: string, attemptId: string, action: (scope: JobAttemptScope) => Promise<T>): Promise<JobAttemptFenceResult<T>> {
+  async withCurrentAttemptFence<T>(id: string, attemptId: string, action: (scope: JobAttemptScope) => Promise<T>): Promise<JobAttemptFenceResult<T>> { assertOutsideCancellationCallback();
     const client = await this.db.connect();
     let scope: ActiveJobAttemptScope | null = null;
     try {
@@ -264,7 +369,7 @@ export class JobService {
     } finally { scope?.close(); client.release(); }
   }
 
-  async succeedWithCurrentAttempt<T>(id: string, attemptId: string, action: (scope: JobAttemptScope) => Promise<T>): Promise<JobAttemptCommitResult<T>> {
+  async succeedWithCurrentAttempt<T>(id: string, attemptId: string, action: (scope: JobAttemptScope) => Promise<T>): Promise<JobAttemptCommitResult<T>> { assertOutsideCancellationCallback();
     const client = await this.db.connect();
     let scope: ActiveJobAttemptScope | null = null;
     try {
@@ -281,7 +386,7 @@ export class JobService {
       scope = new ActiveJobAttemptScope(id, attemptId, Number(active.attempt_number), client);
       const value = await action(scope);
       await client.query("update job_attempts set status = 'SUCCEEDED', finished_at = now() where id = $1", [attemptId]);
-      const updated = await client.query("update jobs set state = 'SUCCEEDED', result = $2, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 returning *", [id, value]);
+      const updated = await client.query("update jobs set state = 'SUCCEEDED', result = $2, consecutive_lease_failures = 0, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 returning *", [id, value]);
       await client.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [id, 'job.succeeded', { attemptId }]);
       await client.query('commit');
       return { executed: true, value, job: mapJob(updated.rows[0] as Record<string, unknown>) };
@@ -289,7 +394,7 @@ export class JobService {
     finally { scope?.close(); client.release(); }
   }
 
-  async cancelAttempt(id: string, attemptId: string, action?: (scope: JobAttemptScope) => Promise<void>): Promise<JobRecord> {
+  async cancelAttempt(id: string, attemptId: string, action?: (scope: JobAttemptScope) => Promise<void>): Promise<JobRecord> { assertOutsideCancellationCallback();
     const client = await this.db.connect();
     let scope: ActiveJobAttemptScope | null = null;
     try {
@@ -308,7 +413,7 @@ export class JobService {
         await action(scope);
       }
       await client.query("update job_attempts set status = 'CANCELLED', finished_at = now() where id = $1", [attemptId]);
-      const updated = await client.query("update jobs set state = 'CANCELLED', retry_at = null, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 returning *", [id]);
+      const updated = await client.query("update jobs set state = 'CANCELLED', retry_at = null, consecutive_lease_failures = 0, lease_owner = null, lease_expires_at = null, updated_at = now() where id = $1 returning *", [id]);
       await client.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [id, 'job.cancelled', { attemptId }]);
       await client.query('commit');
       return mapJob(updated.rows[0] as Record<string, unknown>);
@@ -316,11 +421,14 @@ export class JobService {
     finally { scope?.close(); client.release(); }
   }
 
-  async reconcileExpiredLeases(now = new Date(), cancel?: JobLeaseCancellationHandler): Promise<number> {
-    const expired = await this.db.query<{ id: string }>("select id from jobs where state in ('RUNNING','CANCEL_REQUESTED') and lease_expires_at < $1 order by id", [now]);
+  async reconcileExpiredLeases(now = new Date(), cancel?: JobLeaseCancellationHandler, options: JobLeaseRecoveryOptions = {}): Promise<number> { assertOutsideCancellationCallback();
+    if (options.types && !options.types.length) return 0;
+    const expired = await this.db.query<{ id: string }>(`select id from jobs where ($2::text[] is null or type=any($2::text[])) and (
+      (state in ('RUNNING','CANCEL_REQUESTED') and lease_expires_at < $1) or
+      (state='BLOCKED' and error->>'code'='LEASE_RECOVERY_OWNER_UNAVAILABLE' and consecutive_lease_failures >= $3)) order by id`, [now, options.types ?? null, 1]);
     let recovered = 0;
     for (const row of expired.rows) {
-      try { if (await this.reconcileExpiredLease(row.id, now, cancel)) recovered += 1; }
+      try { if (await this.reconcileExpiredLease(row.id, now, cancel, options)) recovered += 1; }
       catch {
         try { await this.db.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [row.id, 'job.lease_recovery_failed', { code: 'LEASE_RECOVERY_FAILED' }]); }
         catch { /* preserve isolation when diagnostics persistence is also unavailable */ }
@@ -329,33 +437,70 @@ export class JobService {
     return recovered;
   }
 
-  private async reconcileExpiredLease(id: string, now: Date, cancel?: JobLeaseCancellationHandler): Promise<boolean> {
+  private async reconcileExpiredLease(id: string, now: Date, cancel: JobLeaseCancellationHandler | undefined, options: JobLeaseRecoveryOptions): Promise<boolean> {
     const client = await this.db.connect();
-    let scope: ActiveJobAttemptScope | null = null;
+    let scope: ActiveJobAttemptScope | ActiveJobLeaseRecoveryScope | null = null;
     try {
       await client.query('begin');
-      const selected = await client.query("select * from jobs where id = $1 and state in ('RUNNING','CANCEL_REQUESTED') and lease_expires_at < $2 for update", [id, now]);
+      const selected = await client.query(`select * from jobs where id=$1 and ($3::text[] is null or type=any($3::text[])) and (
+        (state in ('RUNNING','CANCEL_REQUESTED') and lease_expires_at < $2) or
+        (state='BLOCKED' and error->>'code'='LEASE_RECOVERY_OWNER_UNAVAILABLE' and consecutive_lease_failures >= $4)) for update`, [id, now, options.types ?? null, 1]);
       const row = selected.rows[0] as Record<string, unknown> | undefined;
       if (!row) { await client.query('commit'); return false; }
-      const attempt = await client.query<{ id: string; attempt_number: number }>("select id, attempt_number from job_attempts where job_id = $1 and status = 'RUNNING' order by attempt_number desc limit 1", [id]);
+      const blocked = row.state === 'BLOCKED';
+      const attempt = await client.query<{ id: string; attempt_number: number }>('select id,attempt_number from job_attempts where job_id=$1 and attempt_number=$2 and status=$3', [id, Number(row.attempt_count), blocked ? 'FAILED' : 'RUNNING']);
       const active = attempt.rows[0];
       if (!active) { await client.query('commit'); return false; }
       const cancelled = row.state === 'CANCEL_REQUESTED';
       if (cancelled) {
         if (!cancel) { await client.query('commit'); return false; }
         scope = new ActiveJobAttemptScope(id, active.id, Number(active.attempt_number), client);
-        if (!(await cancel(mapJob(row), scope))) { await client.query('commit'); return false; }
+        if (!(await cancel(mapJob(row), scope))) { await client.query('rollback'); return false; }
+        await client.query("update job_attempts set status='CANCELLED',finished_at=now() where id=$1", [active.id]);
+        await client.query("update jobs set state='CANCELLED',consecutive_lease_failures=0,lease_owner=null,lease_expires_at=null,retry_at=null,updated_at=now() where id=$1", [id]);
+        await client.query('insert into job_events(job_id,event_type,details) values($1,$2,$3)', [id, 'job.cancelled', { attemptId: active.id }]);
+        await client.query('commit'); return true;
       }
-      await client.query("update job_attempts set status = $2, error = case when $2 = 'FAILED' then '{\"code\":\"LEASE_EXPIRED\"}'::jsonb else error end, finished_at = now() where id = $1", [active.id, cancelled ? 'CANCELLED' : 'FAILED']);
-      await client.query("update jobs set state = $2, lease_owner = null, lease_expires_at = null, retry_at = case when $2 = 'RETRY_WAIT' then now() else null end, updated_at = now() where id = $1", [id, cancelled ? 'CANCELLED' : 'RETRY_WAIT']);
-      await client.query('insert into job_events (job_id, event_type, details) values ($1, $2, $3)', [id, cancelled ? 'job.cancelled' : 'job.lease_recovered', {}]);
+      const consecutiveFailures = blocked ? Number(row.consecutive_lease_failures) : Math.min(Number(row.consecutive_lease_failures) + 1, MAX_CONSECUTIVE_LEASE_FAILURES);
+      const exhausted = consecutiveFailures >= MAX_CONSECUTIVE_LEASE_FAILURES;
+      const error = exhausted ? { code: 'LEASE_RETRY_EXHAUSTED', message: 'Three consecutive lease losses stopped automatic execution' } : { code: 'LEASE_EXPIRED', message: 'Job lease expired; execution is eligible for recovery' };
+      let handled = false;
+      if (options.recover) {
+        await client.query('savepoint lease_owner_recovery');
+        const recoveryScope = new ActiveJobLeaseRecoveryScope(mapJob(row), active.id, Number(active.attempt_number), client);
+        scope = recoveryScope;
+        const context: { failure?: Error } = {};
+        handled = (await cancellationCallback.run(context, () => options.recover!(mapJob(row), recoveryScope, { outcome: exhausted ? 'FAILED' : 'RETRY_WAIT', consecutiveFailures, limit: MAX_CONSECUTIVE_LEASE_FAILURES, error }))) === true;
+        if (context.failure) throw context.failure;
+        await recoveryScope.finish();
+        if (!handled) await client.query('rollback to savepoint lease_owner_recovery');
+        await client.query('release savepoint lease_owner_recovery');
+      }
+      if (blocked) {
+        if (!handled) { await client.query('rollback'); return false; }
+        const repairedState = exhausted ? 'FAILED' : 'RETRY_WAIT';
+        await client.query("update jobs set state=$2,error=$3,retry_at=case when $2='RETRY_WAIT' then now() else null end,updated_at=now() where id=$1", [id, repairedState, error]);
+        await client.query('insert into job_events(job_id,event_type,details) values($1,$2,$3)', [id, 'job.lease_owner_recovered', { attemptId: active.id, consecutiveFailures, outcome: repairedState }]);
+        await client.query('commit'); return true;
+      }
+      const refused = Boolean(options.recover) && !handled;
+      const state = refused || (exhausted && !handled) ? 'BLOCKED' : exhausted ? 'FAILED' : 'RETRY_WAIT';
+      const jobError = state === 'BLOCKED' ? { code: 'LEASE_RECOVERY_OWNER_UNAVAILABLE', message: 'Automatic execution stopped; owner recovery must be confirmed', attemptId: active.id, consecutiveFailures, limit: MAX_CONSECUTIVE_LEASE_FAILURES } : error;
+      await client.query("update job_attempts set status='FAILED',error=$2,finished_at=now() where id=$1", [active.id, { code: 'LEASE_EXPIRED' }]);
+      await client.query("update jobs set state=$2,error=$3,consecutive_lease_failures=$4,lease_owner=null,lease_expires_at=null,retry_at=case when $2='RETRY_WAIT' then now() else null end,updated_at=now() where id=$1", [id, state, jobError, consecutiveFailures]);
+      await client.query('insert into job_events(job_id,event_type,details) values($1,$2,$3)', [id, exhausted ? 'job.lease_retry_exhausted' : refused ? 'job.lease_recovery_blocked' : 'job.lease_recovered', { attemptId: active.id, attemptNumber: Number(active.attempt_number), consecutiveFailures, limit: MAX_CONSECUTIVE_LEASE_FAILURES, outcome: state }]);
       await client.query('commit');
       return true;
-    } catch (error) { await client.query('rollback'); throw error; }
-    finally { scope?.close(); client.release(); }
+    } catch (error) {
+      scope?.close();
+      if (scope instanceof ActiveJobLeaseRecoveryScope) await scope.drain();
+      await client.query('rollback');
+      throw error;
+    }
+    finally { scope?.close(); if (scope instanceof ActiveJobLeaseRecoveryScope) await scope.drain(); client.release(); }
   }
 
-  async attempts(jobId: string): Promise<Array<{ id: string; status: string; attempt_number: number }>> {
+  async attempts(jobId: string): Promise<Array<{ id: string; status: string; attempt_number: number }>> { assertOutsideCancellationCallback();
     const result = await this.db.query('select id, status, attempt_number from job_attempts where job_id = $1 order by attempt_number', [jobId]);
     return result.rows as Array<{ id: string; status: string; attempt_number: number }>;
   }

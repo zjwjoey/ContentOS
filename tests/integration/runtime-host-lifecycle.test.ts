@@ -166,9 +166,9 @@ test('shutdown cancels or drains restart callbacks across 20 start/stop cycles',
   const service = definition('setInterval(()=>{},1000);');
   const host = new RuntimeHost(hostOptions(root, 3671, service));
   const restart = host as unknown as { scheduleRestart: (definition: ServiceDefinition, delay: number, generation?: number) => void; restartTimers: Map<string, NodeJS.Timeout>; restartTasks: Set<Promise<void>>; processes: ProcessManager };
-  const startedPids: number[] = [];
+  const startedChildren: Array<import('node:child_process').ChildProcess> = [];
   const originalStart = restart.processes.start.bind(restart.processes);
-  restart.processes.start = async (...args) => { const child = await originalStart(...args); if (child.pid) startedPids.push(child.pid); return child; };
+  restart.processes.start = async (...args) => { const child = await originalStart(...args); startedChildren.push(child.child); return child; };
   try {
     for (let iteration = 0; iteration < 20; iteration += 1) {
       await host.start();
@@ -181,7 +181,7 @@ test('shutdown cancels or drains restart callbacks across 20 start/stop cycles',
       assert.equal(await host.store.read(), null);
       assert.equal(await host.store.readLock(), null);
       assert.equal(restart.processes.get('sample'), undefined);
-      assert.equal(startedPids.every((pid) => !isProcessAlive(pid)), true);
+      assert.equal(startedChildren.every((child) => child.exitCode !== null || child.signalCode !== null), true, 'every owned child must exit, irrespective of recycled numeric PIDs');
       assert.equal(budgetCount(host), 0);
       assert.equal(host.status().services[0]?.state, 'STOPPED');
     }
