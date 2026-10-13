@@ -1,12 +1,13 @@
 import { readdir, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, realpathSync } from 'node:fs';
 import { access as accessFile } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve, sep } from 'node:path';
 import { generateVideoThumbnail, probeMedia, type ProbeResult } from '../../../infrastructure/ffmpeg/src/index.js';
 import type { Pool } from 'pg';
 import type { LocalPathAccessService } from '../../local-path/src/index.js';
+import type { JobAttemptScope, JobLeaseRecoveryContext, JobQueryExecutor, JobRecord } from '../../job/src/index.js';
 
 export const LOCAL_VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi']);
 
@@ -68,7 +69,8 @@ export interface LocalMediaSourceOptions {
   pathAccess?: LocalPathAccessService;
 }
 
-function normalizedRoots(roots: string[]): string[] { return [...new Set(roots.map((root) => resolve(root.trim())).filter(Boolean))]; }
+function canonicalScanRoot(input: string): string { try { return realpathSync.native(resolve(input)); } catch { return resolve(input); } }
+function normalizedRoots(roots: string[]): string[] { return [...new Set(roots.map((root) => canonicalScanRoot(root.trim())).filter(Boolean))]; }
 function contains(root: string, candidate: string): boolean { const rootWithSep = root.endsWith(sep) ? root : `${root}${sep}`; return candidate.toLowerCase() === root.toLowerCase() || candidate.toLowerCase().startsWith(rootWithSep.toLowerCase()); }
 function publicRootId(root: string): string { return `local-${Buffer.from(root.toLowerCase()).toString('base64url').slice(0, 18)}`; }
 function orientation(width: number, height: number): LocalMediaAsset['orientation'] { if (width <= 0 || height <= 0) return 'UNKNOWN'; if (width / height > 1.05) return 'HORIZONTAL'; if (height / width > 1.05) return 'VERTICAL'; return 'SQUARE'; }
@@ -112,15 +114,15 @@ export class LocalMediaSourceService {
 
   authorizeRoot(input: string): { root: string; sourceRootId: string } {
     if (!input || input.includes('\0')) throw new Error('LOCAL_MEDIA_ROOT_INVALID');
-    const root = resolve(input);
-    const authorized = this.roots.find((candidate) => contains(candidate, root));
+    const root = canonicalScanRoot(input);
+    const authorized = this.roots.find((candidate) => contains(canonicalScanRoot(candidate), root));
     if (!authorized) throw new Error('LOCAL_MEDIA_ROOT_UNAUTHORIZED');
     return { root, sourceRootId: publicRootId(root) };
   }
 
-  async scan(input: { sourceRoot: string; recursive?: boolean; onProgress?: (progress: { discovered: number; analyzed: number }) => Promise<void> | void; signal?: AbortSignal }): Promise<LocalMediaScanResult> {
+  async scan(input: { sourceRoot: string; sourceRootId?: string; recursive?: boolean; onProgress?: (progress: { discovered: number; analyzed: number }) => Promise<void> | void; signal?: AbortSignal }): Promise<LocalMediaScanResult> {
     const authorized = this.pathAccess ? { root: await this.pathAccess.authorize(input.sourceRoot, 'MEDIA_ROOT'), sourceRootId: publicRootId(await this.pathAccess.canonicalize(input.sourceRoot)) } : this.authorizeRoot(input.sourceRoot);
-    const { root, sourceRootId } = authorized;
+    const root = authorized.root; const sourceRootId = input.sourceRootId || authorized.sourceRootId;
     const rootStat = await stat(root).catch(() => null);
     if (!rootStat?.isDirectory()) throw new Error('LOCAL_MEDIA_ROOT_NOT_FOUND');
     const files: LocalMediaAsset[] = [];
@@ -151,27 +153,56 @@ export class LocalMediaSourceService {
     return { sourceRootId, files, totalCount: files.length, availableCount: files.filter((file) => file.available).length, unavailableCount: files.filter((file) => !file.available).length };
   }
 
-  async createScan(input: { id: string; projectId?: string; workspaceId?: string; sourceRoot: string; recursive: boolean; sourceRootId?: string }): Promise<void> {
+  async prepareScanRegistration(input: { id: string; projectId?: string; workspaceId?: string; sourceRoot: string; recursive: boolean; sourceRootId?: string }): Promise<{ id: string; projectId?: string; workspaceId?: string; sourceRoot: string; sourceRootId: string; recursive: boolean }> {
     if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED');
     if ((input.projectId ? 1 : 0) + (input.workspaceId ? 1 : 0) !== 1) throw new Error('LOCAL_MEDIA_OWNER_REQUIRED');
     const authorized = this.pathAccess ? { root: await this.pathAccess.authorize(input.sourceRoot, 'MEDIA_ROOT'), sourceRootId: publicRootId(await this.pathAccess.canonicalize(input.sourceRoot)) } : this.authorizeRoot(input.sourceRoot);
-    await this.db.query('insert into local_media_scans (id, project_id, workspace_id, source_root, source_root_id, recursive, status) values ($1, $2, $3, $4, $5, $6, $7)', [input.id, input.projectId || null, input.workspaceId || null, authorized.root, input.sourceRootId || authorized.sourceRootId, input.recursive, 'QUEUED']);
+    return { ...input, sourceRoot: authorized.root, sourceRootId: input.sourceRootId || authorized.sourceRootId };
   }
 
-  async markScanRunning(scanId: string): Promise<void> { if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED'); await this.db.query("update local_media_scans set status = 'RUNNING', updated_at = now() where id = $1 and status = 'QUEUED'", [scanId]); }
-  async updateScanProgress(scanId: string, progress: { discovered: number; analyzed: number }): Promise<void> { if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED'); await this.db.query('update local_media_scans set progress = $2, updated_at = now() where id = $1', [scanId, progress]); }
+  async createPreparedScan(input: Awaited<ReturnType<LocalMediaSourceService['prepareScanRegistration']>>, executor?: JobQueryExecutor): Promise<void> {
+    if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED');
+    await (executor || this.db).query('insert into local_media_scans (id, project_id, workspace_id, source_root, source_root_id, recursive, status) values ($1, $2, $3, $4, $5, $6, $7)', [input.id, input.projectId || null, input.workspaceId || null, input.sourceRoot, input.sourceRootId, input.recursive, 'QUEUED']);
+  }
+
+  async createScan(input: Parameters<LocalMediaSourceService['prepareScanRegistration']>[0]): Promise<void> { await this.createPreparedScan(await this.prepareScanRegistration(input)); }
+
+  prepareScanOwnerRoot(sourceRoot: string): string { return this.authorizeRoot(sourceRoot).root; }
+
+  async assertScanJobLink(executor: JobQueryExecutor, job: JobRecord, scanId: string, sourceRoot: string, canonicalSourceRoot = sourceRoot): Promise<{ status: string; sourceRootId: string }> {
+    const row = (await executor.query<{ project_id: string | null; workspace_id: string | null; source_root: string; source_root_id: string; status: string }>('select project_id,workspace_id,source_root,source_root_id,status from local_media_scans where id=$1 for update', [scanId])).rows[0];
+    const payload = job.payload as { scanId?: unknown; sourceRoot?: unknown };
+    const ownerMatches = job.projectId ? row?.project_id === job.projectId && !row.workspace_id && (!job.workspaceId || job.workspaceId === `workspace-project-${job.projectId}`) : row?.workspace_id === job.workspaceId && !row.project_id;
+    if (!row || job.type !== 'LOCAL_MEDIA_SCAN' || !ownerMatches || (row.source_root !== sourceRoot && row.source_root !== canonicalSourceRoot) || payload.scanId !== scanId || payload.sourceRoot !== sourceRoot) throw Object.assign(new Error('Local scan does not match its Job owner'), { code: 'LOCAL_MEDIA_SCAN_OWNER_JOB_MISMATCH', retryable: false });
+    return { status: row.status, sourceRootId: row.source_root_id };
+  }
+
+  async markScanRunning(scanId: string, executor?: JobQueryExecutor): Promise<void> { if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED'); await (executor || this.db).query("update local_media_scans set status = 'RUNNING', updated_at = now() where id = $1 and status = 'QUEUED'", [scanId]); }
+  async updateScanProgress(scanId: string, progress: { discovered: number; analyzed: number }, executor?: JobQueryExecutor): Promise<void> { if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED'); await (executor || this.db).query('update local_media_scans set progress = $2, updated_at = now() where id = $1', [scanId, progress]); }
+
+  async prepareScanResult(result: LocalMediaScanResult): Promise<{ result: LocalMediaScanResult; fingerprints: string[] }> {
+    const fingerprints: string[] = [];
+    for (const file of result.files) fingerprints.push(await contentFingerprint(file.sourcePath, fallbackFingerprint(file)));
+    return { result, fingerprints };
+  }
 
   async completeScan(scanId: string, result: LocalMediaScanResult): Promise<void> {
+    await this.completePreparedScan(scanId, await this.prepareScanResult(result));
+  }
+
+  async completePreparedScan(scanId: string, prepared: Awaited<ReturnType<LocalMediaSourceService['prepareScanResult']>>, executor?: JobQueryExecutor): Promise<void> {
     if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED');
-    const client = await this.db.connect();
+    const result = prepared.result;
+    const client = executor || await this.db.connect();
     try {
-      await client.query('begin');
+      if (!executor) await client.query('begin');
       await client.query('delete from local_media_scan_files where scan_id = $1', [scanId]);
       const currentFileIds: string[] = [];
-      for (const file of result.files) {
+      for (const [index, file] of result.files.entries()) {
         const fileId = `${result.sourceRootId}:${file.relativePath}`;
         currentFileIds.push(fileId);
-        const fingerprint = await contentFingerprint(file.sourcePath, fallbackFingerprint(file));
+        const fingerprint = prepared.fingerprints[index];
+        if (!fingerprint) throw new Error('LOCAL_MEDIA_SCAN_FINGERPRINT_MISSING');
         await client.query('insert into local_media_scan_files (scan_id, file_id, file_name, relative_path, source_path, duration_ms, width, height, fps, format, codec, available, error_message, orientation, file_size, modified_at, tags, thumbnail_status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)', [scanId, fileId, file.fileName, file.relativePath, file.sourcePath, Math.round(file.durationMs), file.width, file.height, file.fps || null, file.format, file.codec || null, file.available, file.errorMessage || null, file.orientation, file.fileSize || null, file.modifiedAt || null, JSON.stringify(file.tags), 'PENDING']);
         await client.query(`insert into local_media_index (file_id, source_root_id, relative_path, file_name, duration_ms, width, height, fps, orientation, format, codec, file_size, modified_at, tags, availability, thumbnail_status, source_fingerprint)
           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'PENDING',$16)
@@ -179,11 +210,30 @@ export class LocalMediaSourceService {
       }
       await client.query('update local_media_index set availability = \'MISSING\', updated_at = now() where source_root_id = $1 and file_id <> all($2::text[]) and availability <> \'MISSING\'', [result.sourceRootId, currentFileIds]);
       await client.query("update local_media_scans set status = 'SUCCEEDED', progress = $2, scanned_at = now(), updated_at = now(), error = null where id = $1", [scanId, { discovered: result.totalCount, analyzed: result.totalCount, available: result.availableCount, unavailable: result.unavailableCount }]);
-      await client.query('commit');
-    } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
+      if (!executor) await client.query('commit');
+    } catch (error) { if (!executor) await client.query('rollback'); throw error; } finally { if (!executor) (client as import('pg').PoolClient).release(); }
   }
 
-  async failScan(scanId: string, error: unknown, status: 'FAILED' | 'CANCELLED' = 'FAILED'): Promise<void> { if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED'); await this.db.query('update local_media_scans set status = $2, error = $3, updated_at = now() where id = $1', [scanId, status, error]); }
+  async failScan(scanId: string, error: unknown, status: 'FAILED' | 'CANCELLED' | 'QUEUED' = 'FAILED', executor?: JobQueryExecutor): Promise<void> { if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED'); await (executor || this.db).query('update local_media_scans set status = $2, error = $3, updated_at = now() where id = $1', [scanId, status, error]); }
+
+  async recoverScanLeaseWithExecutor(scope: JobAttemptScope, job: JobRecord, context: JobLeaseRecoveryContext): Promise<boolean> {
+    if (job.type !== 'LOCAL_MEDIA_SCAN' || scope.jobId !== job.id) return false;
+    if (job.projectId && job.workspaceId && job.workspaceId !== `workspace-project-${job.projectId}`) return false;
+    const payload = job.payload as { scanId?: string; sourceRoot?: string; sourceRootId?: string };
+    if (!payload?.scanId || !payload.sourceRoot) return false;
+    const selected = await scope.query<{ source_root: string; source_root_id: string; status: string }>(`select source_root,source_root_id,status from local_media_scans
+      where id=$1 and (($2::text is not null and project_id=$2 and workspace_id is null)
+        or ($2::text is null and project_id is null and workspace_id=$3)) for update`, [payload.scanId, job.projectId, job.workspaceId]);
+    const scan = selected.rows[0];
+    if (!scan || !['QUEUED', 'RUNNING'].includes(scan.status)) return false;
+    // Legacy root IDs encode only a path prefix and cannot prove alias equivalence.
+    if (payload.sourceRoot !== scan.source_root || (payload.sourceRootId && payload.sourceRootId !== scan.source_root_id)) return false;
+    const updated = await scope.query(`update local_media_scans set status=$5,error=$6,updated_at=now()
+      where id=$1 and source_root=$2 and source_root_id=$7
+        and (($3::text is not null and project_id=$3 and workspace_id is null) or ($3::text is null and project_id is null and workspace_id=$4))
+        and status in ('QUEUED','RUNNING') returning id`, [payload.scanId, scan.source_root, job.projectId, job.workspaceId, context.outcome === 'FAILED' ? 'FAILED' : 'QUEUED', context.error, scan.source_root_id]);
+    return updated.rowCount === 1;
+  }
 
   async getScan(scanId: string, projectId?: string, workspaceId?: string): Promise<{ id: string; projectId: string; workspaceId: string; sourceRootId: string; sourceRoot: string; recursive: boolean; status: string; progress: Record<string, unknown>; error: unknown; files: LocalMediaAsset[] } | null> {
     if (!this.db) throw new Error('LOCAL_MEDIA_DATABASE_REQUIRED');

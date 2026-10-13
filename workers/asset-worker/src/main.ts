@@ -6,7 +6,7 @@ import { LocalStorageProvider } from '../../../packages/infrastructure/storage/s
 import { probeMedia } from '../../../packages/infrastructure/ffmpeg/src/index.js';
 import { createDatabase } from '../../../packages/database/src/index.js';
 import { loadConfig } from '../../../packages/config/src/index.js';
-import { createAssetJobHandler, createAssetLeaseCancellationHandler, type AssetHandlerDeps } from './asset-handler.js';
+import { createAssetJobHandler, createAssetLeaseCancellationHandler, createAssetLeaseRecoveryHandler, type AssetHandlerDeps } from './asset-handler.js';
 
 export interface AssetWorkerOptions extends AssetHandlerDeps { workerId?: string; reconcileIntervalMs?: number; pollIntervalMs?: number; concurrency?: number; }
 
@@ -24,7 +24,7 @@ class AssetWorkerRuntime extends WorkerRuntime {
 
 export function createAssetWorker(options?: AssetWorkerOptions): WorkerRuntime {
   if (!options) { const runtime = new WorkerRuntime('asset-worker'); runtime.register('asset.import', async () => ({ status: 'NOT_IMPLEMENTED_STAGE_2_BOOTSTRAP' })); return runtime; }
-  const runner = new JobRunner(options.jobs, options.workerId || 'asset-worker'); const handler = createAssetJobHandler(options); const concurrency = options.concurrency ?? 1; const recoveryIntervalMs = options.reconcileIntervalMs ?? 5_000; const pollIntervalMs = options.pollIntervalMs ?? 250; const cancellation = createAssetLeaseCancellationHandler(options.imports, options.storage); const consume = async (): Promise<void> => { const runnable = await options.jobs.listRunnable(['ASSET_IMPORT'], concurrency); await Promise.all(runnable.map((job) => runner.run(job.id, handler))); }; const runtime = new AssetWorkerRuntime(options.workerId || 'asset-worker', () => options.jobs.reconcileExpiredLeases(new Date(), cancellation), consume, recoveryIntervalMs, pollIntervalMs);
+  const runner = new JobRunner(options.jobs, options.workerId || 'asset-worker'); const handler = createAssetJobHandler(options); const concurrency = options.concurrency ?? 1; const recoveryIntervalMs = options.reconcileIntervalMs ?? 5_000; const pollIntervalMs = options.pollIntervalMs ?? 250; const cancellation = createAssetLeaseCancellationHandler(options.imports, options.storage); const recovery = createAssetLeaseRecoveryHandler(options.imports); const consume = async (): Promise<void> => { const runnable = await options.jobs.listRunnable(['ASSET_IMPORT'], concurrency); await Promise.all(runnable.map((job) => runner.run(job.id, handler))); }; const runtime = new AssetWorkerRuntime(options.workerId || 'asset-worker', () => options.jobs.reconcileExpiredLeases(new Date(), cancellation, { types: ['ASSET_IMPORT'], recover: recovery }), consume, recoveryIntervalMs, pollIntervalMs);
   runtime.register('asset.import', async (payload) => { const jobId = payload && typeof payload === 'object' ? (payload as { jobId?: unknown }).jobId : undefined; if (typeof jobId !== 'string' || !jobId) throw new Error('Asset delivery requires jobId'); return runner.run(jobId, handler); });
   runtime.register('asset.import.poll', async () => { const jobs = await options.jobs.listRunnable(['ASSET_IMPORT'], concurrency); return Promise.all(jobs.map((job) => runner.run(job.id, handler))); });
   return runtime;

@@ -5,10 +5,11 @@ import type { Pool } from 'pg';
 import type { LocalStorageProvider } from '../../../infrastructure/storage/src/index.js';
 import type { AssetCatalogService } from '../../asset/src/index.js';
 import type { LocalPathAccessService } from '../../local-path/src/index.js';
-import { JobService, type JobAttemptScope, type JobQueryExecutor, type JobRecord } from '../../job/src/index.js';
+import { JobService, type JobAttemptScope, type JobLeaseRecoveryContext, type JobQueryExecutor, type JobRecord } from '../../job/src/index.js';
 import { buildStoryboardVideoManifest, buildVideoManifest, type PlannerAsset } from './planner.js';
 import { validateEditManifest, type EditManifestV0 } from '../../../contracts/src/index.js';
 import { digestEditManifest } from './quick-edit.js';
+import { materialSourceFingerprint } from './script-editing-v3-service.js';
 
 export interface CreateVideoJobInput { projectId: string; videoAssetIds: string[]; voiceAssetId?: string; targetDurationMs: number; seed: number; subtitleText?: string; idempotencyKey?: string; directorRevisionId?: string; directorRevision?: number; directorBrief?: unknown; directorStoryboard?: unknown; plannerType?: 'RANDOM' | 'STORYBOARD'; storyboardScenes?: Array<{ sceneIndex: number; voiceoverText: string; durationHintSeconds: number; visualInstruction: string; assetKeywords: string[] }>; metadata?: { briefId?: string; scriptRevisionId?: string; storyboardRevisionId?: string }; }
 export interface VideoJobPayload extends Omit<CreateVideoJobInput, 'projectId'> { projectId?: string; workspaceId?: string; manifestId?: string; manifestRevision?: number; manifestDigest?: string; outputPath?: string; outputRoot?: string; }
@@ -106,15 +107,18 @@ export class VideoService {
   }
 
   async createManifestRenderJobForWorkspace(workspaceId: string, manifestId: string, idempotencySuffix?: string, renderOptions: Pick<VideoJobPayload, 'outputPath' | 'outputRoot'> = {}): Promise<JobRecord> {
-    const result = await this.db.query<{ revision: number; workspace_id: string; manifest: EditManifestV0; manifest_digest: string | null; project_id: string | null }>('select m.revision, m.workspace_id, m.manifest, m.manifest_digest, w.project_id from edit_manifests m join video_workspaces w on w.id=m.workspace_id where m.id = $1 and m.workspace_id = $2', [manifestId, workspaceId]);
+    return this.withTransaction((executor) => this.createManifestRenderJobForWorkspaceWithExecutor(executor, workspaceId, manifestId, idempotencySuffix, renderOptions));
+  }
+
+  async createManifestRenderJobForWorkspaceWithExecutor(executor: JobQueryExecutor, workspaceId: string, manifestId: string, idempotencySuffix?: string, renderOptions: Pick<VideoJobPayload, 'outputPath' | 'outputRoot'> = {}): Promise<JobRecord> {
+    const result = await executor.query<{ revision: number; workspace_id: string; manifest: EditManifestV0; manifest_digest: string | null; project_id: string | null }>('select m.revision, m.workspace_id, m.manifest, m.manifest_digest, w.project_id from edit_manifests m join video_workspaces w on w.id=m.workspace_id where m.id = $1 and m.workspace_id = $2', [manifestId, workspaceId]);
     const row = result.rows[0];
     if (!row) throw new Error('VIDEO_MANIFEST_NOT_FOUND');
     const manifestDigest = digestEditManifest(row.manifest);
     if (row.manifest_digest && row.manifest_digest !== manifestDigest) throw new Error('VIDEO_MANIFEST_DIGEST_CONFLICT');
-    if (!row.manifest_digest) await this.db.query('update edit_manifests set manifest_digest = $2 where id = $1 and manifest_digest is null', [manifestId, manifestDigest]);
+    if (!row.manifest_digest) await executor.query('update edit_manifests set manifest_digest = $2 where id = $1 and manifest_digest is null', [manifestId, manifestDigest]);
     const idempotencyKey = `video-render:workspace:${workspaceId}:${manifestId}:v${Number(row.revision)}${idempotencySuffix ? `:${idempotencySuffix}` : ''}`;
-    try { return await this.jobs.create({ id: `job-${randomUUID()}`, projectId: row.project_id, workspaceId, type: 'VIDEO_RENDER', payload: { workspaceId, manifestId, manifestRevision: Number(row.revision), manifestDigest, ...renderOptions } as VideoJobPayload, idempotencyKey, maxAttempts: 3 }); }
-    catch (error) { if ((error as { code?: string }).code === '23505') { const existing = await this.jobs.getByIdempotencyKey(idempotencyKey); if (existing) return existing; } throw error; }
+    return this.jobs.createIdempotentWithExecutor(executor, { id: `job-${randomUUID()}`, projectId: row.project_id, workspaceId, type: 'VIDEO_RENDER', payload: { workspaceId, manifestId, manifestRevision: Number(row.revision), manifestDigest, ...renderOptions } as VideoJobPayload, idempotencyKey, maxAttempts: 3 });
   }
 
   async planJob(job: JobRecord): Promise<VideoPlanResult> {
@@ -295,5 +299,111 @@ export class VideoService {
   async cancelCurrentRender(attempt: JobAttemptScope, diagnostics: unknown): Promise<number> {
     const result = await attempt.query("update renders set status = 'CANCELLED', diagnostics = $2, finished_at = now() where job_id = $1 and attempt_id = $3 and attempt_number = $4 and status = 'RUNNING' returning id", [attempt.jobId, diagnostics, attempt.attemptId, attempt.attemptNumber]);
     return result.rowCount || 0;
+  }
+
+  async recoverLeaseWithExecutor(scope: JobAttemptScope, job: JobRecord, context: JobLeaseRecoveryContext): Promise<boolean> {
+    if (scope.jobId !== job.id) return false;
+    const payload = job.payload && typeof job.payload === 'object' ? job.payload as Record<string, unknown> : {};
+    const workspaceId = job.workspaceId || (job.projectId ? projectWorkspaceId(job.projectId) : null);
+    const terminal = context.outcome === 'FAILED';
+    if (job.type === 'VIDEO_RENDER') {
+      if (!workspaceId || (job.projectId && job.workspaceId && job.workspaceId !== projectWorkspaceId(job.projectId)) || (payload.workspaceId && payload.workspaceId !== workspaceId) || (payload.projectId && payload.projectId !== job.projectId)) return false;
+      const associated = await scope.query<{ status: string; project_id: string | null; workspace_id: string | null; attempt_id: string | null; attempt_number: number | null }>('select status,project_id,workspace_id,attempt_id,attempt_number from renders where job_id=$1 for update', [job.id]);
+      if (associated.rows.some((row) => row.status === 'SUCCEEDED' || row.project_id !== job.projectId || row.workspace_id !== workspaceId || Number(row.attempt_number) > scope.attemptNumber || (Number(row.attempt_number) === scope.attemptNumber && row.attempt_id !== scope.attemptId) || (['RUNNING', 'VALIDATING'].includes(row.status) && (row.attempt_id !== scope.attemptId || Number(row.attempt_number) !== scope.attemptNumber)))) return false;
+      if (!associated.rows.length) {
+        if (payload.manifestId) {
+          const manifest = await scope.query('select id from edit_manifests where id=$1 and workspace_id=$2 and project_id is not distinct from $3', [payload.manifestId, workspaceId, job.projectId]);
+          if (!manifest.rowCount) return false;
+        } else if (!job.projectId || !Array.isArray(payload.videoAssetIds) || !payload.videoAssetIds.length) return false;
+      }
+      const changed = await scope.query<{ manifest_id: string; render_id: string; manifest: EditManifestV0 }>(`with changed as (
+        update renders set status=$5,diagnostics=$6,finished_at=case when $5='FAILED' then now() else null end
+          where job_id=$1 and ((attempt_id=$2 and attempt_number=$3 and status in ('RUNNING','VALIDATING','QUEUED','PLANNED'))
+            or (status in ('QUEUED','PLANNED') and (attempt_number is null or attempt_number<$3)))
+            and (($7::text is not null and project_id=$7) or ($7::text is null and workspace_id=$4))
+          returning id,manifest_id
+      ) select c.id as render_id,c.manifest_id,m.manifest from changed c join edit_manifests m on m.id=c.manifest_id`, [job.id, scope.attemptId, scope.attemptNumber, workspaceId, terminal ? 'FAILED' : 'QUEUED', context.error, job.projectId]);
+      if (terminal) {
+        for (const row of changed.rows) {
+          const planId = row.manifest.metadata?.editorialPlanId;
+          const sessionId = row.manifest.metadata?.v3SessionId;
+          if (planId) await scope.query(`update edit_script_plans set status='FAILED',updated_at=now()
+            where id::text=$1 and workspace_id=$3 and current_manifest_id=$2 and status='RENDERING'
+              and not exists (select 1 from renders where manifest_id=$2 and id<>$4 and status in ('RUNNING','SUCCEEDED'))`, [planId, row.manifest_id, workspaceId, row.render_id]);
+          if (sessionId) await scope.query(`update script_editing_v3_sessions set status='FAILED',updated_at=now()
+            where id=$1 and workspace_id=$3 and current_manifest_id=$2 and status='RENDERING'
+              and not exists (select 1 from renders where manifest_id=$2 and id<>$4 and status in ('RUNNING','SUCCEEDED'))`, [sessionId, row.manifest_id, workspaceId, row.render_id]);
+        }
+        const items = await scope.query<{ batch_id: string }>(`update edit_batch_items set state='FAILED',error=$3,updated_at=now()
+          where job_id=$1 and workspace_id=$2 and state in ('QUEUED','RUNNING','RENDERING') returning batch_id`, [job.id, workspaceId, context.error]);
+        for (const batchId of new Set(items.rows.map((item) => item.batch_id))) await this.refreshRecoveredBatch(scope, batchId);
+      }
+      return true;
+    }
+    if (job.type === 'EDIT_PREPARE_ITEM') {
+      const items = await scope.query<{ batch_id: string }>(`update edit_batch_items set state=$5,error=$6,updated_at=now()
+        where id=$1 and batch_id=$2 and workspace_id=$3 and prepare_job_id=$4 and job_id is null
+          and state in ('QUEUED','PREPARING','RUNNING') returning batch_id`, [payload.itemId || '', payload.batchId || '', workspaceId, job.id, terminal ? 'FAILED' : 'PREPARING', context.error]);
+      for (const batchId of new Set(items.rows.map((item) => item.batch_id))) await this.refreshRecoveredBatch(scope, batchId);
+      return true;
+    }
+    if (job.type === 'EDIT_EXPORT') {
+      await scope.query(`update edit_exports e set status=$5,error=$6,finished_at=case when $5='FAILED' then now() else null end
+        where e.id=$1 and e.batch_item_id=$2 and e.job_id=$3 and e.status in ('QUEUED','RUNNING')
+          and exists (select 1 from edit_batch_items i where i.id=e.batch_item_id and i.workspace_id=$4)`, [payload.exportId || '', payload.batchItemId || '', job.id, workspaceId, terminal ? 'FAILED' : 'QUEUED', context.error]);
+      return true;
+    }
+    if (job.type === 'EDIT_SCRIPT_PLAN') {
+      await scope.query(`update edit_script_plans set status=$4,updated_at=now()
+        where id::text=$1 and workspace_id=$2 and job_id=$3 and status in ('QUEUED','PLANNING')`, [payload.planId || '', workspaceId, job.id, terminal ? 'FAILED' : 'QUEUED']);
+      return true;
+    }
+    if (job.type === 'SHOT_DETECTION_V1') {
+      const run = (await scope.query<{ status: string; lease_authority: { jobId?: string; attemptId?: string; attemptNumber?: number } | null }>(`select r.status,r.lease_authority from script_editing_v3_shot_detection_runs r
+        join material_pool_snapshots s on s.id=r.snapshot_id
+        where r.id=$1 and r.snapshot_id=$2 and r.asset_id=$3 and r.source_fingerprint=$4 and s.workspace_id=$5 for update of r`, [payload.runId || '', payload.snapshotId || '', payload.assetId || '', payload.sourceFingerprint || '', workspaceId])).rows[0];
+      if (!run || !['QUEUED', 'RUNNING'].includes(run.status) || run.lease_authority?.jobId !== job.id || run.lease_authority.attemptId !== scope.attemptId || run.lease_authority.attemptNumber !== scope.attemptNumber) return false;
+      await scope.query(`update script_editing_v3_shot_detection_runs r set status=$6,error=$7,updated_at=now()
+        where r.id=$1 and r.snapshot_id=$2 and r.asset_id=$3 and r.source_fingerprint=$4 and r.status in ('QUEUED','RUNNING')
+          and exists (select 1 from material_pool_snapshots s where s.id=r.snapshot_id and s.workspace_id=$5)
+          and r.lease_authority->>'jobId'=$8 and r.lease_authority->>'attemptId'=$9 and r.lease_authority->>'attemptNumber'=$10`, [payload.runId || '', payload.snapshotId || '', payload.assetId || '', payload.sourceFingerprint || '', workspaceId, terminal ? 'FAILED' : 'QUEUED', context.error, job.id, scope.attemptId, String(scope.attemptNumber)]);
+      return true;
+    }
+    if (job.type === 'ANALYZE_ASSET_VISUAL') {
+      const source = (await scope.query<{ file_size: number | null; modified_at: string | null; duration_ms: number }>(`select i.file_size,i.modified_at,i.duration_ms
+        from material_pool_items i join material_pool_snapshots s on s.id=i.snapshot_id
+          where i.snapshot_id=$1 and i.asset_id=$2 and s.workspace_id=$3`, [payload.snapshotId || '', payload.assetId || '', workspaceId])).rows[0];
+      if (!source) return false;
+      const profile = (await scope.query<{ status: string; source_fingerprint: string; analysis_config: string; lease_authority: { jobId?: string; attemptId?: string; attemptNumber?: number } | null }>(`select status,source_fingerprint,
+        concat(model_name,':',model_version,':',prompt_version,':',analysis_version) as analysis_config,
+        profile->'leaseAuthority' as lease_authority from asset_visual_profiles where asset_id=$1 for update`, [payload.assetId || ''])).rows[0];
+      if (profile && profile.status !== 'PENDING') return false;
+      if (profile?.status === 'PENDING') {
+        const fingerprint = materialSourceFingerprint({ fileSize: source.file_size, modifiedAt: source.modified_at, durationMs: Number(source.duration_ms) });
+        if (profile.source_fingerprint !== fingerprint || profile.analysis_config !== payload.analysisConfig || profile.lease_authority?.jobId !== job.id || profile.lease_authority.attemptId !== scope.attemptId || profile.lease_authority.attemptNumber !== scope.attemptNumber) return false;
+        if (terminal) await scope.query(`update asset_visual_profiles set status='FAILED',error=$3,updated_at=now()
+          where asset_id=$1 and source_fingerprint=$2 and status='PENDING'
+            and profile->'leaseAuthority'->>'jobId'=$4 and profile->'leaseAuthority'->>'attemptId'=$5
+            and profile->'leaseAuthority'->>'attemptNumber'=$6`, [payload.assetId || '', fingerprint, context.error, job.id, scope.attemptId, String(scope.attemptNumber)]);
+      }
+      return true;
+    }
+    // These jobs only persist ready outputs; they have no durable in-progress owner row.
+    return ['GENERATE_REPRESENTATIVE_FRAMES', 'EDIT_V3_DRAFT_PREVIEW', 'IMPORT_JIANYING_DRAFT'].includes(job.type);
+  }
+
+  private async refreshRecoveredBatch(scope: JobQueryExecutor, batchId: string): Promise<void> {
+    await scope.query(`with summary as (
+      select b.total_count,count(i.id)::int as actual,
+        count(i.id) filter (where i.state='SUCCEEDED')::int as succeeded,
+        count(i.id) filter (where i.state='FAILED')::int as failed,
+        count(i.id) filter (where i.state in ('QUEUED','PREPARING','RENDERING','RUNNING'))::int as active
+        from edit_batches b left join edit_batch_items i on i.batch_id=b.id where b.id=$1 group by b.total_count
+    ) update edit_batches b set status=case
+        when s.actual<>s.total_count then 'FAILED' when s.active>0 then 'RUNNING'
+        when s.failed>0 and s.succeeded>0 then 'PARTIAL' when s.failed>0 then 'FAILED'
+        when s.succeeded=s.total_count and s.total_count>0 then 'SUCCEEDED' else b.status end,
+      succeeded_count=s.succeeded,failed_count=s.failed+greatest(s.total_count-s.actual,0),updated_at=now()
+      from summary s where b.id=$1`, [batchId]);
   }
 }

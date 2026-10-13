@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { JobAttemptScope, JobLeaseRecoveryContext, JobQueryExecutor, JobRecord } from '../../job/src/index.js';
+import { redact } from '../../../logging/src/index.js';
 import {
   assertPublisherRequestTransition,
   type PlatformCapabilityProfile,
@@ -318,6 +319,7 @@ export class PublisherService {
   assertTransition(from: PublisherRequestStatus, to: PublisherRequestStatus): void { assertPublisherRequestTransition(from, to); }
 
   async transitionRequest(id: string, to: PublisherRequestStatus, failure?: { code?: PublisherFailureCode | null; message?: string | null }, scope?: JobAttemptScope): Promise<PublisherRequest> {
+    const safeFailure = scope && failure ? redact(failure) as typeof failure : failure;
     const client: JobQueryExecutor = scope || await this.db.connect();
     try {
       if (!scope) await client.query('begin');
@@ -326,7 +328,7 @@ export class PublisherService {
       const from = String(current.rows[0].status) as PublisherRequestStatus;
       if (from === to) { if (!scope) await client.query('commit'); return mapRequest(current.rows[0] as Record<string, unknown>); }
       assertPublisherRequestTransition(from, to);
-      const updated = await client.query('update publisher_requests set status = $2, failure_code = $3, failure_message = $4, published_at = case when $2 = \'PUBLISHED\' then coalesce(published_at, now()) else published_at end, updated_at = now() where id = $1 returning *', [id, to, failure?.code || null, failure?.message || null]);
+      const updated = await client.query('update publisher_requests set status = $2, failure_code = $3, failure_message = $4, published_at = case when $2 = \'PUBLISHED\' then coalesce(published_at, now()) else published_at end, updated_at = now() where id = $1 returning *', [id, to, safeFailure?.code || null, safeFailure?.message || null]);
       if (!scope) await client.query('commit');
       return mapRequest(updated.rows[0] as Record<string, unknown>);
     } catch (error) { if (!scope) await rollback(client as PoolClient); throw error; }
@@ -353,7 +355,8 @@ export class PublisherService {
 
   async finishAttempt(id: string, input: FinishPublisherAttemptInput, scope?: JobAttemptScope): Promise<PublisherAttempt> {
     const executor: JobQueryExecutor = scope || this.db;
-    const result = await executor.query('update publisher_attempts set status = $2, failure_code = $3, failure_classification = $4, diagnostics = $5, finished_at = now() where id = $1 and status = $6 and ($7::text is null or (job_id=$7 and job_attempt_id=$8)) returning *', [id, input.status, input.failureCode || null, input.failureClassification || null, input.diagnostics || {}, 'RUNNING', scope?.jobId || null, scope?.attemptId || null]);
+    const diagnostic = scope ? redact(input.diagnostics || {}) : input.diagnostics || {};
+    const result = await executor.query('update publisher_attempts set status = $2, failure_code = $3, failure_classification = $4, diagnostics = $5, finished_at = now() where id = $1 and status = $6 and ($7::text is null or (job_id=$7 and job_attempt_id=$8)) returning *', [id, input.status, input.failureCode || null, input.failureClassification || null, diagnostic, 'RUNNING', scope?.jobId || null, scope?.attemptId || null]);
     if (!result.rowCount) throw new Error('Publisher attempt is not running or does not exist');
     return mapAttempt(result.rows[0] as Record<string, unknown>);
   }

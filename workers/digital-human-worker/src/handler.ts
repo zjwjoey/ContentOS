@@ -90,7 +90,7 @@ async function cancelGenerationAttempt(deps: DigitalHumanWorkerDependencies, job
 
 async function failGenerationAttempt(deps: DigitalHumanWorkerDependencies, job: JobRecord, attemptId: string, payload: ReturnType<typeof payloadOf>, error: unknown, fallbackCode: string): Promise<void> {
   const candidate = error as { code?: unknown; retryable?: unknown };
-  const diagnostic = { code: typeof candidate.code === 'string' ? candidate.code : fallbackCode, message: error instanceof Error ? redactText(error.message).slice(0, 200) : 'Digital Human generation failed' };
+  const diagnostic = { code: typeof candidate.code === 'string' ? redactText(candidate.code) : fallbackCode, message: error instanceof Error ? redactText(error.message).slice(0, 200) : 'Digital Human generation failed' };
   await deps.jobs.fail(job.id, attemptId, diagnostic, typeof candidate.retryable === 'boolean' ? candidate.retryable : true, async (scope) => {
     await deps.digitalHuman.assertGenerationJobLink(scope, job, payload.generationId, payload.kind);
     if (payload.kind === 'SPEECH') await deps.digitalHuman.failSpeech(payload.generationId, diagnostic, scope);

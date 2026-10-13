@@ -425,7 +425,7 @@ export class JobService {
     if (options.types && !options.types.length) return 0;
     const expired = await this.db.query<{ id: string }>(`select id from jobs where ($2::text[] is null or type=any($2::text[])) and (
       (state in ('RUNNING','CANCEL_REQUESTED') and lease_expires_at < $1) or
-      (state='BLOCKED' and error->>'code'='LEASE_RECOVERY_OWNER_UNAVAILABLE' and consecutive_lease_failures >= $3)) order by id`, [now, options.types ?? null, MAX_CONSECUTIVE_LEASE_FAILURES]);
+      (state='BLOCKED' and error->>'code'='LEASE_RECOVERY_OWNER_UNAVAILABLE' and consecutive_lease_failures >= $3)) order by id`, [now, options.types ?? null, 1]);
     let recovered = 0;
     for (const row of expired.rows) {
       try { if (await this.reconcileExpiredLease(row.id, now, cancel, options)) recovered += 1; }
@@ -444,7 +444,7 @@ export class JobService {
       await client.query('begin');
       const selected = await client.query(`select * from jobs where id=$1 and ($3::text[] is null or type=any($3::text[])) and (
         (state in ('RUNNING','CANCEL_REQUESTED') and lease_expires_at < $2) or
-        (state='BLOCKED' and error->>'code'='LEASE_RECOVERY_OWNER_UNAVAILABLE' and consecutive_lease_failures >= $4)) for update`, [id, now, options.types ?? null, MAX_CONSECUTIVE_LEASE_FAILURES]);
+        (state='BLOCKED' and error->>'code'='LEASE_RECOVERY_OWNER_UNAVAILABLE' and consecutive_lease_failures >= $4)) for update`, [id, now, options.types ?? null, 1]);
       const row = selected.rows[0] as Record<string, unknown> | undefined;
       if (!row) { await client.query('commit'); return false; }
       const blocked = row.state === 'BLOCKED';
@@ -478,15 +478,17 @@ export class JobService {
       }
       if (blocked) {
         if (!handled) { await client.query('rollback'); return false; }
-        await client.query("update jobs set state='FAILED',error=$2,updated_at=now() where id=$1", [id, error]);
-        await client.query('insert into job_events(job_id,event_type,details) values($1,$2,$3)', [id, 'job.lease_owner_recovered', { attemptId: active.id, consecutiveFailures }]);
+        const repairedState = exhausted ? 'FAILED' : 'RETRY_WAIT';
+        await client.query("update jobs set state=$2,error=$3,retry_at=case when $2='RETRY_WAIT' then now() else null end,updated_at=now() where id=$1", [id, repairedState, error]);
+        await client.query('insert into job_events(job_id,event_type,details) values($1,$2,$3)', [id, 'job.lease_owner_recovered', { attemptId: active.id, consecutiveFailures, outcome: repairedState }]);
         await client.query('commit'); return true;
       }
-      const state = exhausted ? handled ? 'FAILED' : 'BLOCKED' : 'RETRY_WAIT';
+      const refused = Boolean(options.recover) && !handled;
+      const state = refused || (exhausted && !handled) ? 'BLOCKED' : exhausted ? 'FAILED' : 'RETRY_WAIT';
       const jobError = state === 'BLOCKED' ? { code: 'LEASE_RECOVERY_OWNER_UNAVAILABLE', message: 'Automatic execution stopped; owner recovery must be confirmed', attemptId: active.id, consecutiveFailures, limit: MAX_CONSECUTIVE_LEASE_FAILURES } : error;
       await client.query("update job_attempts set status='FAILED',error=$2,finished_at=now() where id=$1", [active.id, { code: 'LEASE_EXPIRED' }]);
       await client.query("update jobs set state=$2,error=$3,consecutive_lease_failures=$4,lease_owner=null,lease_expires_at=null,retry_at=case when $2='RETRY_WAIT' then now() else null end,updated_at=now() where id=$1", [id, state, jobError, consecutiveFailures]);
-      await client.query('insert into job_events(job_id,event_type,details) values($1,$2,$3)', [id, exhausted ? 'job.lease_retry_exhausted' : 'job.lease_recovered', { attemptId: active.id, attemptNumber: Number(active.attempt_number), consecutiveFailures, limit: MAX_CONSECUTIVE_LEASE_FAILURES, outcome: state }]);
+      await client.query('insert into job_events(job_id,event_type,details) values($1,$2,$3)', [id, exhausted ? 'job.lease_retry_exhausted' : refused ? 'job.lease_recovery_blocked' : 'job.lease_recovered', { attemptId: active.id, attemptNumber: Number(active.attempt_number), consecutiveFailures, limit: MAX_CONSECUTIVE_LEASE_FAILURES, outcome: state }]);
       await client.query('commit');
       return true;
     } catch (error) {

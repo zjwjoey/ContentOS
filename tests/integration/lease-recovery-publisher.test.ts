@@ -37,7 +37,7 @@ async function fixture(type = 'PUBLISH') {
   return { db, jobs, publisher, projects, project, account, request, jobId, close: async () => { await db.end(); await admin.query(`drop schema "${schema}" cascade`); await admin.end(); } };
 }
 
-async function loseLease(f: Awaited<ReturnType<typeof fixture>>, recover: JobLeaseRecoveryHandler, ownerAttempt = true) {
+async function loseLease(f: Awaited<ReturnType<typeof fixture>>, recover: JobLeaseRecoveryHandler | undefined, ownerAttempt = true) {
   const claimed = await f.jobs.claim(f.jobId, 'crashed-worker', 30_000);
   assert.ok(claimed);
   if (ownerAttempt) {
@@ -46,7 +46,7 @@ async function loseLease(f: Awaited<ReturnType<typeof fixture>>, recover: JobLea
     await f.publisher.startAttempt({ requestId: f.request.request.id, revisionId: f.request.revision.id, operation: claimed.job.type === 'PUBLISH_RECONCILE' ? 'RECONCILE' : 'PUBLISH', jobId: f.jobId, jobAttemptId: claimed.attemptId });
   }
   await f.db.query("update jobs set lease_expires_at=now()-interval '1 second' where id=$1", [f.jobId]);
-  await f.jobs.reconcileExpiredLeases(new Date(), undefined, { types: [claimed.job.type], recover });
+  await f.jobs.reconcileExpiredLeases(new Date(), undefined, { types: [claimed.job.type], ...(recover ? { recover } : {}) });
   return claimed;
 }
 
@@ -80,18 +80,20 @@ test('Publisher recovery refuses confirmed PUBLISHED output and preserves it thr
     await f.publisher.transitionRequest(f.request.request.id, 'PUBLISHED');
     const before = await f.publisher.getRequest(f.request.request.id);
     const recover = createPublisherLeaseRecoveryHandler(f.publisher);
-    for (let count = 1; count <= 3; count += 1) { await loseLease(f, recover, false); if (count < 3) await f.jobs.requeue(f.jobId); }
+    await loseLease(f, recover, false);
     assert.equal((await f.jobs.get(f.jobId))?.state, 'BLOCKED');
+    assert.equal((await f.jobs.get(f.jobId))?.attemptCount, 1);
+    assert.equal(await f.jobs.claim(f.jobId, 'unsafe-replay', 30_000), null);
     await f.jobs.reconcileExpiredLeases(new Date(), undefined, { types: ['PUBLISH'], recover });
     assert.deepEqual(await f.publisher.getRequest(f.request.request.id), before);
     assert.equal((await f.publisher.listExternalPosts(f.request.request.id))[0]?.externalPostId, 'already-confirmed');
   } finally { await f.close(); }
 });
 
-test('Publisher BLOCKED recovery closes all abandoned owner attempts after its callback becomes available', async () => {
+test('Publisher exhausted legacy BLOCKED recovery closes abandoned attempts when its missing callback becomes available', async () => {
   const f = await fixture();
   try {
-    for (let count = 1; count <= 3; count += 1) { await loseLease(f, async () => false); if (count < 3) await f.jobs.requeue(f.jobId); }
+    for (let count = 1; count <= 3; count += 1) { await loseLease(f, undefined); if (count < 3) await f.jobs.requeue(f.jobId); }
     assert.equal((await f.jobs.get(f.jobId))?.state, 'BLOCKED');
     assert.equal((await f.publisher.listAttempts(f.request.request.id)).filter((attempt) => attempt.status === 'RUNNING').length, 3);
     const recover = createPublisherLeaseRecoveryHandler(f.publisher);
@@ -104,6 +106,27 @@ test('Publisher BLOCKED recovery closes all abandoned owner attempts after its c
     assert.equal(owner?.externalPosts.length, 0);
     assert.equal(await f.jobs.reconcileExpiredLeases(new Date(), undefined, { types: ['PUBLISH'], recover }), 0);
     assert.equal((await f.db.query("select id from job_events where job_id=$1 and event_type='job.lease_retry_exhausted'", [f.jobId])).rowCount, 1);
+  } finally { await f.close(); }
+});
+
+test('Publisher refusing owner pauses the first loss and resumes below the crash limit after authoritative repair', async () => {
+  const f = await fixture();
+  try {
+    await loseLease(f, async () => false);
+    assert.equal((await f.jobs.get(f.jobId))?.state, 'BLOCKED');
+    assert.equal((await f.jobs.get(f.jobId))?.attemptCount, 1);
+    assert.equal(await f.jobs.claim(f.jobId, 'unsafe-replay', 30_000), null);
+    const recover = createPublisherLeaseRecoveryHandler(f.publisher);
+    assert.equal(await f.jobs.reconcileExpiredLeases(new Date(), undefined, { types: ['PUBLISH'], recover }), 1);
+    assert.equal((await f.jobs.get(f.jobId))?.state, 'RETRY_WAIT');
+    assert.equal((await f.jobs.get(f.jobId))?.attemptCount, 1);
+    const owner = await f.publisher.getRequestAggregate(f.project.id, f.request.request.id);
+    assert.equal(owner?.request.status, 'RECONCILING');
+    assert.equal(owner?.attempts[0]?.status, 'UNKNOWN');
+    assert.equal(owner?.attempts[0]?.failureClassification, 'RECONCILIATION_REQUIRED');
+    assert.equal(owner?.nextAction, null);
+    assert.equal((await f.db.query('select consecutive_lease_failures from jobs where id=$1', [f.jobId])).rows[0].consecutive_lease_failures, 1);
+    assert.equal((await f.db.query("select id from job_events where job_id=$1 and event_type='job.lease_retry_exhausted'", [f.jobId])).rowCount, 0);
   } finally { await f.close(); }
 });
 
@@ -125,6 +148,20 @@ test('Publisher repairs a confirmed post before request completion without publi
   } finally { await worker.shutdown('test'); await f.close(); }
 });
 
+test('Publisher provider failure messages are redacted in the new fenced owner persistence path', async () => {
+  const f = await fixture();
+  const fake = new FakePublisherService('unused-fixture-profile');
+  fake.publish = async () => ({ status: 'FAILED', failure: { code: 'AUTH_EXPIRED', classification: 'HUMAN_ACTION_REQUIRED', message: 'https://user:fixture-url-secret@provider.invalid auth rejected password=fixture-password Bearer fixture-bearer' } });
+  const worker = createPublisherWorker({ service: f.publisher, jobs: f.jobs, projects: f.projects, assets: new AssetCatalogService(f.db), fakePublisher: fake });
+  try {
+    await worker.start(); assert.equal((await worker.execute('PUBLISH', { jobId: f.jobId }) as { state: string }).state, 'FAILED');
+    const owner = await f.publisher.getRequestAggregate(f.project.id, f.request.request.id);
+    assert.equal(owner?.request.failureCode, 'AUTH_EXPIRED'); assert.match(owner?.request.failureMessage || '', /auth rejected/); assert.match(owner?.request.failureMessage || '', /REDACTED/);
+    assert.doesNotMatch(JSON.stringify(owner), /fixture-url-secret|fixture-password|fixture-bearer/);
+    assert.doesNotMatch(JSON.stringify((await f.db.query('select error from jobs where id=$1', [f.jobId])).rows[0]), /fixture-url-secret|fixture-password|fixture-bearer/);
+  } finally { await worker.shutdown('test'); await f.close(); }
+});
+
 test('Publisher reconciliation repairs confirmed external truth without consulting an adapter that reports NOT_FOUND', async () => {
   const f = await fixture('PUBLISH_RECONCILE');
   let reconcileCalls = 0;
@@ -140,7 +177,9 @@ test('Publisher reconciliation repairs confirmed external truth without consulti
     const confirmed = await f.publisher.recordExternalPost({ requestId: f.request.request.id, accountId: f.account.id, platformId: 'fake-platform', externalPostId: 'confirmed-before-reconcile', externalUrl: null });
     const expired = await f.jobs.claim(f.jobId, 'crashed-reconcile', 30_000); assert.ok(expired);
     await f.db.query("update jobs set lease_expires_at=now()-interval '1 second' where id=$1", [f.jobId]);
-    await f.jobs.reconcileExpiredLeases(new Date(), undefined, { types: ['PUBLISH_RECONCILE'], recover: createPublisherLeaseRecoveryHandler(f.publisher) });
+    // The missing-callback legacy path permits this bounded replay; a registered
+    // refusing owner is separately verified to BLOCK on its first lease loss.
+    await f.jobs.reconcileExpiredLeases(new Date(), undefined, { types: ['PUBLISH_RECONCILE'] });
     assert.equal((await f.jobs.get(f.jobId))?.state, 'RETRY_WAIT');
     await worker.start();
     const result = await worker.execute('PUBLISH_RECONCILE', { jobId: f.jobId }) as { state: string };

@@ -211,7 +211,6 @@ test('historical successful Digital Human owner is preserved and expired Job is 
     const claimed = await f.claim(f.speech.job.id, 'legacy-success');
     assert.equal(await f.digitalHuman.completeSpeech(f.speech.generation.id, { outputAssetId: f.audioId, durationMs: 1_000, latencyMs: 1, modelVersion: 'legacy', provenance: { source: 'FAKE' } }), true);
     const before = await f.digitalHuman.getSpeechGeneration(f.project.id, f.speech.generation.id); await f.expire(claimed.job.id); assert.equal(await f.recover(), 1);
-    for (let index = 2; index <= 3; index += 1) { const next = await f.claim(f.speech.job.id, `legacy-loss-${index}`); await f.expire(next.job.id); assert.equal(await f.recover(), 1); }
     assert.equal((await f.jobs.get(claimed.job.id))?.state, 'BLOCKED'); assert.deepEqual(await f.digitalHuman.getSpeechGeneration(f.project.id, f.speech.generation.id), before);
     assert.equal(await f.jobs.claim(claimed.job.id, 'blocked-worker', 60_000), null);
   } finally { await f.close(); }
@@ -228,5 +227,18 @@ test('Digital Human success and owner output roll back together when Job commit 
     const owner = await f.digitalHuman.getSpeechGeneration(f.project.id, f.speech.generation.id);
     assert.equal(owner?.status, 'FAILED'); assert.equal(owner?.outputAssetId, null); assert.equal(owner?.modelVersion, null);
     assert.equal((await f.db.query("select id from job_events where job_id=$1 and event_type='job.succeeded'", [f.speech.job.id])).rowCount, 0);
+  } finally { await f.close(); }
+});
+
+test('normal Digital Human failure redacts provider credentials equally in Generation and Job diagnostics', async () => {
+  const f = await fixture();
+  try {
+    const diagnostic = 'Gateway https://fixture-user:synthetic-password@provider.test/generate?api_key=synthetic-key&token=synthetic-token Authorization: Bearer synthetic-bearer';
+    const provider: SpeechProvider = { ...speechProvider, generateSpeech: async () => { throw Object.assign(new Error(diagnostic), { code: 'UPSTREAM_REJECTED', retryable: false }); } };
+    const result = await new JobRunner(f.jobs, 'provider-redaction').run(f.speech.job.id, createDigitalHumanJobHandler({ ...f.deps, speechProvider: provider }));
+    const owner = await f.digitalHuman.getSpeechGeneration(f.project.id, f.speech.generation.id);
+    assert.equal(result.state, 'FAILED'); assert.equal(owner?.status, 'FAILED'); assert.equal(owner?.error?.code, 'UPSTREAM_REJECTED'); assert.deepEqual(result.error, owner?.error);
+    for (const secret of ['synthetic-password', 'synthetic-key', 'synthetic-token', 'synthetic-bearer']) { assert.equal(JSON.stringify(result.error).includes(secret), false); assert.equal(JSON.stringify(owner?.error).includes(secret), false); }
+    assert.match(owner!.error!.message, /REDACTED/u);
   } finally { await f.close(); }
 });

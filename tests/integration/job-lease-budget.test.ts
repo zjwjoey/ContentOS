@@ -145,6 +145,29 @@ test('missing owner blocks exhausted Job and same reconciler repairs it without 
   } finally { await f.close(); }
 });
 
+test('registered owner refusal blocks immediately and can resume safely without a fresh attempt or count', async () => {
+  const f = await fixture();
+  try {
+    const id = await f.create(); const active = await f.jobs.claim(id, 'crash', 30_000); assert.ok(active); await f.expire(id);
+    const refused: JobLeaseRecoveryHandler = async (job, scope, context) => { await f.owner(job, scope, context); return false; };
+    assert.equal(await f.recover(f.jobs, refused), 1);
+    assert.equal((await f.jobs.get(id))?.state, 'BLOCKED');
+    assert.equal(await f.streak(id), 1);
+    assert.equal(await f.jobs.claim(id, 'generic-retry', 30_000), null);
+    assert.equal((await f.jobs.fail(id, active.attemptId, { code: 'LATE_FAILURE' }, false)).state, 'BLOCKED');
+    assert.equal(await f.recover(f.jobs, refused), 0);
+    assert.equal((await f.db.query('select state from lease_owner_fixture where job_id=$1', [id])).rows[0].state, 'RUNNING');
+    assert.equal(await f.recover(), 1);
+    assert.equal((await f.jobs.get(id))?.state, 'RETRY_WAIT');
+    assert.equal(await f.streak(id), 1);
+    assert.equal((await f.jobs.attempts(id)).length, 1);
+    assert.equal((await f.db.query("select count(*)::int as n from job_events where job_id=$1 and event_type='job.lease_recovery_blocked'", [id])).rows[0].n, 1);
+    assert.equal((await f.db.query("select count(*)::int as n from job_events where job_id=$1 and event_type='job.lease_retry_exhausted'", [id])).rows[0].n, 0);
+    const replacement = await f.jobs.claim(id, 'confirmed-owner', 30_000); assert.ok(replacement);
+    assert.equal((await f.jobs.succeed(id, replacement.attemptId, {})).state, 'SUCCEEDED');
+  } finally { await f.close(); }
+});
+
 test('lease recovery scope rejects control, nested Job APIs, unawaited queries and use after close', async () => {
   const f = await fixture();
   try {
@@ -209,14 +232,15 @@ test('cancellation precedes crash exhaustion and owner type filtering excludes o
   } finally { await f.close(); }
 });
 
-test('migration 0053 is additive, constrained, reversible and reapplies without deleting history', async () => {
+test('lease metadata migrations are additive, constrained and reversible without deleting Job history', async () => {
   const f = await fixture();
   try {
     const id = await f.create(); await f.jobs.claim(id, 'existing', 30_000);
     await assert.rejects(f.db.query('update jobs set consecutive_lease_failures=-1 where id=$1', [id]));
     assert.equal((await migrateDown(f.db)).removed, 1);
+    assert.equal((await migrateDown(f.db)).removed, 1);
     assert.equal((await f.jobs.attempts(id)).length, 1);
-    assert.equal((await migrateUp(f.db)).applied, 1);
+    assert.equal((await migrateUp(f.db)).applied, 2);
     assert.equal(await f.streak(id), 0);
     assert.equal((await f.jobs.get(id))?.state, 'RUNNING');
   } finally { await f.close(); }

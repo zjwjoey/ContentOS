@@ -11,6 +11,7 @@ import { createDatabase } from '../../../packages/database/src/index.js';
 import { loadConfig } from '../../../packages/config/src/index.js';
 import { LocalPathAccessService } from '../../../packages/modules/local-path/src/index.js';
 import { createDraftPreviewJobHandler, createEditExportJobHandler, createEditPrepareJobHandler, createJianyingImportJobHandler, createLocalMediaScanJobHandler, createScriptPlanJobHandler, createShotDetectionJobHandler, createVisualAnalysisJobHandler, createVideoJobHandler, createVideoLeaseCancellationHandler, type VideoHandlerDeps } from './video-handler.js';
+import { createVideoLeaseRecoveryHandler, VIDEO_JOB_TYPES } from './lease-recovery.js';
 
 export interface VideoWorkerOptions extends VideoHandlerDeps { workerId?: string; reconcileIntervalMs?: number; pollIntervalMs?: number; concurrency?: number; }
 
@@ -163,10 +164,11 @@ export function createVideoWorker(options?: VideoWorkerOptions): WorkerRuntime {
     return videoCancellation(job, scope);
   };
   const consume = async (): Promise<void> => {
-    const runnable = await options.jobs.listRunnable(['VIDEO_RENDER', 'LOCAL_MEDIA_SCAN', 'EDIT_PREPARE_ITEM', 'EDIT_EXPORT', 'EDIT_SCRIPT_PLAN', 'ANALYZE_ASSET_VISUAL', 'GENERATE_REPRESENTATIVE_FRAMES', 'IMPORT_JIANYING_DRAFT', 'SHOT_DETECTION_V1', 'EDIT_V3_DRAFT_PREVIEW'], concurrency);
+    const runnable = await options.jobs.listRunnable([...VIDEO_JOB_TYPES], concurrency);
     await Promise.all(runnable.map((job) => runner.run(job.id, job.type === 'LOCAL_MEDIA_SCAN' ? localMediaHandler : job.type === 'EDIT_PREPARE_ITEM' ? prepareHandler : job.type === 'EDIT_EXPORT' ? exportHandler : job.type === 'EDIT_SCRIPT_PLAN' ? scriptPlanHandler : job.type === 'ANALYZE_ASSET_VISUAL' || job.type === 'GENERATE_REPRESENTATIVE_FRAMES' ? visualAnalysisHandler : job.type === 'IMPORT_JIANYING_DRAFT' ? jianyingImportHandler : job.type === 'SHOT_DETECTION_V1' ? shotDetectionHandler : job.type === 'EDIT_V3_DRAFT_PREVIEW' ? draftPreviewHandler : handler)));
   };
-  const reconcile = async (): Promise<void> => { await options.jobs.reconcileExpiredLeases(new Date(), recoverCancellation); await recoverEditWorkbenchItems(options, concurrency * 4); };
+  const recovery = createVideoLeaseRecoveryHandler(options);
+  const reconcile = async (): Promise<void> => { await options.jobs.reconcileExpiredLeases(new Date(), recoverCancellation, { types: VIDEO_JOB_TYPES, recover: recovery }); await recoverEditWorkbenchItems(options, concurrency * 4); };
   const runtime = new VideoWorkerRuntime(options.workerId || 'video-worker', reconcile, consume, reconcileIntervalMs, pollIntervalMs);
   runtime.register('video.render', async (payload) => {
     const jobId = payload && typeof payload === 'object' ? (payload as { jobId?: unknown }).jobId : undefined;
