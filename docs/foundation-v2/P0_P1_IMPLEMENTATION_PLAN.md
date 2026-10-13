@@ -18,3 +18,16 @@
 未授权项独立保留：改变 lease-loss retry/defer 预算需要兼容策略 ADR；历史 RUNNING 数据 drain/回填、真实 GPU/平台验收、付费外部调用、main合并。它们不阻止其他安全任务。若本轮能力不足或环境阻断，以真实缺口和复现命令记录，不能把未跑/skip算通过。可将通过验证的开发分支正常 push 触发 Actions；读到实际结果后才报告远端通过。
 
 执行中发现的阻断仍归入原任务：T03补上替代attempt清理部分结果及视觉adapter实际关键帧路径；T05依据英文Windows CI补上短路径身份验证、复制资源的UTF-8进程声明及首次建库独立预算（ADR021）；T08补上退出child的PID复用保护、历史诊断读取脱敏、模板迟到读取保护与模拟Review闭环。没有扩展成第二套架构或P2产品。具体提交、失败记录、最终门禁与后续决策见P0_P1_ACCEPTANCE_REPORT.md；基线审计保留改动前事实。
+
+## 2026-10-13 连续崩溃收尾计划
+
+用户授权先准备集成PR，再实施此前保留的连续失租策略；不合并main。继续使用原独立worktree/分支。
+
+| ID | 问题/目标与文件范围 | Contract/API/DB影响 | 测试与完成标准 | 回滚/提交 |
+| --- | --- | --- | --- | --- |
+| C01 | 将已验收87a02e0提交为面向integration/contentos-foundation-v2的草稿PR | 无业务变化；核验目标27d43854为祖先，已有21个后续提交 | 最新CI六项成功；PR明确基线、范围和未验收边界，关联聊天 | 关闭草稿不改分支；不merge |
+| C02 | Job独立连续失租预算、BLOCKED可补偿恢复及人工重试原子事件 | ADR022；0053仅新增非负默认0计数；additive typed recovery callback，固定第三次失租停止；旧business maxAttempts不重定义 | 重启/并发/heartbeat/fence、defer/人工reset、回调rollback/拒绝、安全scope、migration up/down | 先revert消费者/Job策略再down；不自动重开终态/删除历史；fix(p0) |
+| C03 | Asset/Video/Media/DigitalHuman/Publisher与无RUNNING占位owner接入恢复；堵住自动替代Job和迟到Provider反写 | 各owner公开executor ports与当前attempt scope；0054 nullable Video Shot lease_authority防跨Job覆盖，不改成功缓存threshold语义；外部未知状态保留对账、staged输入和remote ID | 实际隔离PG；domain+Job一致、完成结果保护、batch不绕预算、忽略abort晚结果及错误不复活；归属不明首次BLOCKED，无回填 | 撤消费者后0054/0053依次down，不重开终态、不删除业务记录或素材；fix(p0) |
+| C04 | 验收、正常push更新PR、维护报告 | 新test:lease-recovery纳入原full/CI；不加真实账号或付费调用 | focused/full/Intelligence/DigitalHuman/migration/runtime/build及完整CI；失败保留证据，最终报告区分legacy/真实资源边界 | docs/test提交；不绕CI、不mergemain |
+
+2026-10-13执行结果：C01–C04计划4项、实际完成4项。9fc02af源码的本地组合门禁及PR/push CI各6/6通过；Windows当前新包重新构建及安装/卸载/数据保留/clean render/restart和上传完成。回滚、旧owner/文件副作用与真实环境边界见CONTINUOUS_CRASH_RETRY_ACCEPTANCE.md；没有合并integration或main，原工作区/素材保留。

@@ -111,3 +111,9 @@
 具备准备面向 `integration/contentos-foundation-v2` 的集成PR条件：本轮安全范围已实现、提交、正常push并通过本地及远端验收。建议审查attempt fence、Windows进程资源准备和剩余策略/模块边界债务后集成，再安排真实环境验证；是否及何时合并main由用户决定。未创建PR或自动合并main，不把本轮8项完成等同所有P0/P1生产问题清零。
 
 收尾核对：原工作区仍为 `aa4a8907` 且只有原 `local-media/` 未跟踪；本轮临时测试数据库按精确data目录/端口/进程身份正常关闭并保留数据，无清理真实数据库或素材。基线审计、执行计划、进度与本报告均已维护；基线快照保持原事实。
+
+## 2026-10-13 后续授权
+
+已按用户授权顺序创建并更新集成[草稿PR #7](https://github.com/zjwjoey/ContentOS/pull/7)，目标integration/contentos-foundation-v2，不合并main；之后完成ADR-022、0053独立连续失租计数、0054共享镜头归属及各owner恢复。新实现5b18793，之后仅补锁观测测试至9fc02af，正常push。失租组合101/101、full391/391、迁移10/10、Intelligence53/53、数字人63/63、生产链12/12、closure32/32、Auto Edit28/28及20/20、V3.4 37/37、Runtime27/27、真实host14/14、生产浏览器11/11，无skip；冻结安装及质量/构建通过。当前源码[PR CI](https://github.com/zjwjoey/ContentOS/actions/runs/38349943709)及[push CI](https://github.com/zjwjoey/ContentOS/actions/runs/38349937000)各6/6 SUCCESS，Windows新源码重新打包、installer/portable smoke、安装/卸载/保留数据、clean render/restart及artifact上传通过。C01–C04计划4项、实际完成4项；后续收尾仅文档，不改变已验收实现，自动新CI与这里的两轮源码证据区分。
+
+详细策略、首次BLOCKED和可补偿修复、各owner行为、先红后绿/失败修复、剩余文件与旧owner边界，见[连续崩溃重试验收](CONTINUOUS_CRASH_RETRY_ACCEPTANCE.md)。0053/0054是本轮新增计数/authority，不是ADR-019分阶段owner激活；无历史drain/backfill。原上文2026-10-11的needsdecision和“未创建PR”是历史快照，已由本后续授权范围更新；未宣称真实GPU/付费模型/平台或全部P0/P1生产问题已解决。

@@ -1,5 +1,7 @@
 # P0/P1 开发进度
 
+2026-10-13跟进：已按用户授权顺序完成C01集成草稿[PR #7](https://github.com/zjwjoey/ContentOS/pull/7)、C02持久连续失租策略/0053、C03各owner恢复及0054共享镜头归属；目标integration/contentos-foundation-v2，不合并main。代码正常push至9fc02af（实现5b18793，后续只修订锁等待测试观测），独立ADR-022审查通过。C04本地验收：失租101/101、full391/391、migration10/10、Intelligence53/53、数字人63/63、Production12/12、closure32/32、Auto Edit28/28及20/20、V3.4 37/37、Runtime27/27、真实host14/14、生产浏览器11/11，均无skip；冻结安装与质量/构建通过。当前源码[PR CI](https://github.com/zjwjoey/ContentOS/actions/runs/38349943709)及[push CI](https://github.com/zjwjoey/ContentOS/actions/runs/38349937000)均6/6 SUCCESS，Windows当前新包安装/卸载/数据保留/clean render/restart及上传完成。C01–C04计划4项、完成4项；后续收尾仅文档，自动新CI不替代上述源码证据。owned临时PG按目录/端口/PID身份正常关闭，数据与原工作区保留。策略、失败修复与剩余边界见[连续崩溃重试验收](CONTINUOUS_CRASH_RETRY_ACCEPTANCE.md)。下文保留2026-10-11历史快照。
+
 2026-10-11。分支 `codex/foundation-v2-p0-p1-hardening`；起点 `9f95f1d`，原工作区未提交素材受保护。
 
 阶段 A 已完成首轮实际审计与隔离。冻结安装、format/lint/typecheck/build、Windows runtime 23/23、desktop manager 2/2、隔离 migration matrix 10/10 通过。首次 focused suite 的 public schema 前置缺失已识别，使用既有安全 reset 脚本在本轮新建测试库初始化后重跑。
