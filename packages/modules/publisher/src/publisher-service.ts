@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
+import type { JobAttemptScope, JobLeaseRecoveryContext, JobQueryExecutor, JobRecord } from '../../job/src/index.js';
 import {
   assertPublisherRequestTransition,
   type PlatformCapabilityProfile,
@@ -170,8 +171,9 @@ export class PublisherService {
     return result.rows.map((row) => mapAccount(row as Record<string, unknown>));
   }
 
-  async updateAccountStatus(projectId: string, accountId: string, status: PublisherAccountStatus): Promise<PublisherAccount> {
-    const result = await this.db.query('update publisher_accounts set status = $3, updated_at = now() where project_id = $1 and id = $2 returning *', [projectId, accountId, status]);
+  async updateAccountStatus(projectId: string, accountId: string, status: PublisherAccountStatus, scope?: JobAttemptScope): Promise<PublisherAccount> {
+    const executor: JobQueryExecutor = scope || this.db;
+    const result = await executor.query('update publisher_accounts set status = $3, updated_at = now() where project_id = $1 and id = $2 returning *', [projectId, accountId, status]);
     if (!result.rows[0]) throw new Error('Publisher account not found for project');
     return mapAccount(result.rows[0] as Record<string, unknown>);
   }
@@ -315,26 +317,27 @@ export class PublisherService {
 
   assertTransition(from: PublisherRequestStatus, to: PublisherRequestStatus): void { assertPublisherRequestTransition(from, to); }
 
-  async transitionRequest(id: string, to: PublisherRequestStatus, failure?: { code?: PublisherFailureCode | null; message?: string | null }): Promise<PublisherRequest> {
-    const client = await this.db.connect();
+  async transitionRequest(id: string, to: PublisherRequestStatus, failure?: { code?: PublisherFailureCode | null; message?: string | null }, scope?: JobAttemptScope): Promise<PublisherRequest> {
+    const client: JobQueryExecutor = scope || await this.db.connect();
     try {
-      await client.query('begin');
+      if (!scope) await client.query('begin');
       const current = await client.query('select * from publisher_requests where id = $1 for update', [id]);
-      if (!current.rowCount) throw new Error('Publisher request not found');
+      if (!current.rows[0]) throw new Error('Publisher request not found');
       const from = String(current.rows[0].status) as PublisherRequestStatus;
-      if (from === to) { await client.query('commit'); return mapRequest(current.rows[0] as Record<string, unknown>); }
+      if (from === to) { if (!scope) await client.query('commit'); return mapRequest(current.rows[0] as Record<string, unknown>); }
       assertPublisherRequestTransition(from, to);
-      const updated = await client.query('update publisher_requests set status = $2, failure_code = $3, failure_message = $4, published_at = case when $2 = \'PUBLISHED\' then now() else published_at end, updated_at = now() where id = $1 returning *', [id, to, failure?.code || null, failure?.message || null]);
-      await client.query('commit');
+      const updated = await client.query('update publisher_requests set status = $2, failure_code = $3, failure_message = $4, published_at = case when $2 = \'PUBLISHED\' then coalesce(published_at, now()) else published_at end, updated_at = now() where id = $1 returning *', [id, to, failure?.code || null, failure?.message || null]);
+      if (!scope) await client.query('commit');
       return mapRequest(updated.rows[0] as Record<string, unknown>);
-    } catch (error) { await rollback(client); throw error; }
-    finally { client.release(); }
+    } catch (error) { if (!scope) await rollback(client as PoolClient); throw error; }
+    finally { if (!scope) (client as PoolClient).release(); }
   }
 
-  async startAttempt(input: StartPublisherAttemptInput): Promise<PublisherAttempt> {
-    const client = await this.db.connect();
+  async startAttempt(input: StartPublisherAttemptInput, scope?: JobAttemptScope): Promise<PublisherAttempt> {
+    if (scope && (input.jobId !== scope.jobId || input.jobAttemptId !== scope.attemptId)) throw new Error('Publisher attempt does not match its Job scope');
+    const client: JobQueryExecutor = scope || await this.db.connect();
     try {
-      await client.query('begin');
+      if (!scope) await client.query('begin');
       const request = await client.query('select id from publisher_requests where id = $1 for update', [input.requestId]);
       if (!request.rowCount) throw new Error('Publisher request not found');
       const revision = await client.query('select id from publisher_request_revisions where id = $1 and request_id = $2', [input.revisionId, input.requestId]);
@@ -342,14 +345,15 @@ export class PublisherService {
       const next = await client.query<{ attempt_number: number }>('select coalesce(max(attempt_number), 0) + 1 as attempt_number from publisher_attempts where request_id = $1', [input.requestId]);
       const id = `publisher-attempt-${randomUUID()}`;
       const result = await client.query('insert into publisher_attempts (id, request_id, revision_id, job_id, job_attempt_id, attempt_number, operation, status) values ($1, $2, $3, $4, $5, $6, $7, $8) returning *', [id, input.requestId, input.revisionId, input.jobId, input.jobAttemptId, Number(next.rows[0]?.attempt_number || 1), input.operation, 'RUNNING']);
-      await client.query('commit');
+      if (!scope) await client.query('commit');
       return mapAttempt(result.rows[0] as Record<string, unknown>);
-    } catch (error) { await rollback(client); throw error; }
-    finally { client.release(); }
+    } catch (error) { if (!scope) await rollback(client as PoolClient); throw error; }
+    finally { if (!scope) (client as PoolClient).release(); }
   }
 
-  async finishAttempt(id: string, input: FinishPublisherAttemptInput): Promise<PublisherAttempt> {
-    const result = await this.db.query('update publisher_attempts set status = $2, failure_code = $3, failure_classification = $4, diagnostics = $5, finished_at = now() where id = $1 and status = $6 returning *', [id, input.status, input.failureCode || null, input.failureClassification || null, input.diagnostics || {}, 'RUNNING']);
+  async finishAttempt(id: string, input: FinishPublisherAttemptInput, scope?: JobAttemptScope): Promise<PublisherAttempt> {
+    const executor: JobQueryExecutor = scope || this.db;
+    const result = await executor.query('update publisher_attempts set status = $2, failure_code = $3, failure_classification = $4, diagnostics = $5, finished_at = now() where id = $1 and status = $6 and ($7::text is null or (job_id=$7 and job_attempt_id=$8)) returning *', [id, input.status, input.failureCode || null, input.failureClassification || null, input.diagnostics || {}, 'RUNNING', scope?.jobId || null, scope?.attemptId || null]);
     if (!result.rowCount) throw new Error('Publisher attempt is not running or does not exist');
     return mapAttempt(result.rows[0] as Record<string, unknown>);
   }
@@ -377,10 +381,32 @@ export class PublisherService {
     return result.rows[0] ? mapExternalPost(result.rows[0] as Record<string, unknown>) : null;
   }
 
-  async recordExternalPost(input: RecordPublisherExternalPostInput): Promise<PublisherExternalPost> {
-    const inserted = await this.db.query('insert into publisher_external_posts (id, request_id, account_id, platform_id, external_post_id, external_url) values ($1, $2, $3, $4, $5, $6) on conflict (account_id, platform_id, external_post_id) do nothing returning *', [`publisher-external-${randomUUID()}`, input.requestId, input.accountId, input.platformId, input.externalPostId, input.externalUrl]);
-    const result = inserted.rows[0] ? inserted : await this.db.query('select * from publisher_external_posts where account_id = $1 and platform_id = $2 and external_post_id = $3', [input.accountId, input.platformId, input.externalPostId]);
+  async recordExternalPost(input: RecordPublisherExternalPostInput, scope?: JobAttemptScope): Promise<PublisherExternalPost> {
+    const executor: JobQueryExecutor = scope || this.db;
+    if (scope) {
+      const linked = await scope.query("select a.id from publisher_attempts a join publisher_requests p on p.id=a.request_id join publisher_accounts c on c.id=p.account_id where a.request_id=$1 and a.job_id=$2 and a.job_attempt_id=$3 and a.status='RUNNING' and p.account_id=$4 and c.platform_id=$5", [input.requestId, scope.jobId, scope.attemptId, input.accountId, input.platformId]);
+      if (!linked.rowCount) throw new Error('Publisher external post does not match its current attempt');
+    }
+    const inserted = await executor.query('insert into publisher_external_posts (id, request_id, account_id, platform_id, external_post_id, external_url) values ($1, $2, $3, $4, $5, $6) on conflict (account_id, platform_id, external_post_id) do nothing returning *', [`publisher-external-${randomUUID()}`, input.requestId, input.accountId, input.platformId, input.externalPostId, input.externalUrl]);
+    const result = inserted.rows[0] ? inserted : await executor.query('select * from publisher_external_posts where account_id = $1 and platform_id = $2 and external_post_id = $3', [input.accountId, input.platformId, input.externalPostId]);
     if (String(result.rows[0]?.request_id) !== input.requestId) throw new Error('External post id is already bound to another request');
     return mapExternalPost(result.rows[0] as Record<string, unknown>);
+  }
+
+  async recoverLeaseWithExecutor(scope: JobAttemptScope, job: JobRecord, context: JobLeaseRecoveryContext): Promise<boolean> {
+    if (!['PUBLISH', 'PUBLISH_RECONCILE'].includes(job.type) || scope.jobId !== job.id || !job.projectId) return false;
+    const payload = job.payload as Partial<PublisherPublishJobPayload> | null;
+    if (!payload || payload.jobId !== job.id || payload.projectId !== job.projectId || !payload.requestId || !payload.revisionId || !payload.accountId) return false;
+    const request = await scope.query("select p.id,p.status,p.current_revision_id from publisher_requests p join publisher_accounts c on c.id=p.account_id where p.id=$1 and p.project_id=$2 and p.account_id=$3 and p.current_revision_id=$4 and c.platform_id=$5 for update of p", [payload.requestId, job.projectId, payload.accountId, payload.revisionId, payload.platformId]);
+    const current = request.rows[0];
+    if (!current || ['PUBLISHED', 'CANCELLED'].includes(String(current.status))) return false;
+    const posts = await scope.query('select id from publisher_external_posts where request_id=$1 limit 1', [payload.requestId]);
+    if (posts.rowCount) return false; // Confirmed external truth requires success reconciliation, never a fabricated failure.
+    const attempt = await scope.query("select id from publisher_attempts where request_id=$1 and revision_id=$2 and job_id=$3 and job_attempt_id=$4 and status='RUNNING'", [payload.requestId, payload.revisionId, job.id, scope.attemptId]);
+    if (!attempt.rowCount || !['PUBLISHING', 'RECONCILING'].includes(String(current.status))) return false;
+    const exhausted = context.outcome === 'FAILED';
+    await scope.query("update publisher_attempts set status='UNKNOWN',failure_code='UNKNOWN_EXTERNAL_STATE',failure_classification=$3,diagnostics=$4,finished_at=coalesce(finished_at,now()) where job_id=$1 and request_id=$2 and status='RUNNING'", [job.id, payload.requestId, exhausted ? 'HUMAN_ACTION_REQUIRED' : 'RECONCILIATION_REQUIRED', { code: context.error.code, outcome: 'LEASE_EXPIRED_UNKNOWN_EXTERNAL_STATE', jobId: job.id, jobAttemptId: scope.attemptId, consecutiveFailures: context.consecutiveFailures, limit: context.limit }]);
+    await scope.query("update publisher_requests set status='RECONCILING',failure_code='UNKNOWN_EXTERNAL_STATE',failure_message=$2,next_retry_at=null,updated_at=now() where id=$1", [payload.requestId, exhausted ? 'Worker recovery budget exhausted; external publication state requires human reconciliation' : 'Worker lease expired; external publication state requires reconciliation before any new publish']);
+    return true;
   }
 }

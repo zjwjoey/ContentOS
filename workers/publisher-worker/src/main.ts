@@ -1,6 +1,6 @@
 import { basename, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
-import { JobRunner, type JobService, type JobRecord } from '../../../packages/modules/job/src/index.js';
+import { JobRunner, type JobService, type JobRecord, type JobAttemptScope, type JobLeaseRecoveryHandler } from '../../../packages/modules/job/src/index.js';
 import { PublisherService, FakePublisherService, FakePublisherSimulationService, PublisherAdapterRegistry, type CredentialProvider, type PublisherPublishJobPayload } from '../../../packages/modules/publisher/src/index.js';
 import { ProjectService } from '../../../packages/modules/project/src/index.js';
 import { AssetCatalogService } from '../../../packages/modules/asset/src/index.js';
@@ -30,9 +30,35 @@ class PublisherHandlerError extends Error {
   constructor(public readonly code: string, message: string, public readonly retryable: boolean) { super(message); }
 }
 
+export function createPublisherLeaseRecoveryHandler(service: PublisherService): JobLeaseRecoveryHandler {
+  return async (job, scope, context) => {
+    if (job.type === PUBLISH_VALIDATE_ACCOUNT_JOB_TYPE) return true; // Account validation has no durable RUNNING owner record.
+    return service.recoverLeaseWithExecutor(scope, job, context);
+  };
+}
+
+async function publisherWrite<T>(options: PublisherWorkerOptions, job: JobRecord, attemptId: string, action: (scope: JobAttemptScope) => Promise<T>): Promise<T> {
+  const result = await options.jobs.withCurrentAttemptFence(job.id, attemptId, action);
+  if (!result.executed) throw new PublisherHandlerError('PUBLISH_ATTEMPT_STALE', 'Publisher attempt no longer owns the durable Job', false);
+  return result.value;
+}
+
+class PublisherWorkerRuntime extends WorkerRuntime {
+  private timer: NodeJS.Timeout | null = null;
+  private active: Promise<void> | null = null;
+  constructor(workerId: string, private readonly options: PublisherWorkerOptions) { super(workerId); }
+  private reconcile(): Promise<void> {
+    if (this.active) return this.active;
+    this.active = this.options.jobs.reconcileExpiredLeases(new Date(), undefined, { types: ['PUBLISH', PUBLISH_RECONCILE_JOB_TYPE, PUBLISH_VALIDATE_ACCOUNT_JOB_TYPE], recover: createPublisherLeaseRecoveryHandler(this.options.service) }).then(() => undefined).catch(() => { console.error(JSON.stringify({ level: 'error', event: 'publisher.lease_recovery_failed', code: 'LEASE_RECOVERY_FAILED' })); }).finally(() => { this.active = null; });
+    return this.active;
+  }
+  override async start(): Promise<void> { await this.reconcile(); await super.start(); this.timer = setInterval(() => { void this.reconcile(); }, 5_000); this.timer.unref(); }
+  override async shutdown(signal: string): Promise<void> { if (this.timer) clearInterval(this.timer); this.timer = null; if (this.active) await this.active; await super.shutdown(signal); }
+}
+
 function payloadFromJob(job: JobRecord): PublisherPublishJobPayload {
   const value = job.payload as Partial<PublisherPublishJobPayload>;
-  if (!value || typeof value !== 'object' || !value.projectId || !value.requestId || !value.revisionId || !value.accountId || !value.platformId || value.jobId !== job.id) throw new PublisherHandlerError('INVALID_PUBLISH_PAYLOAD', 'Publisher Job payload is invalid', false);
+  if (!value || typeof value !== 'object' || value.projectId !== job.projectId || !value.projectId || !value.requestId || !value.revisionId || !value.accountId || !value.platformId || value.jobId !== job.id) throw new PublisherHandlerError('INVALID_PUBLISH_PAYLOAD', 'Publisher Job payload is invalid', false);
   return {
     projectId: value.projectId,
     requestId: value.requestId,
@@ -90,20 +116,21 @@ async function syncProjectPublishingStatus(service: PublisherService, projects: 
   await projects.syncPublishingStatus(projectId, { hasPublishableAsset: publishableAssets.length > 0, publishedRequestCount: summary.statusCounts.PUBLISHED });
 }
 
-async function executeValidateAccount(options: PublisherWorkerOptions, job: JobRecord): Promise<unknown> {
+async function executeValidateAccount(options: PublisherWorkerOptions, job: JobRecord, jobAttemptId: string): Promise<unknown> {
   const payload = job.payload as { projectId?: unknown; accountId?: unknown };
   if (typeof payload.projectId !== 'string' || typeof payload.accountId !== 'string' || payload.projectId !== job.projectId) throw new PublisherHandlerError('INVALID_ACCOUNT_VALIDATION_PAYLOAD', 'Publisher account validation payload is invalid', false);
-  const account = await options.service.getAccount(payload.projectId, payload.accountId);
+  const projectId = payload.projectId;
+  const account = await options.service.getAccount(projectId, payload.accountId);
   if (!account) throw new PublisherHandlerError('PUBLISH_ACCOUNT_NOT_FOUND', 'Publisher account is not available', false);
-  if (account.platformId === 'fake-platform') { await options.service.updateAccountStatus(payload.projectId, account.id, 'READY'); return { status: 'VALIDATED', accountId: account.id, platformId: account.platformId }; }
-  if (!options.realAdaptersEnabled || !options.adapterRegistry || !options.credentials) { await options.service.updateAccountStatus(payload.projectId, account.id, 'UNVERIFIED'); throw new PublisherHandlerError('PUBLISH_ADAPTER_UNAVAILABLE', 'Real publisher adapter is disabled or not composed', false); }
+  if (account.platformId === 'fake-platform') { await publisherWrite(options, job, jobAttemptId, (scope) => options.service.updateAccountStatus(projectId, account.id, 'READY', scope)); return { status: 'VALIDATED', accountId: account.id, platformId: account.platformId }; }
+  if (!options.realAdaptersEnabled || !options.adapterRegistry || !options.credentials) { await publisherWrite(options, job, jobAttemptId, (scope) => options.service.updateAccountStatus(projectId, account.id, 'UNVERIFIED', scope)); throw new PublisherHandlerError('PUBLISH_ADAPTER_UNAVAILABLE', 'Real publisher adapter is disabled or not composed', false); }
   let credential;
-  try { credential = await options.credentials.resolve(account.credentialRef); } catch { await options.service.updateAccountStatus(payload.projectId, account.id, 'REAUTH_REQUIRED'); throw new PublisherHandlerError('PUBLISH_AUTH_REQUIRED', 'Publisher credentials require human attention', false); }
+  try { credential = await options.credentials.resolve(account.credentialRef); } catch { await publisherWrite(options, job, jobAttemptId, (scope) => options.service.updateAccountStatus(projectId, account.id, 'REAUTH_REQUIRED', scope)); throw new PublisherHandlerError('PUBLISH_AUTH_REQUIRED', 'Publisher credentials require human attention', false); }
   const profileDir = join(options.profileRoot || join(process.cwd(), 'storage', 'publisher-profiles'), account.platformId, account.profileKey);
   await mkdir(profileDir, { recursive: true });
   const auth = await options.adapterRegistry.get(account.platformId as PublisherPlatformId).authenticate({ profileDir, accountId: account.id, credentialRef: account.credentialRef, credential });
-  if (auth.status === 'AUTHENTICATED') { await options.service.updateAccountStatus(payload.projectId, account.id, 'READY'); return { status: 'VALIDATED', accountId: account.id, platformId: account.platformId }; }
-  await options.service.updateAccountStatus(payload.projectId, account.id, auth.failure?.classification === 'HUMAN_ACTION_REQUIRED' ? 'REAUTH_REQUIRED' : 'UNVERIFIED');
+  if (auth.status === 'AUTHENTICATED') { await publisherWrite(options, job, jobAttemptId, (scope) => options.service.updateAccountStatus(projectId, account.id, 'READY', scope)); return { status: 'VALIDATED', accountId: account.id, platformId: account.platformId }; }
+  await publisherWrite(options, job, jobAttemptId, (scope) => options.service.updateAccountStatus(projectId, account.id, auth.failure?.classification === 'HUMAN_ACTION_REQUIRED' ? 'REAUTH_REQUIRED' : 'UNVERIFIED', scope));
   throw new PublisherHandlerError('PUBLISH_AUTH_FAILED', auth.failure?.message || 'Publisher authentication failed', false);
 }
 
@@ -123,11 +150,17 @@ async function executePublish(options: PublisherWorkerOptions, job: JobRecord, j
     await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'PUBLISHED', requestId: payload.requestId };
   }
+  if (aggregate.externalPosts.length) {
+    if (!['PUBLISHING', 'RECONCILING'].includes(aggregate.request.status)) throw new PublisherHandlerError('PUBLISH_CONFIRMED_POST_REQUIRES_REPAIR', 'Confirmed external publication requires local state repair before any new publish', false);
+    await publisherWrite(options, job, jobAttemptId, (scope) => service.transitionRequest(payload.requestId, 'PUBLISHED', undefined, scope));
+    await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
+    return { status: 'PUBLISHED', requestId: payload.requestId, externalPostId: aggregate.externalPosts[0]!.externalPostId };
+  }
   if (aggregate.request.status === 'SCHEDULED') {
     if (aggregate.request.desiredPublishAt && new Date(aggregate.request.desiredPublishAt).getTime() > Date.now()) {
       return { status: 'SCHEDULED', requestId: payload.requestId };
     }
-    await service.transitionRequest(payload.requestId, 'QUEUED');
+    await publisherWrite(options, job, jobAttemptId, (scope) => service.transitionRequest(payload.requestId, 'QUEUED', undefined, scope));
   }
   const account = await service.getAccount(payload.projectId, payload.accountId);
   if (!account || account.platformId !== payload.platformId) throw new PublisherHandlerError('PUBLISH_ACCOUNT_NOT_FOUND', 'Publisher account is not available', false);
@@ -142,46 +175,57 @@ async function executePublish(options: PublisherWorkerOptions, job: JobRecord, j
   const cover = aggregate.revision.coverAssetId ? await assets.getProjectAsset(payload.projectId, aggregate.revision.coverAssetId) : null;
   if (aggregate.revision.coverAssetId && (!cover || cover.lifecycle !== 'READY')) throw new PublisherHandlerError('PUBLISH_COVER_ASSET_NOT_READY', 'Publisher cover Asset is not a current READY asset for this project', false);
 
-  if (aggregate.request.status === 'FAILED') await service.transitionRequest(payload.requestId, 'QUEUED');
+  if (aggregate.request.status === 'FAILED') await publisherWrite(options, job, jobAttemptId, (scope) => service.transitionRequest(payload.requestId, 'QUEUED', undefined, scope));
   const current = await service.getRequest(payload.requestId);
-  if (current?.status === 'QUEUED') await service.transitionRequest(payload.requestId, 'PUBLISHING');
+  if (current?.status === 'QUEUED') await publisherWrite(options, job, jobAttemptId, (scope) => service.transitionRequest(payload.requestId, 'PUBLISHING', undefined, scope));
   else if (current?.status !== 'PUBLISHING') throw new PublisherHandlerError('PUBLISH_REQUEST_NOT_QUEUEABLE', `Publisher request is ${current?.status || 'missing'}`, false);
 
-  const attempt = await service.startAttempt({ requestId: payload.requestId, revisionId: payload.revisionId, operation: 'PUBLISH', jobId: job.id, jobAttemptId });
+  const attempt = await publisherWrite(options, job, jobAttemptId, (scope) => service.startAttempt({ requestId: payload.requestId, revisionId: payload.revisionId, operation: 'PUBLISH', jobId: job.id, jobAttemptId }, scope));
   const snapshot = { requestId: payload.requestId, idempotencyKey: aggregate.request.idempotencyKey, assetId: aggregate.revision.assetId, assetSha256: asset.checksum, ...(options.storage ? { mediaPath: options.storage.objectPath(asset.storageKey) } : {}), ...(cover && options.storage ? { coverPath: options.storage.objectPath(cover.storageKey), coverSha256: cover.checksum } : {}), title: aggregate.revision.title, description: aggregate.revision.description, ...(aggregate.revision.hashtags.length ? { hashtags: aggregate.revision.hashtags } : {}) };
   let result: PublishResult;
   try { result = await executeAdapterPublish(options, account, asset, snapshot); }
   catch (error) {
-    await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'RETRYABLE', diagnostics: { code: 'HANDLER_EXCEPTION' } });
-    await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN', message: 'Publisher adapter failed before returning a normalized result' });
+    await publisherWrite(options, job, jobAttemptId, async (scope) => {
+      await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'RETRYABLE', diagnostics: { code: 'HANDLER_EXCEPTION' } }, scope);
+      await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN', message: 'Publisher adapter failed before returning a normalized result' }, scope);
+    });
     throw new PublisherHandlerError('PUBLISH_ADAPTER_ERROR', error instanceof Error ? error.message : 'Publisher adapter failed', true);
   }
 
   if (result.status === 'PUBLISHED' && result.externalPostId) {
+    const externalPostId = result.externalPostId;
     try {
-      await service.recordExternalPost({ requestId: payload.requestId, accountId: account.id, platformId: account.platformId, externalPostId: result.externalPostId, externalUrl: null });
+      await publisherWrite(options, job, jobAttemptId, (scope) => service.recordExternalPost({ requestId: payload.requestId, accountId: account.id, platformId: account.platformId, externalPostId, externalUrl: null }, scope));
     } catch (error) {
       if (error instanceof Error && error.message.includes('already bound')) {
-        await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_CONFLICT' } });
-        await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN', message: 'External post identity conflict requires human action' });
+        await publisherWrite(options, job, jobAttemptId, async (scope) => {
+          await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_CONFLICT' } }, scope);
+          await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN', message: 'External post identity conflict requires human action' }, scope);
+        });
         throw new PublisherHandlerError('PUBLISH_EXTERNAL_POST_CONFLICT', 'External post identity conflict requires human action', false);
       }
-      await service.finishAttempt(attempt.id, { status: 'UNKNOWN', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_PERSISTENCE_UNKNOWN' } });
-      await service.transitionRequest(payload.requestId, 'RECONCILING', { code: 'UNKNOWN_EXTERNAL_STATE', message: 'External post persistence is uncertain; reconciliation is required' });
+      await publisherWrite(options, job, jobAttemptId, async (scope) => {
+        await service.finishAttempt(attempt.id, { status: 'UNKNOWN', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_PERSISTENCE_UNKNOWN' } }, scope);
+        await service.transitionRequest(payload.requestId, 'RECONCILING', { code: 'UNKNOWN_EXTERNAL_STATE', message: 'External post persistence is uncertain; reconciliation is required' }, scope);
+      });
       const reconcileJob = await ensureReconcileJob(service, jobs, payload);
       await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
       return { status: 'RECONCILING', requestId: payload.requestId, reconcileJobId: reconcileJob.id };
     }
-    await service.finishAttempt(attempt.id, { status: 'SUCCEEDED', diagnostics: { outcome: 'PUBLISHED' } });
-    await service.transitionRequest(payload.requestId, 'PUBLISHED');
+    await publisherWrite(options, job, jobAttemptId, async (scope) => {
+      await service.finishAttempt(attempt.id, { status: 'SUCCEEDED', diagnostics: { outcome: 'PUBLISHED' } }, scope);
+      await service.transitionRequest(payload.requestId, 'PUBLISHED', undefined, scope);
+    });
     await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'PUBLISHED', requestId: payload.requestId, externalPostId: result.externalPostId };
   }
 
   const failure = result.failure;
   if (result.status === 'UNKNOWN_EXTERNAL_STATE') {
-    await service.finishAttempt(attempt.id, { status: 'UNKNOWN', failureCode: failure?.code || 'UNKNOWN_EXTERNAL_STATE', failureClassification: failure?.classification || 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'UNKNOWN_EXTERNAL_STATE' } });
-    await service.transitionRequest(payload.requestId, 'RECONCILING', { code: failure?.code || 'UNKNOWN_EXTERNAL_STATE', message: failure?.message || 'External state requires reconciliation' });
+    await publisherWrite(options, job, jobAttemptId, async (scope) => {
+      await service.finishAttempt(attempt.id, { status: 'UNKNOWN', failureCode: failure?.code || 'UNKNOWN_EXTERNAL_STATE', failureClassification: failure?.classification || 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'UNKNOWN_EXTERNAL_STATE' } }, scope);
+      await service.transitionRequest(payload.requestId, 'RECONCILING', { code: failure?.code || 'UNKNOWN_EXTERNAL_STATE', message: failure?.message || 'External state requires reconciliation' }, scope);
+    });
     const reconcileJob = await ensureReconcileJob(service, jobs, payload);
     await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'RECONCILING', requestId: payload.requestId, reconcileJobId: reconcileJob.id };
@@ -189,8 +233,10 @@ async function executePublish(options: PublisherWorkerOptions, job: JobRecord, j
 
   const code = failure?.code || 'UNKNOWN';
   const classification = failure?.classification || 'TERMINAL';
-  await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: code, failureClassification: classification, diagnostics: { outcome: 'FAILED' } });
-  await service.transitionRequest(payload.requestId, 'FAILED', { code, message: failure?.message || 'Publisher failed' });
+  await publisherWrite(options, job, jobAttemptId, async (scope) => {
+    await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: code, failureClassification: classification, diagnostics: { outcome: 'FAILED' } }, scope);
+    await service.transitionRequest(payload.requestId, 'FAILED', { code, message: failure?.message || 'Publisher failed' }, scope);
+  });
   await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
   throw new PublisherHandlerError(code, failure?.message || 'Publisher failed', isRetryable(classification));
 }
@@ -204,58 +250,74 @@ async function executeReconcile(options: PublisherWorkerOptions, job: JobRecord,
     await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'PUBLISHED', requestId: payload.requestId };
   }
+  if (aggregate.externalPosts.length) {
+    if (!['PUBLISHING', 'RECONCILING'].includes(aggregate.request.status)) throw new PublisherHandlerError('RECONCILE_CONFIRMED_POST_REQUIRES_REPAIR', 'Confirmed external publication requires local state repair before adapter reconciliation', false);
+    await publisherWrite(options, job, jobAttemptId, (scope) => service.transitionRequest(payload.requestId, 'PUBLISHED', undefined, scope));
+    await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
+    return { status: 'PUBLISHED', requestId: payload.requestId, externalPostId: aggregate.externalPosts[0]!.externalPostId };
+  }
   const account = await service.getAccount(payload.projectId, payload.accountId);
   if (!account || account.platformId !== payload.platformId) throw new PublisherHandlerError('RECONCILE_ACCOUNT_NOT_FOUND', 'Publisher account is not available', false);
   if (aggregate.request.status !== 'RECONCILING') throw new PublisherHandlerError('RECONCILE_REQUEST_NOT_READY', `Publisher request is ${aggregate.request.status}`, false);
 
-  const attempt = await service.startAttempt({ requestId: payload.requestId, revisionId: payload.revisionId, operation: 'RECONCILE', jobId: job.id, jobAttemptId });
+  const attempt = await publisherWrite(options, job, jobAttemptId, (scope) => service.startAttempt({ requestId: payload.requestId, revisionId: payload.revisionId, operation: 'RECONCILE', jobId: job.id, jobAttemptId }, scope));
   let result;
   try { result = await executeAdapterReconcile(options, account, aggregate.request.idempotencyKey); }
   catch (error) {
-    await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'RETRYABLE', diagnostics: { code: 'RECONCILE_HANDLER_EXCEPTION' } });
+    await publisherWrite(options, job, jobAttemptId, (scope) => service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'RETRYABLE', diagnostics: { code: 'RECONCILE_HANDLER_EXCEPTION' } }, scope));
     throw new PublisherHandlerError('RECONCILE_ADAPTER_ERROR', error instanceof Error ? error.message : 'Publisher reconciliation failed', true);
   }
 
   if (result.status === 'PUBLISHED' && result.externalPostId) {
+    const externalPostId = result.externalPostId;
     try {
-      await service.recordExternalPost({ requestId: payload.requestId, accountId: account.id, platformId: account.platformId, externalPostId: result.externalPostId, externalUrl: null });
+      await publisherWrite(options, job, jobAttemptId, (scope) => service.recordExternalPost({ requestId: payload.requestId, accountId: account.id, platformId: account.platformId, externalPostId, externalUrl: null }, scope));
     } catch (error) {
       if (error instanceof Error && error.message.includes('already bound')) {
-        await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_CONFLICT' } });
-        await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN', message: 'External post identity conflict requires human action' });
+        await publisherWrite(options, job, jobAttemptId, async (scope) => {
+          await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_CONFLICT' } }, scope);
+          await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN', message: 'External post identity conflict requires human action' }, scope);
+        });
         throw new PublisherHandlerError('PUBLISH_EXTERNAL_POST_CONFLICT', 'External post identity conflict requires human action', false);
       }
-      await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_PERSISTENCE_RETRY' } });
+      await publisherWrite(options, job, jobAttemptId, (scope) => service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'EXTERNAL_POST_PERSISTENCE_RETRY' } }, scope));
       throw new PublisherHandlerError('RECONCILE_EXTERNAL_POST_PERSISTENCE', 'External post persistence failed during reconciliation', true);
     }
-    await service.finishAttempt(attempt.id, { status: 'SUCCEEDED', diagnostics: { outcome: 'PUBLISHED' } });
-    await service.transitionRequest(payload.requestId, 'PUBLISHED');
+    await publisherWrite(options, job, jobAttemptId, async (scope) => {
+      await service.finishAttempt(attempt.id, { status: 'SUCCEEDED', diagnostics: { outcome: 'PUBLISHED' } }, scope);
+      await service.transitionRequest(payload.requestId, 'PUBLISHED', undefined, scope);
+    });
     await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'PUBLISHED', requestId: payload.requestId, externalPostId: result.externalPostId };
   }
   if (result.status === 'NOT_FOUND') {
-    await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'TERMINAL', diagnostics: { outcome: 'NOT_FOUND' } });
-    await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN_EXTERNAL_STATE', message: 'Reconciliation confirmed no external post was found' });
+    await publisherWrite(options, job, jobAttemptId, async (scope) => {
+      await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'TERMINAL', diagnostics: { outcome: 'NOT_FOUND' } }, scope);
+      await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN_EXTERNAL_STATE', message: 'Reconciliation confirmed no external post was found' }, scope);
+    });
     await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'FAILED', requestId: payload.requestId };
   }
   if (job.attemptCount >= job.maxAttempts) {
-    await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'UNKNOWN_EXHAUSTED' } });
-    await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN_EXTERNAL_STATE', message: 'External state remains unknown after reconciliation attempts; human action is required' });
+    await publisherWrite(options, job, jobAttemptId, async (scope) => {
+      await service.finishAttempt(attempt.id, { status: 'FAILED', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'HUMAN_ACTION_REQUIRED', diagnostics: { outcome: 'UNKNOWN_EXHAUSTED' } }, scope);
+      await service.transitionRequest(payload.requestId, 'FAILED', { code: 'UNKNOWN_EXTERNAL_STATE', message: 'External state remains unknown after reconciliation attempts; human action is required' }, scope);
+    });
     await syncProjectPublishingStatus(service, projects, assets, payload.projectId);
     return { status: 'FAILED', requestId: payload.requestId, nextAction: 'NEEDS_HUMAN_ACTION' };
   }
-  await service.finishAttempt(attempt.id, { status: 'UNKNOWN', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'UNKNOWN' } });
+  await publisherWrite(options, job, jobAttemptId, (scope) => service.finishAttempt(attempt.id, { status: 'UNKNOWN', failureCode: 'UNKNOWN_EXTERNAL_STATE', failureClassification: 'RECONCILIATION_REQUIRED', diagnostics: { outcome: 'UNKNOWN' } }, scope));
   throw new PublisherHandlerError('RECONCILIATION_INCONCLUSIVE', 'External state remains unknown', true);
 }
 
 export function createPublisherWorker(options?: PublisherWorkerOptions | JobHandler): WorkerRuntime {
   if (!options) throw new Error('Publisher worker requires explicit Publisher worker dependencies');
-  const runtime = new WorkerRuntime('publisher-worker');
   if (typeof options === 'function') {
+    const runtime = new WorkerRuntime('publisher-worker');
     runtime.register('publisher.publish', options);
     return runtime;
   }
+  const runtime = new PublisherWorkerRuntime(options.workerId || 'publisher-worker', options);
   const runner = new JobRunner(options.jobs, options.workerId || 'publisher-worker');
   runtime.register('PUBLISH', async (payload) => {
     const jobId = (payload as { jobId?: unknown })?.jobId;
@@ -270,7 +332,7 @@ export function createPublisherWorker(options?: PublisherWorkerOptions | JobHand
   runtime.register(PUBLISH_VALIDATE_ACCOUNT_JOB_TYPE, async (payload) => {
     const jobId = (payload as { jobId?: unknown })?.jobId;
     if (typeof jobId !== 'string' || !jobId) throw new PublisherHandlerError('INVALID_ACCOUNT_VALIDATION_JOB_REFERENCE', 'Publisher account validation requires a Job id', false);
-    return runner.run(jobId, (job) => executeValidateAccount(options, job));
+    return runner.run(jobId, (job, attemptId) => executeValidateAccount(options, job, attemptId));
   });
   return runtime;
 }
