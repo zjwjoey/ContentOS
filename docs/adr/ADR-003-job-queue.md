@@ -2,6 +2,8 @@
 
 **Status:** Accepted with Conditions
 
+The consecutive lease-loss budget and owner-aware terminal recovery are specified by [ADR-022](ADR-022-bounded-consecutive-lease-recovery.md). Business failure retry semantics remain separate from that crash budget.
+
 ## Context
 
 Rendering and publishing are slow, failure-prone and must survive process restarts.
