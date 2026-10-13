@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { AvatarClipV1, AvatarGenerationV1, AvatarProfileV1, GenerationStatus, ProfileStatus, SpeechGenerationV1, VoiceProfileV1 } from '../../../contracts/src/index.js';
 import { AssetCatalogService } from '../../asset/src/index.js';
-import { JobService, type JobRecord } from '../../job/src/index.js';
+import { JobService, type JobAttemptScope, type JobLeaseRecoveryContext, type JobQueryExecutor, type JobRecord } from '../../job/src/index.js';
 
 export interface CreateVoiceProfileInput { projectId: string; name: string; provider: string; referenceAssetId?: string | undefined; providerVoiceId?: string | undefined; language?: string | undefined; defaultSpeed?: number | undefined; defaultEmotion?: string | undefined; status?: ProfileStatus | undefined; }
 export interface UpdateVoiceProfileInput { name?: string | undefined; referenceAssetId?: string | null | undefined; providerVoiceId?: string | null | undefined; language?: string | undefined; defaultSpeed?: number | undefined; defaultEmotion?: string | undefined; status?: ProfileStatus | undefined; }
@@ -31,6 +31,38 @@ function mapAvatarGeneration(row: Record<string, unknown>): AvatarGenerationV1 {
 
 export class DigitalHumanService {
   constructor(private readonly db: Pool, private readonly jobs: JobService, private readonly assets: DigitalHumanAssetReader = new AssetCatalogService(db)) {}
+
+  async assertGenerationJobLink(executor: JobQueryExecutor, job: JobRecord, generationId: string, kind: 'SPEECH' | 'AVATAR'): Promise<{ status: GenerationStatus }> {
+    const expectedType = kind === 'SPEECH' ? 'SPEECH_GENERATE' : 'AVATAR_LIPSYNC_GENERATE';
+    const table = kind === 'SPEECH' ? 'speech_generations' : 'avatar_generations';
+    const row = (await executor.query<{ job_id: string; project_id: string; status: GenerationStatus }>(`select job_id, project_id, status from ${table} where id=$1 for update`, [generationId])).rows[0];
+    const payload = record(job.payload);
+    if (!row || row.job_id !== job.id || row.project_id !== job.projectId || job.type !== expectedType || payload.projectId !== job.projectId || payload.kind !== kind || payload.generationId !== generationId) throw Object.assign(new Error('Digital Human Generation Job link mismatch'), { code: 'DIGITAL_HUMAN_JOB_LINK_MISMATCH', retryable: false });
+    return { status: row.status };
+  }
+
+  async recoverGenerationLease(job: JobRecord, scope: JobAttemptScope, context: JobLeaseRecoveryContext): Promise<boolean> {
+    if (scope.jobId !== job.id || scope.attemptNumber !== job.attemptCount) return false;
+    const payload = record(job.payload);
+    if ((payload.kind !== 'SPEECH' && payload.kind !== 'AVATAR') || typeof payload.generationId !== 'string') return false;
+    const kind = payload.kind;
+    const current = await this.assertGenerationJobLink(scope, job, payload.generationId, kind);
+    if (current.status === 'SUCCEEDED' || current.status === 'CANCELLED') return false;
+    const table = kind === 'SPEECH' ? 'speech_generations' : 'avatar_generations';
+    const result = await scope.query(`update ${table} set status=$2, error=$3, updated_at=now() where id=$1 and job_id=$4 and project_id=$5 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')`, [payload.generationId, context.outcome === 'FAILED' ? 'FAILED' : 'PENDING', context.outcome === 'FAILED' ? JSON.stringify(context.error) : null, job.id, job.projectId]);
+    return Boolean(result.rowCount);
+  }
+
+  async cancelGenerationForJob(job: JobRecord, scope: JobAttemptScope): Promise<boolean> {
+    if (scope.jobId !== job.id || scope.attemptNumber !== job.attemptCount) return false;
+    const payload = record(job.payload);
+    if ((payload.kind !== 'SPEECH' && payload.kind !== 'AVATAR') || typeof payload.generationId !== 'string') return false;
+    const current = await this.assertGenerationJobLink(scope, job, payload.generationId, payload.kind);
+    if (current.status === 'SUCCEEDED') return false;
+    const table = payload.kind === 'SPEECH' ? 'speech_generations' : 'avatar_generations';
+    const result = await scope.query(`update ${table} set status='CANCELLED', updated_at=now() where id=$1 and job_id=$2 and project_id=$3 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED','CANCELLED')`, [payload.generationId, job.id, job.projectId]);
+    return Boolean(result.rowCount);
+  }
 
   async createVoiceProfile(input: CreateVoiceProfileInput): Promise<VoiceProfileV1> {
     if (input.referenceAssetId) { const asset = await this.assets.getProjectAsset(input.projectId, input.referenceAssetId); if (!asset || asset.kind !== 'AUDIO' || asset.lifecycle !== 'READY' || !positiveDuration(asset.metadata)) throw new Error('VOICE_REFERENCE_ASSET_NOT_READY'); }
@@ -99,10 +131,10 @@ export class DigitalHumanService {
   }
   async getSpeechGeneration(projectId: string, id: string): Promise<SpeechGenerationV1 | null> { const result = await this.db.query('select * from speech_generations where project_id = $1 and id = $2', [projectId, id]); return result.rows[0] ? mapSpeech(result.rows[0] as Record<string, unknown>) : null; }
   async listSpeechGenerations(projectId: string): Promise<SpeechGenerationV1[]> { const result = await this.db.query('select * from speech_generations where project_id = $1 order by created_at desc', [projectId]); return result.rows.map((row) => mapSpeech(row as Record<string, unknown>)); }
-  async markSpeechRunning(id: string): Promise<void> { await this.db.query("update speech_generations set status = 'RUNNING', updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id]); }
-  async completeSpeech(id: string, input: { outputAssetId: string; durationMs: number; latencyMs: number; modelVersion: string; provenance: Record<string, unknown> }): Promise<boolean> { const result = await this.db.query("update speech_generations set status = 'SUCCEEDED', output_asset_id = $2, duration_ms = $3, latency_ms = $4, model_version = $5, provenance = $6, error = null, updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id, input.outputAssetId, input.durationMs, input.latencyMs, input.modelVersion, JSON.stringify(input.provenance)]); return Boolean(result.rowCount); }
-  async failSpeech(id: string, error: { code: string; message: string }): Promise<void> { await this.db.query("update speech_generations set status = 'FAILED', error = $2, updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id, JSON.stringify(error)]); }
-  async cancelSpeech(id: string): Promise<void> { await this.db.query("update speech_generations set status = 'CANCELLED', updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL')", [id]); }
+  async markSpeechRunning(id: string, executor: JobQueryExecutor = this.db): Promise<void> { await executor.query("update speech_generations set status = 'RUNNING', updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id]); }
+  async completeSpeech(id: string, input: { outputAssetId: string; durationMs: number; latencyMs: number; modelVersion: string; provenance: Record<string, unknown> }, executor: JobQueryExecutor = this.db): Promise<boolean> { const result = await executor.query("update speech_generations set status = 'SUCCEEDED', output_asset_id = $2, duration_ms = $3, latency_ms = $4, model_version = $5, provenance = $6, error = null, updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL')", [id, input.outputAssetId, input.durationMs, input.latencyMs, input.modelVersion, JSON.stringify(input.provenance)]); return Boolean(result.rowCount); }
+  async failSpeech(id: string, error: { code: string; message: string }, executor: JobQueryExecutor = this.db): Promise<void> { await executor.query("update speech_generations set status = 'FAILED', error = $2, updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id, JSON.stringify(error)]); }
+  async cancelSpeech(id: string, executor: JobQueryExecutor = this.db): Promise<void> { await executor.query("update speech_generations set status = 'CANCELLED', updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL')", [id]); }
 
   async createAvatarGeneration(input: CreateAvatarGenerationInput): Promise<{ generation: AvatarGenerationV1; job: JobRecord; created: boolean }> {
     const profile = await this.getAvatarProfile(input.projectId, input.avatarProfileId); if (!profile || profile.status === 'DISABLED') throw new Error('AVATAR_PROFILE_NOT_FOUND');
@@ -143,10 +175,10 @@ export class DigitalHumanService {
     const provider = input.provider || 'hzagent'; const model = input.model || null; const parameters = input.parameters || {}; const requestHash = hash({ provider, model, avatarProfileId: input.avatarProfileId, avatarClipId: input.avatarClipId, speechAssetId: input.speechAssetId, clipAssetChecksum: sourceVideo.checksum, speechAssetChecksum: speech.checksum, parameters });
     const result = await this.db.query('select * from avatar_generations where project_id = $1 and request_hash = $2', [input.projectId, requestHash]); return result.rows[0] ? mapAvatarGeneration(result.rows[0] as Record<string, unknown>) : null;
   }
-  async markAvatarRunning(id: string): Promise<void> { await this.db.query("update avatar_generations set status = 'RUNNING', updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id]); }
-  async markAvatarWaiting(id: string, externalTaskId: string, provenance: Record<string, unknown>): Promise<void> { await this.db.query("update avatar_generations set status = 'WAITING_EXTERNAL', external_task_id = $2, provenance = $3, updated_at = now() where id = $1 and status in ('PENDING','RUNNING') and external_task_id is null", [id, externalTaskId, JSON.stringify(provenance)]); }
-  async replaceAvatarWaiting(id: string, externalTaskId: string, provenance: Record<string, unknown>): Promise<void> { await this.db.query("update avatar_generations set status = 'WAITING_EXTERNAL', external_task_id = $2, provenance = $3, updated_at = now() where id = $1 and status in ('PENDING','RUNNING') and external_task_id is not null", [id, externalTaskId, JSON.stringify(provenance)]); }
-  async completeAvatar(id: string, input: { outputAssetId: string; durationMs?: number | undefined; model?: string | undefined; modelVersion?: string | undefined; costAmount?: number | undefined; costCurrency?: string | undefined; billingQuantity?: number | undefined; billingUnit?: string | undefined; provenance?: Record<string, unknown> | undefined }): Promise<boolean> { const result = await this.db.query("update avatar_generations set status = 'SUCCEEDED', output_asset_id = $2, duration_ms = $3, model = coalesce($4, model), model_version = $5, cost_amount = $6, cost_currency = $7, billing_quantity = $8, billing_unit = $9, provenance = coalesce($10, provenance), error = null, updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id, input.outputAssetId, input.durationMs ?? null, input.model || null, input.modelVersion || null, input.costAmount ?? null, input.costCurrency ?? null, input.billingQuantity ?? null, input.billingUnit || null, input.provenance ? JSON.stringify(input.provenance) : null]); return Boolean(result.rowCount); }
-  async failAvatar(id: string, error: { code: string; message: string }): Promise<void> { await this.db.query("update avatar_generations set status = 'FAILED', error = $2, updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id, JSON.stringify(error)]); }
-  async cancelAvatar(id: string): Promise<void> { await this.db.query("update avatar_generations set status = 'CANCELLED', updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL')", [id]); }
+  async markAvatarRunning(id: string, executor: JobQueryExecutor = this.db): Promise<void> { await executor.query("update avatar_generations set status = 'RUNNING', updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id]); }
+  async markAvatarWaiting(id: string, externalTaskId: string, provenance: Record<string, unknown>, executor: JobQueryExecutor = this.db): Promise<void> { await executor.query("update avatar_generations set status = 'WAITING_EXTERNAL', external_task_id = $2, provenance = provenance || $3::jsonb, updated_at = now() where id = $1 and status in ('PENDING','RUNNING') and external_task_id is null", [id, externalTaskId, JSON.stringify(provenance)]); }
+  async replaceAvatarWaiting(id: string, externalTaskId: string, provenance: Record<string, unknown>, executor: JobQueryExecutor = this.db): Promise<void> { await executor.query("update avatar_generations set status = 'WAITING_EXTERNAL', external_task_id = $2, provenance = provenance || $3::jsonb, updated_at = now() where id = $1 and status in ('PENDING','RUNNING') and external_task_id is not null", [id, externalTaskId, JSON.stringify(provenance)]); }
+  async completeAvatar(id: string, input: { outputAssetId: string; durationMs?: number | undefined; model?: string | undefined; modelVersion?: string | undefined; costAmount?: number | undefined; costCurrency?: string | undefined; billingQuantity?: number | undefined; billingUnit?: string | undefined; provenance?: Record<string, unknown> | undefined }, executor: JobQueryExecutor = this.db): Promise<boolean> { const result = await executor.query("update avatar_generations set status = 'SUCCEEDED', output_asset_id = $2, duration_ms = $3, model = coalesce($4, model), model_version = $5, cost_amount = $6, cost_currency = $7, billing_quantity = $8, billing_unit = $9, provenance = coalesce($10, provenance), error = null, updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL')", [id, input.outputAssetId, input.durationMs ?? null, input.model || null, input.modelVersion || null, input.costAmount ?? null, input.costCurrency ?? null, input.billingQuantity ?? null, input.billingUnit || null, input.provenance ? JSON.stringify(input.provenance) : null]); return Boolean(result.rowCount); }
+  async failAvatar(id: string, error: { code: string; message: string }, executor: JobQueryExecutor = this.db): Promise<void> { await executor.query("update avatar_generations set status = 'FAILED', error = $2, updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL','FAILED')", [id, JSON.stringify(error)]); }
+  async cancelAvatar(id: string, executor: JobQueryExecutor = this.db): Promise<void> { await executor.query("update avatar_generations set status = 'CANCELLED', updated_at = now() where id = $1 and status in ('PENDING','RUNNING','WAITING_EXTERNAL')", [id]); }
 }

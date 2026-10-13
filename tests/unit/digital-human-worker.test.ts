@@ -6,8 +6,30 @@ import { tmpdir } from 'node:os';
 import { createDigitalHumanDevRunner } from '../../workers/digital-human-worker/src/dev-main.js';
 import { createDigitalHumanWorker } from '../../workers/digital-human-worker/src/main.js';
 import { createDigitalHumanJobHandler, createDigitalHumanLeaseCancellationHandler } from '../../workers/digital-human-worker/src/handler.js';
+import type { DigitalHumanWorkerDependencies } from '../../workers/digital-human-worker/src/handler.js';
+import type { JobAttemptScope, JobRecord } from '../../packages/modules/job/src/index.js';
 
 const fakeDependencies = (jobs: { listRunnable: () => Promise<never[]>; reconcileExpiredLeases: () => Promise<number> }) => ({ jobs, digitalHuman: {}, assets: {}, assetService: {}, storage: {}, speechProvider: {}, avatarProvider: {}, staging: {} } as never);
+
+// Provider validation tests exercise the current owner transaction; real PostgreSQL
+// tests cover revoked scopes, cross-owner linkage and transaction rollback.
+function handlerWithFences(input: unknown): ReturnType<typeof createDigitalHumanJobHandler> {
+  const deps = input as DigitalHumanWorkerDependencies;
+  return async (job, attemptId, signal) => {
+    let state = job.state;
+    const scope = {} as JobAttemptScope;
+    const digitalHuman = { ...deps.digitalHuman, assertGenerationJobLink: async () => ({ status: 'RUNNING' }), cancelGenerationForJob: async () => { const payload = job.payload as { kind: string; generationId: string }; if (payload.kind === 'SPEECH') await deps.digitalHuman.cancelSpeech(payload.generationId, scope); else await deps.digitalHuman.cancelAvatar(payload.generationId, scope); return true; } };
+    const jobs = {
+      get: async () => ({ ...job, state: signal.aborted && state === 'RUNNING' ? 'CANCEL_REQUESTED' : state }),
+      withCurrentAttemptFence: async (_id: string, _attempt: string, action: (transaction: JobAttemptScope) => Promise<unknown>) => ({ executed: true, value: await action(scope) }),
+      succeedWithCurrentAttempt: async (_id: string, _attempt: string, action: (transaction: JobAttemptScope) => Promise<unknown>) => { const value = await action(scope); state = 'SUCCEEDED'; return { executed: true, value, job: { ...job, state } }; },
+      fail: async (_id: string, _attempt: string, _error: unknown, _retryable: boolean, action: (transaction: JobAttemptScope) => Promise<void>) => { await action(scope); state = 'FAILED'; return { ...job, state }; },
+      defer: async () => { state = 'RETRY_WAIT'; return { ...job, state }; },
+      cancelAttempt: async (_id: string, _attempt: string, action: (transaction: JobAttemptScope) => Promise<void>) => { await action(scope); state = 'CANCELLED'; return { ...job, state }; },
+    };
+    return createDigitalHumanJobHandler({ ...deps, digitalHuman, jobs } as unknown as DigitalHumanWorkerDependencies)(job, attemptId, signal);
+  };
+}
 
 async function runAvatarCompletionRace(options: { abortAfterImport?: boolean; complete?: boolean; sharedReference?: boolean; existingTaskSucceeded?: boolean }): Promise<{ cancelled: boolean; failed: boolean; completed: boolean; removed: boolean; submitted: number }> {
   const root = await mkdtemp(join(tmpdir(), 'contentos-avatar-race-'));
@@ -42,7 +64,7 @@ async function runAvatarCompletionRace(options: { abortAfterImport?: boolean; co
   } as never;
   try {
     let handlerError: unknown;
-    try { await createDigitalHumanJobHandler(deps)(job, 'attempt-race', controller.signal); } catch (error) { handlerError = error; }
+    try { await handlerWithFences(deps)(job, 'attempt-race', controller.signal); } catch (error) { handlerError = error; }
     if (options.existingTaskSucceeded) assert.equal(handlerError, undefined);
     else assert.ok(handlerError, 'race scenario must reject');
     return { cancelled, failed, completed, removed, submitted };
@@ -95,24 +117,23 @@ test('Digital Human worker cancels an external avatar task when its job is abort
   } as never;
   const job = { id: 'job-1', projectId: 'project-1', workspaceId: null, type: 'AVATAR_LIPSYNC_GENERATE', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-1', projectId: 'project-1', correlationId: 'corr-1' }, result: null, error: null, attemptCount: 1, maxAttempts: 3, leaseOwner: null, leaseExpiresAt: null, progress: null } as never;
   const controller = new AbortController();
-  const running = createDigitalHumanJobHandler(deps)(job, 'attempt-1', controller.signal);
+  const running = handlerWithFences(deps)(job, 'attempt-1', controller.signal);
   setTimeout(() => controller.abort(), 1);
   await assert.rejects(running);
   assert.deepEqual(cancelledTasks, ['remote-1']);
   assert.deepEqual(cancelledGenerations, ['generation-1']);
 });
 
-test('Digital Human lease recovery cancels a remote Avatar task after worker loss', async () => {
+test('Digital Human lease cancellation commits only owner state without remote I/O', async () => {
   const cancelledTasks: string[] = []; const cancelledGenerations: string[] = [];
   const handler = createDigitalHumanLeaseCancellationHandler({
     digitalHuman: {
-      getAvatarGeneration: async () => ({ id: 'generation-recovery', externalTaskId: 'remote-recovery' }),
-      cancelAvatar: async (id: string) => { cancelledGenerations.push(id); },
+      cancelGenerationForJob: async (_job: JobRecord, _scope: JobAttemptScope) => { cancelledGenerations.push('generation-recovery'); return true; },
     },
     avatarProvider: { cancelTask: async (id: string) => { cancelledTasks.push(id); } },
   } as never);
   const result = await handler({ type: 'AVATAR_LIPSYNC_GENERATE', projectId: 'project-1', payload: { kind: 'AVATAR', projectId: 'project-1', generationId: 'generation-recovery' } } as never, {} as never);
-  assert.equal(result, true); assert.deepEqual(cancelledTasks, ['remote-recovery']); assert.deepEqual(cancelledGenerations, ['generation-recovery']);
+  assert.equal(result, true); assert.deepEqual(cancelledTasks, []); assert.deepEqual(cancelledGenerations, ['generation-recovery']);
 });
 
 test('Digital Human worker resubmits only after an old external task is terminal', async () => {
@@ -136,7 +157,7 @@ test('Digital Human worker resubmits only after an old external task is terminal
     },
   } as never;
   const job = { id: 'job-2', projectId: 'project-1', workspaceId: null, type: 'AVATAR_LIPSYNC_GENERATE', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-2', projectId: 'project-1', correlationId: 'corr-2' }, result: null, error: null, attemptCount: 1, maxAttempts: 3, leaseOwner: null, leaseExpiresAt: null, progress: null } as never;
-  await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-2', new AbortController().signal), /still running/);
+  await assert.rejects(handlerWithFences(deps)(job, 'attempt-2', new AbortController().signal), /still running/);
   assert.equal(submitted, 1);
   assert.equal(waiting, 1);
 });
@@ -152,7 +173,7 @@ test('Digital Human worker records Speech preflight failures on the Generation',
     },
   } as never;
   const job = { id: 'job-speech-preflight', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'SPEECH', generationId: 'generation-speech-preflight', projectId: 'project-1', correlationId: 'corr-preflight' } } as never;
-  await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-speech-preflight', new AbortController().signal), /Voice Profile not found/);
+  await assert.rejects(handlerWithFences(deps)(job, 'attempt-speech-preflight', new AbortController().signal), /Voice Profile not found/);
   assert.deepEqual(failures, [{ id: 'generation-speech-preflight', code: 'VOICE_PROFILE_NOT_FOUND' }]);
 });
 
@@ -167,7 +188,7 @@ test('Digital Human worker fails closed when Generation provider identity differ
     speechProvider: { providerId: 'indextts25' },
   } as never;
   const job = { id: 'job-provider-mismatch', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'SPEECH', generationId: 'generation-provider-mismatch', projectId: 'project-1', correlationId: 'corr-provider-mismatch' } } as never;
-  await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-provider-mismatch', new AbortController().signal), /configured runtime provider/);
+  await assert.rejects(handlerWithFences(deps)(job, 'attempt-provider-mismatch', new AbortController().signal), /configured runtime provider/);
   assert.deepEqual(failures, [{ id: 'generation-provider-mismatch', code: 'SPEECH_PROVIDER_IDENTITY_MISMATCH' }]);
 });
 
@@ -186,7 +207,7 @@ test('Digital Human worker prefers probed Speech Asset duration and preserves pr
     speechProvider: { getCapabilities: async () => ({ providerId: 'indextts25', local: true, voiceClone: true, emotion: true, speed: true, languages: ['zh'], supportsReferenceAudio: true, requiresReferenceAudio: false, supportsVoiceId: false }), generateSpeech: async () => ({ providerId: 'indextts25', model: 'indextts-2.5', modelVersion: '2.5', outputPath: 'audio.wav', durationMs: 2_000, latencyMs: 10, provenance: { provider: 'evil-provider', voiceProfileId: 'evil-voice', textHash: 'evil-text', durationMs: 0, latencyMs: 0, marker: 'raw-provider-metadata' } }) },
   } as never;
   const job = { id: 'job-speech-duration', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'SPEECH', generationId: 'generation-speech-duration', projectId: 'project-1', correlationId: 'corr-duration' } } as never;
-  const result = await createDigitalHumanJobHandler(deps)(job, 'attempt-speech-duration', new AbortController().signal);
+  const result = await handlerWithFences(deps)(job, 'attempt-speech-duration', new AbortController().signal);
   assert.deepEqual(result, { generationId: 'generation-speech-duration', outputAssetId: 'audio-output', state: 'SUCCEEDED' }); assert.equal(completedDuration, 1_234); assert.equal(providerDuration, 2_000); assert.equal(completedProvenance?.provider, 'indextts25'); assert.equal(completedProvenance?.voiceProfileId, 'voice-1'); assert.equal(completedProvenance?.textHash, 'text-hash'); assert.equal(completedProvenance?.durationMs, 1_234); assert.equal(completedProvenance?.latencyMs, 10); assert.equal((completedProvenance?.providerMetadata as Record<string, unknown>).marker, 'raw-provider-metadata');
 });
 
@@ -201,7 +222,7 @@ test('Digital Human worker records Avatar preflight failures on the Generation',
     },
   } as never;
   const job = { id: 'job-avatar-preflight', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-avatar-preflight', projectId: 'project-1', correlationId: 'corr-preflight' } } as never;
-  await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-avatar-preflight', new AbortController().signal), /Avatar source video is not ready/);
+  await assert.rejects(handlerWithFences(deps)(job, 'attempt-avatar-preflight', new AbortController().signal), /Avatar source video is not ready/);
   assert.deepEqual(failures, [{ id: 'generation-avatar-preflight', code: 'AVATAR_CLIP_ASSET_NOT_READY' }]);
 });
 
@@ -230,7 +251,7 @@ test('Digital Human worker rejects an oversized remote Avatar result before impo
     maxRemoteResultBytes: 4,
   } as never;
   const job = { id: 'job-avatar-large', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-avatar-large', projectId: 'project-1', correlationId: 'corr-large' } } as never;
-  await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-avatar-large', new AbortController().signal), /exceeds the configured size limit/);
+  await assert.rejects(handlerWithFences(deps)(job, 'attempt-avatar-large', new AbortController().signal), /exceeds the configured size limit/);
   assert.deepEqual(failures, [{ id: 'generation-avatar-large', code: 'AVATAR_RESULT_TOO_LARGE' }]);
 });
 
@@ -254,7 +275,7 @@ test('Digital Human worker bounds remote Avatar result downloads', async () => {
     remoteResultTimeoutMs: 10,
   } as never;
   const job = { id: 'job-avatar-timeout', projectId: 'project-1', state: 'RUNNING', payload: { schemaVersion: 'DIGITAL_HUMAN_JOB_PAYLOAD_V1', kind: 'AVATAR', generationId: 'generation-avatar-timeout', projectId: 'project-1', correlationId: 'corr-timeout' } } as never;
-  await assert.rejects(createDigitalHumanJobHandler(deps)(job, 'attempt-avatar-timeout', new AbortController().signal), /download timed out/);
+  await assert.rejects(handlerWithFences(deps)(job, 'attempt-avatar-timeout', new AbortController().signal), /download timed out/);
   assert.deepEqual(failures, [{ id: 'generation-avatar-timeout', code: 'AVATAR_RESULT_DOWNLOAD_TIMEOUT' }]);
 });
 

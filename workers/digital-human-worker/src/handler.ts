@@ -3,11 +3,12 @@ import { createWriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { Transform, Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { JobRunner, type JobLeaseCancellationHandler, type JobRecord, type JobService } from '../../../packages/modules/job/src/index.js';
-import { DigitalHumanProviderError, DigitalHumanService, safeFetchRemoteMedia, speechCapabilityError, type RemoteMediaResolver } from '../../../packages/modules/digital-human/src/index.js';
+import { JobRunner, type JobAttemptScope, type JobLeaseCancellationHandler, type JobLeaseRecoveryHandler, type JobRecord, type JobService } from '../../../packages/modules/job/src/index.js';
+import { DigitalHumanService, safeFetchRemoteMedia, speechCapabilityError, type RemoteMediaResolver } from '../../../packages/modules/digital-human/src/index.js';
 import type { AvatarProvider, ProviderMediaStaging, SpeechProvider } from '../../../packages/contracts/src/index.js';
 import { AssetCatalogService, AssetService } from '../../../packages/modules/asset/src/index.js';
 import type { LocalStorageProvider } from '../../../packages/infrastructure/storage/src/index.js';
+import { redactText } from '../../../packages/logging/src/index.js';
 import { DIGITAL_HUMAN_JOB_TYPES } from './job-types.js';
 
 export interface DigitalHumanWorkerDependencies {
@@ -45,22 +46,56 @@ function payloadOf(job: JobRecord): { generationId: string; projectId: string; k
 }
 
 export function createDigitalHumanLeaseCancellationHandler(deps: DigitalHumanWorkerDependencies): JobLeaseCancellationHandler {
-  return async (job) => {
+  return async (job, scope) => {
     if (!DIGITAL_HUMAN_JOB_TYPES.includes(job.type as typeof DIGITAL_HUMAN_JOB_TYPES[number])) return false;
-    const payload = job.payload && typeof job.payload === 'object' ? job.payload as Record<string, unknown> : {};
-    const projectId = typeof payload.projectId === 'string' ? payload.projectId : job.projectId;
-    const generationId = typeof payload.generationId === 'string' ? payload.generationId : '';
-    if (!projectId || !generationId) return true;
-    if (payload.kind === 'AVATAR') {
-      const generation = await deps.digitalHuman.getAvatarGeneration(projectId, generationId);
-      if (generation?.externalTaskId && deps.avatarProvider.cancelTask) await deps.avatarProvider.cancelTask(generation.externalTaskId);
-      if (generation) await deps.digitalHuman.cancelAvatar(generation.id);
-    } else if (payload.kind === 'SPEECH') {
-      const generation = await deps.digitalHuman.getSpeechGeneration(projectId, generationId);
-      if (generation) await deps.digitalHuman.cancelSpeech(generation.id);
-    }
-    return true;
+    return deps.digitalHuman.cancelGenerationForJob(job, scope);
   };
+}
+
+export function createDigitalHumanLeaseRecoveryHandler(deps: DigitalHumanWorkerDependencies): JobLeaseRecoveryHandler {
+  return async (job, scope, context) => {
+    if (!DIGITAL_HUMAN_JOB_TYPES.includes(job.type as typeof DIGITAL_HUMAN_JOB_TYPES[number])) return false;
+    return deps.digitalHuman.recoverGenerationLease(job, scope, context);
+  };
+}
+
+async function withGenerationAttempt<T>(deps: DigitalHumanWorkerDependencies, job: JobRecord, attemptId: string, payload: ReturnType<typeof payloadOf>, action: (scope: JobAttemptScope) => Promise<T>): Promise<T> {
+  const result = await deps.jobs.withCurrentAttemptFence(job.id, attemptId, async (scope) => {
+    const generation = await deps.digitalHuman.assertGenerationJobLink(scope, job, payload.generationId, payload.kind);
+    if (generation.status === 'SUCCEEDED' || generation.status === 'CANCELLED') throw Object.assign(new Error('Digital Human Generation is no longer active'), { code: 'GENERATION_NOT_ACTIVE', retryable: false });
+    return action(scope);
+  });
+  if (!result.executed) throw Object.assign(new Error('Digital Human Job attempt is no longer active'), { code: 'DIGITAL_HUMAN_ATTEMPT_REVOKED', retryable: false });
+  return result.value;
+}
+
+async function completeGenerationAttempt(deps: DigitalHumanWorkerDependencies, job: JobRecord, attemptId: string, payload: ReturnType<typeof payloadOf>, action: (scope: JobAttemptScope) => Promise<boolean>, result: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const committed = await deps.jobs.succeedWithCurrentAttempt(job.id, attemptId, async (scope) => {
+    await deps.digitalHuman.assertGenerationJobLink(scope, job, payload.generationId, payload.kind);
+    if (!(await action(scope))) throw Object.assign(new Error('Digital Human Generation is no longer active'), { code: 'GENERATION_NOT_ACTIVE', retryable: false });
+    return result;
+  });
+  if (!committed.executed) throw Object.assign(new Error('Digital Human Job attempt is no longer active'), { code: 'DIGITAL_HUMAN_ATTEMPT_REVOKED', retryable: false });
+  return committed.value;
+}
+
+async function cancelGenerationAttempt(deps: DigitalHumanWorkerDependencies, job: JobRecord, attemptId: string): Promise<boolean> {
+  const current = await deps.jobs.get(job.id);
+  if (current?.state !== 'CANCEL_REQUESTED') return false;
+  const cancelled = await deps.jobs.cancelAttempt(job.id, attemptId, async (scope) => {
+    if (!(await deps.digitalHuman.cancelGenerationForJob(job, scope))) throw Object.assign(new Error('Digital Human cancellation owner mismatch'), { code: 'DIGITAL_HUMAN_JOB_LINK_MISMATCH', retryable: false });
+  });
+  return cancelled.state === 'CANCELLED';
+}
+
+async function failGenerationAttempt(deps: DigitalHumanWorkerDependencies, job: JobRecord, attemptId: string, payload: ReturnType<typeof payloadOf>, error: unknown, fallbackCode: string): Promise<void> {
+  const candidate = error as { code?: unknown; retryable?: unknown };
+  const diagnostic = { code: typeof candidate.code === 'string' ? candidate.code : fallbackCode, message: error instanceof Error ? redactText(error.message).slice(0, 200) : 'Digital Human generation failed' };
+  await deps.jobs.fail(job.id, attemptId, diagnostic, typeof candidate.retryable === 'boolean' ? candidate.retryable : true, async (scope) => {
+    await deps.digitalHuman.assertGenerationJobLink(scope, job, payload.generationId, payload.kind);
+    if (payload.kind === 'SPEECH') await deps.digitalHuman.failSpeech(payload.generationId, diagnostic, scope);
+    else await deps.digitalHuman.failAvatar(payload.generationId, diagnostic, scope);
+  });
 }
 
 const DEFAULT_MAX_REMOTE_RESULT_BYTES = 500 * 1024 * 1024;
@@ -125,8 +160,8 @@ export async function downloadAndValidateRemoteAvatarResult(url: string, options
 
 async function processSpeech(job: JobRecord, attemptId: string, signal: AbortSignal, payload: ReturnType<typeof payloadOf>, deps: DigitalHumanWorkerDependencies): Promise<unknown> {
   const generation = await deps.digitalHuman.getSpeechGeneration(payload.projectId, payload.generationId); if (!generation) throw Object.assign(new Error('Speech Generation not found'), { code: 'SPEECH_GENERATION_NOT_FOUND', retryable: false });
-  if (generation.status === 'SUCCEEDED') return { generationId: generation.id, outputAssetId: generation.outputAssetId, state: generation.status };
-  await deps.digitalHuman.markSpeechRunning(generation.id);
+  if (generation.status === 'SUCCEEDED') return completeGenerationAttempt(deps, job, attemptId, payload, async (scope) => (await deps.digitalHuman.assertGenerationJobLink(scope, job, payload.generationId, payload.kind)).status === 'SUCCEEDED', { generationId: generation.id, outputAssetId: generation.outputAssetId, state: generation.status });
+  await withGenerationAttempt(deps, job, attemptId, payload, (scope) => deps.digitalHuman.markSpeechRunning(generation.id, scope));
   try {
     if (deps.speechProvider?.providerId && generation.provider !== deps.speechProvider.providerId) throw Object.assign(new Error('Speech Generation provider does not match the configured runtime provider'), { code: 'SPEECH_PROVIDER_IDENTITY_MISMATCH', retryable: false });
     const voice = await deps.digitalHuman.getVoiceProfile(payload.projectId, generation.voiceProfileId); if (!voice) throw Object.assign(new Error('Voice Profile not found'), { code: 'VOICE_PROFILE_NOT_FOUND', retryable: false });
@@ -145,25 +180,27 @@ async function processSpeech(job: JobRecord, attemptId: string, signal: AbortSig
     const asset = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: result.outputPath, kind: 'AUDIO', role: 'OUTPUT', metadata: { digitalHuman: { generationId: generation.id, provider: result.providerId, model: result.model, modelVersion: result.modelVersion } } });
     signal.throwIfAborted();
     const imported = await deps.assets.getProjectAsset(payload.projectId, asset.id); const measuredDurationMs = Number(imported?.metadata.durationMs); const durationMs = Number.isFinite(measuredDurationMs) && measuredDurationMs > 0 ? measuredDurationMs : result.durationMs;
-    const completed = await deps.digitalHuman.completeSpeech(generation.id, { outputAssetId: asset.id, durationMs, latencyMs: result.latencyMs, modelVersion: result.modelVersion, provenance: { providerMetadata: result.provenance || null, provider: result.providerId, model: result.model, modelVersion: result.modelVersion, voiceProfileId: generation.voiceProfileId, referenceAssetId: voice.referenceAssetId, referenceChecksum: reference?.checksum || null, textHash: generation.textHash, parameters: generation.parameters, durationMs, providerDurationMs: result.durationMs, latencyMs: result.latencyMs } });
-    if (!completed) throw Object.assign(new Error('Speech Generation is no longer active'), { code: 'GENERATION_NOT_ACTIVE', retryable: false });
-    return { generationId: generation.id, outputAssetId: asset.id, state: 'SUCCEEDED' };
+    const completed = await completeGenerationAttempt(deps, job, attemptId, payload, (scope) => deps.digitalHuman.completeSpeech(generation.id, { outputAssetId: asset.id, durationMs, latencyMs: result.latencyMs, modelVersion: result.modelVersion, provenance: { providerMetadata: result.provenance || null, provider: result.providerId, model: result.model, modelVersion: result.modelVersion, voiceProfileId: generation.voiceProfileId, referenceAssetId: voice.referenceAssetId, referenceChecksum: reference?.checksum || null, textHash: generation.textHash, parameters: generation.parameters, durationMs, providerDurationMs: result.durationMs, latencyMs: result.latencyMs } }, scope), { generationId: generation.id, outputAssetId: asset.id, state: 'SUCCEEDED' });
+    return completed;
   } catch (error) {
-    if (signal.aborted) { await deps.digitalHuman.cancelSpeech(generation.id); throw error; }
-    const providerError = error instanceof DigitalHumanProviderError ? error : null; const errorCode = typeof (error as { code?: unknown }).code === 'string' ? String((error as { code: string }).code) : undefined;
-    await deps.digitalHuman.failSpeech(generation.id, { code: providerError?.code || errorCode || 'SPEECH_GENERATION_FAILED', message: error instanceof Error ? error.message.slice(0, 200) : 'Speech generation failed' });
+    if (signal.aborted) { await cancelGenerationAttempt(deps, job, attemptId); throw error; }
+    await failGenerationAttempt(deps, job, attemptId, payload, error, 'SPEECH_GENERATION_FAILED');
     throw error;
   }
 }
 
 async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSignal, payload: ReturnType<typeof payloadOf>, deps: DigitalHumanWorkerDependencies): Promise<unknown> {
   const generation = await deps.digitalHuman.getAvatarGeneration(payload.projectId, payload.generationId); if (!generation) throw Object.assign(new Error('Avatar Generation not found'), { code: 'AVATAR_GENERATION_NOT_FOUND', retryable: false });
-  if (generation.status === 'SUCCEEDED') return { generationId: generation.id, outputAssetId: generation.outputAssetId, state: generation.status };
-  await deps.digitalHuman.markAvatarRunning(generation.id);
+  if (generation.status === 'SUCCEEDED') return completeGenerationAttempt(deps, job, attemptId, payload, async (scope) => (await deps.digitalHuman.assertGenerationJobLink(scope, job, payload.generationId, payload.kind)).status === 'SUCCEEDED', { generationId: generation.id, outputAssetId: generation.outputAssetId, state: generation.status });
+  await withGenerationAttempt(deps, job, attemptId, payload, (scope) => deps.digitalHuman.markAvatarRunning(generation.id, scope));
   let remoteTaskId = generation.externalTaskId;
   let importedOutput: Awaited<ReturnType<AssetService['importFile']>> | undefined;
   const cleanupUnboundOutputAssociation = async (): Promise<void> => {
     if (!importedOutput?.associationCreated) return;
+    const current = await deps.digitalHuman.getAvatarGeneration(payload.projectId, generation.id).catch(() => null);
+    if (current?.status === 'SUCCEEDED' && current.outputAssetId === importedOutput.id) return;
+    const currentJob = await deps.jobs.get(job.id).catch(() => null);
+    if (currentJob && currentJob.attemptCount !== job.attemptCount) return;
     const sharedReference = await deps.digitalHuman.hasOtherAvatarOutputReference(payload.projectId, importedOutput.id, generation.id).catch(() => true);
     if (sharedReference) return;
     await deps.assetService.removeProjectAssetAssociation(payload.projectId, importedOutput.id, 'OUTPUT').catch(() => undefined);
@@ -188,33 +225,43 @@ async function processAvatar(job: JobRecord, attemptId: string, signal: AbortSig
     const replaceTerminalTask = existingTask && (existingTask.status === 'FAILED' || existingTask.status === 'CANCELLED');
     const task = !replaceTerminalTask && existingTask ? existingTask : await deps.avatarProvider.submitLipSync({ requestId: generation.id, projectId: payload.projectId, jobId: job.id, attemptId, correlationId: payload.correlationId, audioUrl: (await deps.staging.stageAsset(audio.id, { projectId: payload.projectId })).publicUrl, videoUrl: (await deps.staging.stageAsset(video.id, { projectId: payload.projectId })).publicUrl, ...(generation.model ? { model: generation.model } : {}), parameters: generation.provenance.parameters && typeof generation.provenance.parameters === 'object' ? generation.provenance.parameters as Record<string, unknown> : {} });
     remoteTaskId = task.externalTaskId;
-    if (!generation.externalTaskId) await deps.digitalHuman.markAvatarWaiting(generation.id, task.externalTaskId, { provider: task.providerId, externalTaskId: task.externalTaskId });
-    else if (replaceTerminalTask) await deps.digitalHuman.replaceAvatarWaiting(generation.id, task.externalTaskId, { provider: task.providerId, externalTaskId: task.externalTaskId });
+    signal.throwIfAborted();
+    if (!generation.externalTaskId) await withGenerationAttempt(deps, job, attemptId, payload, (scope) => deps.digitalHuman.markAvatarWaiting(generation.id, task.externalTaskId, { provider: task.providerId, externalTaskId: task.externalTaskId }, scope));
+    else if (replaceTerminalTask || task.status === 'QUEUED' || task.status === 'RUNNING') await withGenerationAttempt(deps, job, attemptId, payload, (scope) => deps.digitalHuman.replaceAvatarWaiting(generation.id, task.externalTaskId, { provider: task.providerId, externalTaskId: task.externalTaskId }, scope));
     if (task.status === 'QUEUED' || task.status === 'RUNNING') throw Object.assign(new Error('Avatar provider task is still running'), { code: 'EXTERNAL_TASK_PENDING', retryable: true, defer: true, retryDelayMs: 1_000 });
     const taskError = task as { errorCode?: string; errorMessage?: string };
     if (task.status === 'FAILED' || task.status === 'CANCELLED' || !task.outputUrl) throw Object.assign(new Error(taskError.errorMessage || 'Avatar provider task failed'), { code: taskError.errorCode || 'AVATAR_PROVIDER_FAILED', retryable: false });
     if (deps.avatarProvider?.providerId && task.providerId !== deps.avatarProvider.providerId) throw Object.assign(new Error('Avatar provider task identity does not match the configured runtime provider'), { code: 'AVATAR_PROVIDER_IDENTITY_MISMATCH', retryable: false });
     signal.throwIfAborted();
     const fetchImpl = deps.fetchImpl || fetch;
-    const tempPath = join(deps.storage.root, 'staging', `${generation.id}.avatar.mp4`); await mkdir(join(deps.storage.root, 'staging'), { recursive: true });
+    const tempPath = join(deps.storage.root, 'staging', `${generation.id}.${attemptId}.avatar.mp4`); await mkdir(join(deps.storage.root, 'staging'), { recursive: true });
     if (!deps.probeRemoteResult) throw Object.assign(new Error('Avatar result validation is not configured'), { code: 'AVATAR_RESULT_PROBE_UNAVAILABLE', retryable: false });
     const probe = await downloadAndValidateRemoteAvatarResult(task.outputUrl, { fetchImpl, ...(deps.resolveRemoteMedia ? { resolveRemoteMedia: deps.resolveRemoteMedia } : {}), signal, timeoutMs: remoteResultTimeout(deps), maxBytes: remoteResultLimit(deps), tempPath, probe: deps.probeRemoteResult });
     try {
       importedOutput = await deps.assetService.importFile({ projectId: payload.projectId, sourcePath: tempPath, kind: 'VIDEO', role: 'OUTPUT', metadata: { durationMs: probe.durationMs, width: probe.width, height: probe.height, format: probe.format, ...(probe.videoCodec ? { codec: probe.videoCodec } : {}), digitalHuman: { generationId: generation.id, provider: task.providerId, externalTaskId: task.externalTaskId, providerMetadata: task.provenance || null } } });
       const imported = await deps.assets.getReadySourceAsset(payload.projectId, importedOutput.id, 'VIDEO'); const metadata = imported?.metadata || probe;
       signal.throwIfAborted();
-      const completed = await deps.digitalHuman.completeAvatar(generation.id, { outputAssetId: importedOutput.id, durationMs: typeof metadata.durationMs === 'number' ? metadata.durationMs : probe.durationMs, model: task.model, modelVersion: task.modelVersion, costAmount: task.costAmount, costCurrency: task.costCurrency, billingQuantity: task.billingQuantity, billingUnit: task.billingUnit, provenance: { provider: task.providerId, model: task.model || generation.model, modelVersion: task.modelVersion || null, avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, sourceVideoAssetId: video.id, externalTaskId: task.externalTaskId, costAmount: task.costAmount ?? null, costCurrency: task.costCurrency ?? null, billingQuantity: task.billingQuantity ?? null, billingUnit: task.billingUnit ?? null, probe: { durationMs: probe.durationMs, width: probe.width, height: probe.height, format: probe.format, codec: probe.videoCodec || null }, providerMetadata: task.provenance || null } });
-      if (!completed) throw Object.assign(new Error('Avatar Generation is no longer active'), { code: 'GENERATION_NOT_ACTIVE', retryable: false });
-      return { generationId: generation.id, outputAssetId: importedOutput.id, state: 'SUCCEEDED' };
+      const completed = await completeGenerationAttempt(deps, job, attemptId, payload, (scope) => deps.digitalHuman.completeAvatar(generation.id, { outputAssetId: importedOutput!.id, durationMs: typeof metadata.durationMs === 'number' ? metadata.durationMs : probe.durationMs, model: task.model, modelVersion: task.modelVersion, costAmount: task.costAmount, costCurrency: task.costCurrency, billingQuantity: task.billingQuantity, billingUnit: task.billingUnit, provenance: { provider: task.providerId, model: task.model || generation.model, modelVersion: task.modelVersion || null, avatarProfileId: generation.avatarProfileId, avatarClipId: generation.avatarClipId, speechAssetId: generation.speechAssetId, sourceVideoAssetId: video.id, externalTaskId: task.externalTaskId, costAmount: task.costAmount ?? null, costCurrency: task.costCurrency ?? null, billingQuantity: task.billingQuantity ?? null, billingUnit: task.billingUnit ?? null, probe: { durationMs: probe.durationMs, width: probe.width, height: probe.height, format: probe.format, codec: probe.videoCodec || null }, providerMetadata: task.provenance || null } }, scope), { generationId: generation.id, outputAssetId: importedOutput!.id, state: 'SUCCEEDED' });
+      return completed;
     } finally { await rm(tempPath, { force: true }); }
   } catch (error) {
     if (signal.aborted) {
-      if (remoteTaskId && deps.avatarProvider.cancelTask) await deps.avatarProvider.cancelTask(remoteTaskId).catch(() => undefined);
-      try { await deps.digitalHuman.cancelAvatar(generation.id); } finally { await cleanupUnboundOutputAssociation(); }
+      const cancelled = await cancelGenerationAttempt(deps, job, attemptId);
+      if (cancelled && remoteTaskId && deps.avatarProvider.cancelTask) await deps.avatarProvider.cancelTask(remoteTaskId).catch(() => undefined);
+      await cleanupUnboundOutputAssociation();
       throw error;
     }
-    if ((error as { code?: unknown }).code === 'EXTERNAL_TASK_PENDING') throw error;
-    try { await deps.digitalHuman.failAvatar(generation.id, { code: typeof (error as { code?: unknown }).code === 'string' ? String((error as { code: string }).code) : 'AVATAR_GENERATION_FAILED', message: error instanceof Error ? error.message.slice(0, 200) : 'Avatar generation failed' }); } finally { await cleanupUnboundOutputAssociation(); }
+    if ((error as { code?: unknown }).code === 'EXTERNAL_TASK_PENDING') {
+      // Settle delivery before returning to JobRunner so cancellation at the
+      // waiting boundary includes the Generation in the same cancellation fence.
+      const deferred = await deps.jobs.defer(job.id, attemptId, { code: 'EXTERNAL_TASK_PENDING', message: 'Avatar provider task is still running' }, 1_000);
+      if (deferred.state === 'CANCEL_REQUESTED') {
+        const cancelled = await cancelGenerationAttempt(deps, job, attemptId);
+        if (cancelled && remoteTaskId && deps.avatarProvider.cancelTask) await deps.avatarProvider.cancelTask(remoteTaskId).catch(() => undefined);
+      }
+      throw error;
+    }
+    try { await failGenerationAttempt(deps, job, attemptId, payload, error, 'AVATAR_GENERATION_FAILED'); } finally { await cleanupUnboundOutputAssociation(); }
     throw error;
   }
 }
